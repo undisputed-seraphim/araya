@@ -25,6 +25,7 @@ add_library(medulla STATIC
     src/events.cpp
     src/fiber.cpp
     src/module_loader.cpp
+    src/plugin_context.cpp
     src/runtime.cpp
     src/version.cpp
 )

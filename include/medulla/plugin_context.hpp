@@ -4,6 +4,7 @@
 #include "medulla/detail/assert.hpp"
 #include "medulla/effects.hpp"
 #include "medulla/events.hpp"
+#include "medulla/plugin.hpp"
 #include "medulla/service.hpp"
 
 #include <memory>
@@ -44,16 +45,29 @@ public:
 
     std::optional<binding> find_binding(service_id id) const {
         if (act_->spec_declared) {
-            if (!declared(act_->inject_specs, id))
-                throw std::logic_error(
-                    "undeclared capability access: '" +
-                    std::string(id.name) + "'");
-            auto found = act_->committed_view.find(id);
-            if (found == act_->committed_view.end())
-                return std::nullopt;
-            MEDULLA_ASSERT(found->second.value != nullptr);
-            MEDULLA_ASSERT(found->second.provider != 0);
-            return found->second;
+            if (declared(act_->inject_specs, id)) {
+                auto found = act_->committed_view.find(id);
+                if (found == act_->committed_view.end())
+                    return std::nullopt;
+                MEDULLA_ASSERT(found->second.value != nullptr);
+                MEDULLA_ASSERT(found->second.provider != 0);
+                return found->second;
+            }
+            // Algorithm 6: walk the parent-fiber chain, resolving undeclared
+            // keys against the first parent's committed view that binds them.
+            for (auto* p = act_->parent.get(); p; p = p->parent.get()) {
+                auto found = p->committed_view.find(id);
+                if (found != p->committed_view.end()) {
+                    MEDULLA_ASSERT(found->second.value != nullptr);
+                    MEDULLA_ASSERT(found->second.provider != 0);
+                    return found->second;
+                }
+                if (declared(p->inject_specs, id))
+                    return std::nullopt;
+            }
+            throw std::logic_error(
+                "undeclared capability access: '" +
+                std::string(id.name) + "'");
         }
         auto const* b = act_->scope->lookup(id);
         if (!b || !b->value || b->state != provider_state::active)
@@ -78,6 +92,12 @@ public:
         return service_lease<T>(std::static_pointer_cast<T>(b->value),
                                 b->provider);
     }
+
+    // Instantiates a child component (Definition 52): the child runs in a
+    // context derived from this fiber's, and the instantiation is recorded
+    // as an ordinary tracked effect whose inverse retires the child, so
+    // unloading this fiber cascades to its children (Theorem 73).
+    boost::asio::awaitable<fiber_handle> mount(component_spec spec);
 
     registration provide_raw(service_id id, std::shared_ptr<void> value) {
         if (act_->spec_declared && !declared(act_->provide_specs, id))

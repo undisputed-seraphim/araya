@@ -25,6 +25,8 @@ struct runtime::fiber_record {
     boost::asio::any_io_executor strand;
     component_spec spec;
     std::string path;
+    fiber_id parent_fiber = 0;
+    std::shared_ptr<medulla::activation> parent_activation;
     fiber_state state = fiber_state::inactive;
     std::shared_ptr<medulla::activation> activation;
     std::unique_ptr<plugin> instance;
@@ -52,6 +54,7 @@ runtime::runtime(boost::asio::any_io_executor ex)
       root_context_(context::root()),
       root_activation_(std::make_shared<activation>(root_context_)) {
     root_activation_->bus = bus_;
+    root_activation_->owner = this;
 }
 
 runtime::~runtime() {
@@ -65,6 +68,10 @@ plugin_context runtime::root_context() {
 
 boost::asio::awaitable<fiber_handle> runtime::mount(component_spec spec) {
     co_await boost::asio::post(strand_, boost::asio::use_awaitable);
+    co_return mount_locked(std::move(spec));
+}
+
+fiber_handle runtime::mount_locked(component_spec spec, fiber_id parent) {
     if (!spec.descriptor)
         throw std::invalid_argument("component_spec has no descriptor");
     if (!spec.parent)
@@ -72,6 +79,11 @@ boost::asio::awaitable<fiber_handle> runtime::mount(component_spec spec) {
 
     auto rec = std::make_unique<fiber_record>();
     rec->spec = std::move(spec);
+    rec->parent_fiber = parent;
+    if (parent != 0) {
+        if (auto* p = find(parent))
+            rec->parent_activation = p->activation;
+    }
     rec->strand = boost::asio::make_strand(strand_);
     rec->control = detail::make_fiber(rec->strand);
     rec->id = rec->control->id;
@@ -91,7 +103,28 @@ boost::asio::awaitable<fiber_handle> runtime::mount(component_spec spec) {
     fibers_.emplace(id, std::move(rec));
     evaluate(*rec_ptr);
     diagnose();
-    co_return rec_ptr->control->to_handle();
+    return rec_ptr->control->to_handle();
+}
+
+void runtime::retire_child(fiber_id id) {
+    boost::asio::post(strand_, [this, id] {
+        auto* f = find(id);
+        if (!f)
+            return;
+        f->reactivate = -1;
+        begin_unload(*f, false);
+        if (f->state == fiber_state::inactive) {
+            fibers_.erase(id);
+            unindex(id);
+            return;
+        }
+        f->done->wait([this, id] {
+            if (find(id)) {
+                fibers_.erase(id);
+                unindex(id);
+            }
+        });
+    });
 }
 
 boost::asio::awaitable<void> runtime::retire(fiber_handle h) {
@@ -288,6 +321,8 @@ void runtime::start_loading(fiber_record& f) {
     act->spec_declared = true;
     act->inject_specs = f.inject_keys;
     act->provide_specs = f.provide;
+    act->parent = f.parent_activation;
+    act->owner = this;
 
     auto r = resolve(f);
     if (!r.satisfiable) {
@@ -320,8 +355,12 @@ void runtime::start_loading(fiber_record& f) {
     auto id = f.id;
     boost::asio::co_spawn(
         f.strand,
-        [plugin_ptr, ctx = plugin_context{act}]() mutable -> task<void> {
-            co_await plugin_ptr->apply(ctx);
+        [plugin_ptr, act]() mutable -> task<void> {
+            // Keep the context heap-backed: the enclosing strand handler's
+            // stack unwinds while the coroutine is suspended, so captures
+            // must not live on it.
+            auto ctx = std::make_shared<plugin_context>(act);
+            co_await plugin_ptr->apply(*ctx);
         }(),
         boost::asio::bind_cancellation_slot(
             f.control->cell->signal->slot(),

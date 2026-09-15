@@ -79,6 +79,17 @@ public:
     void on_diagnostic(
         std::move_only_function<void(diagnostic const&)> sink);
 
+    // Mounts a component synchronously; must be called on the control
+    // strand. parent names the instantiating fiber, or 0 for an
+    // orchestrator-level insertion.
+    fiber_handle mount_locked(component_spec spec, fiber_id parent = 0);
+
+    // Requests retirement of an instantiated child: marks it retired,
+    // unloads it, and drops the record once it is inactive (the O-Retire
+    // inverse of Definition 52). Safe to call multiple times and after a
+    // host-side retire.
+    void retire_child(fiber_id id);
+
     // Diagnostics. Checks the engine's internal invariants (lifecycle
     // legality, guard accounting, committed-view hygiene, index
     // consistency, declaration immutability) via MEDULLA_ASSERT: aborts in

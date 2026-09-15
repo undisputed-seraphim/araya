@@ -5,6 +5,7 @@ target_include_directories(medulla_test_module PRIVATE
 )
 
 add_executable(medulla_tests
+    child_test.cpp
     context_test.cpp
     diagnostics_test.cpp
     effects_test.cpp

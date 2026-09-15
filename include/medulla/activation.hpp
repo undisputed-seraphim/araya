@@ -13,6 +13,7 @@
 namespace medulla {
 
 class event_bus;
+class runtime;
 
 class activation : public std::enable_shared_from_this<activation> {
 public:
@@ -25,6 +26,12 @@ public:
     std::shared_ptr<std::stop_source> stop_source;
     std::shared_ptr<event_bus> bus;
     std::exception_ptr error;
+
+    // The activation of the fiber that instantiated this one, if any; the
+    // chain realizes the parent-fiber walk of Algorithm 6.
+    std::shared_ptr<activation> parent;
+    // The runtime this activation belongs to; enables plugin_context::mount.
+    runtime* owner = nullptr;
 
     fiber_state state = fiber_state::active;
     bool spec_declared = false;
