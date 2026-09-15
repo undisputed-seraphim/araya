@@ -12,6 +12,7 @@ add_executable(medulla_tests
     events_test.cpp
     invariants_test.cpp
     manager_test.cpp
+    model_test.cpp
     module_loader_test.cpp
     module_test.cpp
     polish_test.cpp
