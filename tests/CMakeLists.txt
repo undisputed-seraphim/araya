@@ -8,6 +8,7 @@ add_executable(medulla_tests
     context_test.cpp
     effects_test.cpp
     events_test.cpp
+    invariants_test.cpp
     manager_test.cpp
     module_loader_test.cpp
     module_test.cpp

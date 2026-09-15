@@ -1,6 +1,7 @@
 #pragma once
 
 #include "medulla/activation.hpp"
+#include "medulla/detail/assert.hpp"
 #include "medulla/effects.hpp"
 #include "medulla/events.hpp"
 #include "medulla/service.hpp"
@@ -48,8 +49,10 @@ public:
                     "undeclared capability access: '" +
                     std::string(id.name) + "'");
             auto found = act_->committed_view.find(id);
-            if (found == act_->committed_view.end() || !found->second.value)
+            if (found == act_->committed_view.end())
                 return std::nullopt;
+            MEDULLA_ASSERT(found->second.value != nullptr);
+            MEDULLA_ASSERT(found->second.provider != 0);
             return found->second;
         }
         auto const* b = act_->scope->lookup(id);

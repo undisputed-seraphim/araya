@@ -1,8 +1,11 @@
 #include "medulla/effects.hpp"
 
+#include "medulla/detail/assert.hpp"
+
 namespace medulla {
 
 std::size_t effect_stack::add(cleanup_action action) {
+    MEDULLA_ASSERT(static_cast<bool>(action));
     entries_.push_back(entry{std::move(action), false});
     return entries_.size() - 1;
 }

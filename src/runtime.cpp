@@ -3,6 +3,7 @@
 #include "medulla/activation.hpp"
 
 #include "medulla/context.hpp"
+#include "medulla/detail/assert.hpp"
 #include "medulla/detail/fiber.hpp"
 
 #include <boost/asio/bind_cancellation_slot.hpp>
@@ -100,8 +101,10 @@ boost::asio::awaitable<void> runtime::retire(fiber_handle h) {
         begin_unload(*f, false);
         co_await done->wait(boost::asio::use_awaitable);
     }
-    if (find(h.id()))
+    if (find(h.id())) {
         fibers_.erase(h.id());
+        unindex(h.id());
+    }
 }
 
 boost::asio::awaitable<void> runtime::wait_idle() {
@@ -172,8 +175,12 @@ boost::asio::awaitable<void> runtime::reconcile(
 
     for (auto& [id, gate] : to_await)
         co_await gate->wait(boost::asio::use_awaitable);
-    for (auto& [id, gate] : to_await)
-        fibers_.erase(id);
+    for (auto& [id, gate] : to_await) {
+        if (fibers_.contains(id)) {
+            fibers_.erase(id);
+            unindex(id);
+        }
+    }
 
     for (auto const& node : desired) {
         if (reconciled_.contains(node.path))
@@ -223,6 +230,8 @@ runtime::resolution runtime::resolve(fiber_record const& f) const {
 void runtime::evaluate(fiber_record& f) {
     if (f.state != fiber_state::inactive && f.state != fiber_state::active)
         return;
+    if (f.reactivate < 0)
+        return;
     auto r = resolve(f);
     if (f.state == fiber_state::inactive) {
         if (r.satisfiable) {
@@ -248,6 +257,9 @@ void runtime::evaluate(fiber_record& f) {
 }
 
 void runtime::start_loading(fiber_record& f) {
+    MEDULLA_ASSERT(f.state == fiber_state::inactive);
+    MEDULLA_ASSERT(f.committed.empty());
+    MEDULLA_ASSERT(f.remaining == 0);
     f.error = nullptr;
     f.state = fiber_state::loading;
     f.control->cell->state->store(fiber_state::loading);
@@ -354,10 +366,16 @@ bool runtime::providers_still_active(fiber_record const& f) const {
 }
 
 void runtime::publish(fiber_record& f) {
+    MEDULLA_ASSERT(f.state == fiber_state::loading);
+    MEDULLA_ASSERT(f.activation);
+    MEDULLA_ASSERT(f.activation->state == fiber_state::loading);
+    MEDULLA_ASSERT(providers_still_active(f));
     for (auto const& key : f.provide) {
         if (auto* b = f.spec.parent->lookup_mutable(key);
-            b && b->provider == f.id)
+            b && b->provider == f.id) {
+            MEDULLA_ASSERT(b->state == provider_state::loading);
             b->state = provider_state::active;
+        }
     }
     f.state = fiber_state::active;
     f.control->cell->state->store(fiber_state::active);
@@ -374,7 +392,11 @@ void runtime::publish(fiber_record& f) {
 }
 
 void runtime::begin_unload(fiber_record& f, bool reactivate) {
-    f.reactivate = std::max(f.reactivate, reactivate ? 1 : 0);
+    // reactivate is the retirement flag: -1 (retired) is sticky, mirroring
+    // the paper's monotone tau — a host-requested removal must never be
+    // undone by a cascade.
+    if (f.reactivate >= 0)
+        f.reactivate = std::max(f.reactivate, reactivate ? 1 : 0);
     if (f.state == fiber_state::unloading)
         return;
     if (f.state == fiber_state::inactive)
@@ -386,6 +408,7 @@ void runtime::begin_unload(fiber_record& f, bool reactivate) {
         f.control->cell->stop_source->request_stop();
         return;
     }
+    MEDULLA_ASSERT(f.state == fiber_state::active);
 
     f.state = fiber_state::unloading;
     f.control->cell->state->store(fiber_state::unloading);
@@ -404,8 +427,18 @@ void runtime::begin_unload(fiber_record& f, bool reactivate) {
     f.remaining = 0;
     for (auto cid : consumers) {
         auto it = fibers_.find(cid);
-        if (it != fibers_.end() && it->second->state != fiber_state::inactive)
-            ++f.remaining;
+        if (it == fibers_.end())
+            continue;
+        if (it->second->state == fiber_state::inactive)
+            continue;
+        [[maybe_unused]] bool committed_here = false;
+        for (auto const& [k, p] : it->second->committed)
+            if (p == f.id) {
+                committed_here = true;
+                break;
+            }
+        MEDULLA_ASSERT(committed_here);
+        ++f.remaining;
     }
     for (auto cid : consumers) {
         auto it = fibers_.find(cid);
@@ -426,24 +459,36 @@ void runtime::maybe_finish_unload(fiber_record& f) {
 }
 
 void runtime::finish_unload(fiber_record& f) {
+    MEDULLA_ASSERT(f.state == fiber_state::unloading);
+    MEDULLA_ASSERT(f.remaining == 0);
     if (f.activation) {
+        MEDULLA_ASSERT(f.activation->state == fiber_state::unloading);
         f.activation->teardown();
         f.activation->state = fiber_state::inactive;
     }
+    // Detach the committed map before the state flip: maybe_finish_unload
+    // below can re-entrantly reactivate this very fiber (notify -> evaluate
+    // -> start_loading), which replaces f.committed, so the loop must not
+    // iterate the member map.
+    auto committed = std::move(f.committed);
     f.state = fiber_state::inactive;
     f.control->cell->state->store(fiber_state::inactive);
     f.instance.reset();
 
-    for (auto const& [k, p] : f.committed) {
+    for (auto const& [k, p] : committed) {
         auto it = fibers_.find(p);
         if (it != fibers_.end()) {
-            it->second->consumers.erase(f.id);
-            if (it->second->remaining > 0)
+            [[maybe_unused]] auto erased =
+                it->second->consumers.erase(f.id);
+            MEDULLA_ASSERT(erased == 1);
+            if (it->second->remaining > 0) {
+                MEDULLA_ASSERT(it->second->state == fiber_state::unloading);
                 --it->second->remaining;
+            }
             maybe_finish_unload(*it->second);
         }
     }
-    f.committed.clear();
+    MEDULLA_ASSERT(f.consumers.empty());
     transition_finished();
     f.done->open();
     for (auto const& key : f.provide)
@@ -471,16 +516,120 @@ void runtime::notify(service_id key) {
         it->second.erase(id);
 }
 
+void runtime::unindex(fiber_id id) {
+    for (auto it = consumers_of_.begin(); it != consumers_of_.end();) {
+        it->second.erase(id);
+        if (it->second.empty())
+            it = consumers_of_.erase(it);
+        else
+            ++it;
+    }
+}
+
 void runtime::transition_started() {
     idle_->close();
     ++in_flight_;
 }
 
 void runtime::transition_finished() {
+    MEDULLA_ASSERT(in_flight_ > 0);
     if (in_flight_ > 0)
         --in_flight_;
     if (in_flight_ == 0)
         idle_->open();
+}
+
+void runtime::validate_invariants() const {
+    for (auto const& [id, f] : fibers_) {
+        MEDULLA_ASSERT(f->id == id);
+        MEDULLA_ASSERT(f->control);
+
+        // Declaration immutability (Lemma 59(5)): inject/provide keys are
+        // written once at mount and never revised.
+        if (f->spec.descriptor) {
+            std::vector<owned_service_id> inject_keys;
+            inject_keys.reserve(f->spec.descriptor->inject.size());
+            for (auto const& dep : f->spec.descriptor->inject)
+                inject_keys.push_back(owned_service_id{dep.key});
+            MEDULLA_ASSERT(f->inject_keys == inject_keys);
+
+            std::vector<owned_service_id> provide_keys;
+            provide_keys.reserve(f->spec.descriptor->provide.size());
+            for (auto const& prov : f->spec.descriptor->provide)
+                provide_keys.push_back(owned_service_id{prov.key});
+            MEDULLA_ASSERT(f->provide == provide_keys);
+        }
+
+        if (f->state == fiber_state::inactive) {
+            MEDULLA_ASSERT(f->committed.empty());
+            MEDULLA_ASSERT(f->remaining == 0);
+            MEDULLA_ASSERT(f->activation == nullptr ||
+                           (f->activation->state == fiber_state::inactive &&
+                            f->activation->effects->size() == 0));
+            continue;
+        }
+
+        // Committed-view hygiene (Definition 63(3)/(4)): a committed view
+        // names only declared keys and installed providers.
+        for (auto const& [k, p] : f->committed) {
+            MEDULLA_ASSERT(std::find(f->inject_keys.begin(),
+                                     f->inject_keys.end(),
+                                     k) != f->inject_keys.end());
+            [[maybe_unused]] auto pit = fibers_.find(p);
+            MEDULLA_ASSERT(pit != fibers_.end());
+            MEDULLA_ASSERT(pit->second->state != fiber_state::inactive);
+        }
+        if (f->activation) {
+            MEDULLA_ASSERT(f->activation->committed_view.size() ==
+                           f->committed.size());
+            for (auto const& [k, b] : f->activation->committed_view) {
+                MEDULLA_ASSERT(b.value != nullptr);
+                MEDULLA_ASSERT(b.provider != 0);
+                [[maybe_unused]] auto cit = f->committed.find(k);
+                MEDULLA_ASSERT(cit != f->committed.end());
+                MEDULLA_ASSERT(cit->second == b.provider);
+            }
+        }
+
+        // Guard accounting (Definition 54): every consumer edge is a real
+        // commitment, and `remaining` counts exactly the installed ones.
+        [[maybe_unused]] std::size_t expected = 0;
+        for (auto cid : f->consumers) {
+            auto cit = fibers_.find(cid);
+            MEDULLA_ASSERT(cit != fibers_.end());
+            [[maybe_unused]] bool committed_here = false;
+            for (auto const& [k, p] : cit->second->committed)
+                if (p == id) {
+                    committed_here = true;
+                    break;
+                }
+            MEDULLA_ASSERT(committed_here);
+            if (cit->second->state != fiber_state::inactive)
+                ++expected;
+        }
+        if (f->state == fiber_state::unloading)
+            MEDULLA_ASSERT(f->remaining == expected);
+        else
+            MEDULLA_ASSERT(f->remaining == 0);
+    }
+
+    // consumers_of_ index consistency: no stale ids, every declared key
+    // registered.
+    for (auto const& [key, ids] : consumers_of_)
+        for ([[maybe_unused]] auto cid : ids)
+            MEDULLA_ASSERT(fibers_.find(cid) != fibers_.end());
+    for (auto const& [id, f] : fibers_) {
+        for (auto const& k : f->inject_keys) {
+            [[maybe_unused]] auto it = consumers_of_.find(k);
+            MEDULLA_ASSERT(it != consumers_of_.end());
+            MEDULLA_ASSERT(it->second.contains(id));
+        }
+    }
+}
+
+boost::asio::awaitable<void> runtime::validate_invariants_async() const {
+    co_await boost::asio::post(strand_, boost::asio::use_awaitable);
+    validate_invariants();
 }
 
 }  // namespace medulla

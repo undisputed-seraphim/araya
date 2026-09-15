@@ -56,6 +56,19 @@ public:
 
     std::exception_ptr error_of(fiber_id id) const noexcept;
 
+    // Diagnostics. Checks the engine's internal invariants (lifecycle
+    // legality, guard accounting, committed-view hygiene, index
+    // consistency, declaration immutability) via MEDULLA_ASSERT: aborts in
+    // debug builds, throws std::logic_error when MEDULLA_ENFORCE_INVARIANTS
+    // is defined, and is a no-op otherwise. Call it from inside
+    // run_on_strand, from a plugin's synchronous teardown, or while the
+    // runtime is idle; the engine serializes everything through the
+    // single-threaded io_context, which is what makes the reads safe.
+    void validate_invariants() const;
+
+    // Posts validate_invariants() to the control strand and waits for it.
+    boost::asio::awaitable<void> validate_invariants_async() const;
+
 private:
     struct fiber_record;
     struct resolution;
@@ -79,6 +92,9 @@ private:
     void finish_unload(fiber_record& f);
 
     void notify(service_id key);
+
+    // Removes a destroyed fiber's id from the consumers_of_ index.
+    void unindex(fiber_id id);
 
     void transition_started();
     void transition_finished();

@@ -13,6 +13,10 @@ find_package(Boost 1.83 REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Catch2 3 QUIET)
 
+option(MEDULLA_ENFORCE_INVARIANTS
+    "Check engine invariants even in release builds (violations throw)"
+    OFF)
+
 add_library(medulla STATIC
     src/abi_host.cpp
     src/activation.cpp
@@ -37,6 +41,11 @@ target_include_directories(medulla PUBLIC
 )
 
 target_link_libraries(medulla PUBLIC Boost::boost Threads::Threads)
+
+if(MEDULLA_ENFORCE_INVARIANTS)
+    target_compile_definitions(medulla
+        PUBLIC MEDULLA_ENFORCE_INVARIANTS)
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(medulla PRIVATE -Wall -Wextra -Wpedantic -Werror)

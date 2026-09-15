@@ -1,5 +1,7 @@
 #include "medulla/context.hpp"
 
+#include "medulla/detail/assert.hpp"
+
 #include <vector>
 
 namespace medulla {
@@ -16,6 +18,15 @@ std::shared_ptr<context> context::make_child() {
 }
 
 void context::bind(service_id id, binding b) {
+    MEDULLA_ASSERT(b.value != nullptr);
+    MEDULLA_ASSERT(b.provider != 0);
+    // KNOWN CONCURRENCY HAZARD (unfixed by design, noted deliberately):
+    // bindings_ is a plain std::map mutated here from a plugin's fiber
+    // strand while the control strand reads it via lookup(). This is benign
+    // under the single-threaded io_context discipline the engine and the
+    // test suite assume, but a real data race for multi-threaded hosts.
+    // The planned remedy is routing all context mutation through the
+    // control strand; do not paper over this without addressing it there.
     bindings_.insert_or_assign(owned_service_id(id), std::move(b));
 }
 

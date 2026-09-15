@@ -29,6 +29,14 @@ public:
 
     service_metadata metadata_for(service_id id) const;
 
+    // Invokes fn for every binding held by this context alone (not the
+    // parent chain). Diagnostics helper used by runtime::validate_invariants.
+    template <class Fn>
+    void visit_bindings(Fn&& fn) const {
+        for (auto const& [id, b] : bindings_)
+            fn(service_id{id.name, id.version}, b);
+    }
+
 private:
     std::shared_ptr<context> parent_;
     std::map<owned_service_id, binding, transparent_id_less> bindings_;
