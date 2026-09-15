@@ -12,6 +12,7 @@
 #include <boost/asio/use_awaitable.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -89,6 +90,7 @@ boost::asio::awaitable<fiber_handle> runtime::mount(component_spec spec) {
     auto* rec_ptr = rec.get();
     fibers_.emplace(id, std::move(rec));
     evaluate(*rec_ptr);
+    diagnose();
     co_return rec_ptr->control->to_handle();
 }
 
@@ -188,6 +190,7 @@ boost::asio::awaitable<void> runtime::reconcile(
         auto handle = co_await mount(node.spec);
         reconciled_[node.path] = handle.id();
     }
+    diagnose();
 }
 
 std::size_t runtime::fiber_count() const noexcept {
@@ -204,6 +207,11 @@ std::exception_ptr runtime::error_of(fiber_id id) const noexcept {
     return it != fibers_.end() ? it->second->error : nullptr;
 }
 
+void runtime::on_diagnostic(
+    std::move_only_function<void(diagnostic const&)> sink) {
+    diagnostic_sink_ = std::move(sink);
+}
+
 runtime::fiber_record* runtime::find(fiber_id id) noexcept {
     auto it = fibers_.find(id);
     return it != fibers_.end() ? it->second.get() : nullptr;
@@ -214,7 +222,12 @@ runtime::resolution runtime::resolve(fiber_record const& f) const {
     r.satisfiable = true;
     for (auto const& [key, required] : f.inject) {
         auto const* b = f.spec.parent->lookup(key);
-        if (b && b->value && b->state == provider_state::active) {
+        // A fiber's own bindings never satisfy its declarations: the paper's
+        // precedence relation is assumed acyclic, and a self-provided key
+        // cannot be active at the fiber's own L-Begin anyway. Excluding self
+        // also keeps an optional self-provision from oscillating.
+        if (b && b->value && b->state == provider_state::active &&
+            b->provider != f.id) {
             r.providers[key] = b->provider;
             r.bindings[key] = *b;
         } else if (required) {
@@ -523,6 +536,130 @@ void runtime::unindex(fiber_id id) {
             it = consumers_of_.erase(it);
         else
             ++it;
+    }
+}
+
+namespace {
+bool scope_on_chain(context const* probe, context const* from) {
+    for (auto const* c = from; c; c = c->parent().get())
+        if (c == probe)
+            return true;
+    return false;
+}
+}  // namespace
+
+void runtime::diagnose() {
+    auto emit = [this](diagnostic_kind kind, std::string key_name,
+                       std::uint32_t key_version,
+                       std::vector<fiber_id> ids) {
+        std::sort(ids.begin(), ids.end());
+        std::string sig = kind == diagnostic_kind::cycle ? "c:" : "f:";
+        sig += key_name + ":" + std::to_string(key_version) + ":";
+        for (auto id : ids)
+            sig += std::to_string(id) + ",";
+        if (!reported_diagnostics_.insert(std::move(sig)).second)
+            return;
+        if (!diagnostic_sink_)
+            return;
+        diagnostic d;
+        d.kind = kind;
+        d.key_name = std::move(key_name);
+        d.key_version = key_version;
+        d.fibers = std::move(ids);
+        diagnostic_sink_(d);
+    };
+
+    // Single-source discipline (Section 4.2.1): two fibers providing one key
+    // in one scope conflict; the bindings share a context map, so the last
+    // provider shadows the first. Diagnosed, not enforced.
+    std::map<std::pair<context const*, std::string>,
+             std::vector<fiber_id>>
+        providers;
+    for (auto const& [id, f] : fibers_)
+        for (auto const& k : f->provide)
+            providers[{f->spec.parent.get(),
+                       k.name + ":" + std::to_string(k.version)}]
+                .push_back(id);
+    for (auto const& [scope_key, ids] : providers) {
+        if (ids.size() < 2)
+            continue;
+        auto colon = scope_key.second.rfind(':');
+        emit(diagnostic_kind::conflict,
+             scope_key.second.substr(0, colon),
+             std::stoul(scope_key.second.substr(colon + 1)), ids);
+    }
+
+    // Dependency cycles (Section 6.5): edge m -> n when n provides a key m
+    // declares and n's bindings are visible from m's scope. A fiber
+    // declaring a key it provides itself is the degenerate n < n.
+    std::map<fiber_id, std::vector<fiber_id>> adj;
+    for (auto const& [mid, m] : fibers_) {
+        std::set<fiber_id> targets;
+        for (auto const& k : m->inject_keys)
+            for (auto const& [nid, n] : fibers_) {
+                bool provides_key =
+                    std::find(n->provide.begin(), n->provide.end(), k) !=
+                    n->provide.end();
+                if (provides_key &&
+                    scope_on_chain(n->spec.parent.get(),
+                                   m->spec.parent.get()))
+                    targets.insert(nid);
+            }
+        adj[mid].assign(targets.begin(), targets.end());
+    }
+
+    std::map<fiber_id, int> index;
+    std::map<fiber_id, int> low;
+    std::vector<fiber_id> stack;
+    std::set<fiber_id> on_stack;
+    std::vector<std::vector<fiber_id>> cycles;
+    int next = 0;
+
+    std::function<void(fiber_id)> strongconnect =
+        [&](fiber_id v) {
+            index[v] = next;
+            low[v] = next;
+            ++next;
+            stack.push_back(v);
+            on_stack.insert(v);
+            for (auto w : adj[v]) {
+                if (!index.contains(w)) {
+                    strongconnect(w);
+                    low[v] = std::min(low[v], low[w]);
+                } else if (on_stack.contains(w)) {
+                    low[v] = std::min(low[v], index[w]);
+                }
+            }
+            if (low[v] != index[v])
+                return;
+            std::vector<fiber_id> scc;
+            while (true) {
+                auto w = stack.back();
+                stack.pop_back();
+                on_stack.erase(w);
+                scc.push_back(w);
+                if (w == v)
+                    break;
+            }
+            if (scc.size() > 1)
+                cycles.push_back(std::move(scc));
+        };
+
+    for (auto const& [id, f] : fibers_)
+        if (!index.contains(id))
+            strongconnect(id);
+
+    for (auto& scc : cycles)
+        emit(diagnostic_kind::cycle, "", 0, std::move(scc));
+
+    // Self-provision: a component declaring a key it provides itself.
+    for (auto const& [id, f] : fibers_) {
+        for (auto const& k : f->provide)
+            if (std::find(f->inject_keys.begin(), f->inject_keys.end(), k) !=
+                f->inject_keys.end()) {
+                emit(diagnostic_kind::cycle, k.name, k.version, {id});
+                break;
+            }
     }
 }
 

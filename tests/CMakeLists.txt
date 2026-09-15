@@ -6,6 +6,7 @@ target_include_directories(medulla_test_module PRIVATE
 
 add_executable(medulla_tests
     context_test.cpp
+    diagnostics_test.cpp
     effects_test.cpp
     events_test.cpp
     invariants_test.cpp
