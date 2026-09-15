@@ -87,8 +87,11 @@ class service_lease {
 public:
     service_lease() = default;
 
-    service_lease(std::shared_ptr<T> value, std::uint64_t provider)
-        : value_(std::move(value)), provider_(provider) {}
+    service_lease(std::shared_ptr<T> value, std::uint64_t provider,
+                  service_metadata metadata = {})
+        : value_(std::move(value)),
+          provider_(provider),
+          metadata_(std::move(metadata)) {}
 
     T* get() const noexcept { return value_.get(); }
     T* operator->() const noexcept { return value_.get(); }
@@ -100,9 +103,15 @@ public:
 
     std::uint64_t provider() const noexcept { return provider_; }
 
+    // The interception metadata merged at access (Definition 27): the
+    // component-declared metadata overlaid with the context-carried
+    // metadata, which takes priority.
+    service_metadata const& metadata() const noexcept { return metadata_; }
+
 private:
     std::shared_ptr<T> value_;
     std::uint64_t provider_ = 0;
+    service_metadata metadata_;
 };
 
 }  // namespace medulla

@@ -81,7 +81,7 @@ public:
         if (!b)
             throw resolution_error(key.id);
         return service_lease<T>(std::static_pointer_cast<T>(b->value),
-                                b->provider);
+                                b->provider, merged_metadata(key.id));
     }
 
     template <class T>
@@ -90,7 +90,7 @@ public:
         if (!b)
             return std::nullopt;
         return service_lease<T>(std::static_pointer_cast<T>(b->value),
-                                b->provider);
+                                b->provider, merged_metadata(key.id));
     }
 
     // Instantiates a child component (Definition 52): the child runs in a
@@ -156,6 +156,19 @@ private:
                 return true;
         }
         return false;
+    }
+
+    // The interception metadata merged at access (Definition 27): the
+    // component-declared metadata overlaid with the context-carried
+    // metadata, which takes priority.
+    service_metadata merged_metadata(service_id id) const {
+        service_metadata merged;
+        auto declared = act_->inject_metadata.find(id);
+        if (declared != act_->inject_metadata.end())
+            merged = declared->second;
+        for (auto const& [k, v] : act_->scope->metadata_for(id))
+            merged[k] = v;
+        return merged;
     }
 
     std::shared_ptr<activation> act_;

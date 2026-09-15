@@ -14,6 +14,7 @@ add_executable(medulla_tests
     manager_test.cpp
     module_loader_test.cpp
     module_test.cpp
+    polish_test.cpp
     realms_test.cpp
     reconcile_test.cpp
     task_test.cpp

@@ -17,6 +17,9 @@ class plugin_context;
 struct dependency_spec {
     service_id key;
     bool required = true;
+    // Component-declared interception metadata (Definition 26); merged at
+    // access with the context-carried metadata, which takes priority.
+    service_metadata metadata;
 };
 
 struct provision_spec {

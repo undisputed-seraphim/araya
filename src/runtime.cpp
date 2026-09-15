@@ -37,6 +37,7 @@ struct runtime::fiber_record {
     std::set<fiber_id> consumers;
     std::size_t remaining = 0;
     int reactivate = 0;
+    bool apply_failed = false;
     std::exception_ptr error;
     std::shared_ptr<detail::gate_impl> done = detail::make_gate(true);
 };
@@ -344,9 +345,9 @@ void runtime::evaluate(fiber_record& f) {
         return;
     auto r = resolve(f);
     if (f.state == fiber_state::inactive) {
-        if (r.satisfiable) {
+        if (r.satisfiable && !f.apply_failed) {
             start_loading(f);
-        } else {
+        } else if (!f.error) {
             f.error = r.error;
         }
         return;
@@ -371,6 +372,7 @@ void runtime::start_loading(fiber_record& f) {
     MEDULLA_ASSERT(f.committed.empty());
     MEDULLA_ASSERT(f.remaining == 0);
     f.error = nullptr;
+    f.apply_failed = false;
     f.state = fiber_state::loading;
     f.control->cell->state->store(fiber_state::loading);
 
@@ -387,6 +389,11 @@ void runtime::start_loading(fiber_record& f) {
     act->provide_specs = f.provide;
     act->parent = f.parent_activation;
     act->owner = this;
+    for (auto const& dep : f.spec.descriptor->inject) {
+        owned_service_id key{dep.key};
+        if (!dep.metadata.empty())
+            act->inject_metadata[key] = dep.metadata;
+    }
 
     auto r = resolve(f);
     if (!r.satisfiable) {
@@ -448,6 +455,10 @@ void runtime::on_apply_completed(fiber_id id, std::exception_ptr ep) {
         if (!f->error) {
             if (ep) {
                 f->error = ep;
+                // A raise writes the failure outcome on the fiber, and the
+                // outcome withholds re-entry: only a revision (reinsertion)
+                // retries a failed fiber (Section 4.4, Failure).
+                f->apply_failed = true;
             } else if (cancelled) {
                 f->error = std::make_exception_ptr(std::runtime_error(
                     "fiber cancelled before activation completed"));

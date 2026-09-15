@@ -241,7 +241,8 @@ std::shared_ptr<plugin_descriptor> wrap(medulla_plugin_entry_fn entry,
     for (std::size_t i = 0; i < c->inject_count; ++i) {
         auto const& dep = c->inject[i];
         holder->deps.push_back(dependency_spec{
-            service_id{holder->names[1 + i], dep.version}, dep.required != 0});
+            service_id{holder->names[1 + i], dep.version},
+            dep.required != 0, {}});
     }
     for (std::size_t i = 0; i < c->provide_count; ++i) {
         auto const& prov = c->provide[i];

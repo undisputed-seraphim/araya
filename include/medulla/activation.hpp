@@ -37,6 +37,9 @@ public:
     bool spec_declared = false;
     std::vector<owned_service_id> inject_specs;
     std::vector<owned_service_id> provide_specs;
+    // Component-declared interception metadata per injected key.
+    std::map<owned_service_id, service_metadata, transparent_id_less>
+        inject_metadata;
     std::map<owned_service_id, binding, transparent_id_less> committed_view;
 
     std::stop_token stop_token() const noexcept;
