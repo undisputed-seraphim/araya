@@ -19,6 +19,7 @@ add_executable(medulla_tests
     realms_test.cpp
     reconcile_test.cpp
     task_test.cpp
+    typed_test.cpp
     version_test.cpp
 )
 

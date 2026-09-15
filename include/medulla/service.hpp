@@ -62,6 +62,8 @@ using service_metadata = std::map<std::string, std::string>;
 
 template <class T>
 struct service_key {
+    using value_type = T;
+
     service_id id;
 
     constexpr service_key(service_id i) noexcept : id(i) {}
