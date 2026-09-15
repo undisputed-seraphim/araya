@@ -125,7 +125,26 @@ private:
 
     void finish_unload(fiber_record& f);
 
-    void notify(service_id key);
+    // Re-evaluates fibers whose declarations include key, provided the
+    // changed binding's scope is visible to them and their realm tag for
+    // the key matches the binding's realm (Algorithm 3).
+    void notify(service_id key, context const* scope,
+                std::string const& realm);
+
+    // Moves a fiber's own bindings to a new scope/realm without retiring
+    // the provider (the Section 5.2.1 realm reassignment shortcut).
+    // old_realms records the realm each provided key was bound under before
+    // the entry's tags were updated.
+    void reassign(
+        fiber_record& f, component_spec const& next,
+        std::shared_ptr<context> const& new_scope,
+        std::map<owned_service_id, std::string, transparent_id_less> const&
+            old_realms);
+
+    // Returns (and maintains) the per-entry realm-tag context for an entry
+    // with an isolate annotation, or the entry's plain parent scope.
+    std::shared_ptr<context> entry_scope_for(
+        std::string const& path, component_spec const& spec);
 
     // Removes a destroyed fiber's id from the consumers_of_ index.
     void unindex(fiber_id id);
@@ -148,6 +167,9 @@ private:
     std::map<owned_service_id, std::set<fiber_id>, transparent_id_less>
         consumers_of_;
     std::map<std::string, fiber_id> reconciled_;
+    std::map<std::string, std::shared_ptr<context>> entry_ctxs_;
+    std::map<std::string, std::map<std::string, std::string>>
+        entry_isolates_;
     std::move_only_function<void(diagnostic const&)> diagnostic_sink_;
     std::set<std::string> reported_diagnostics_;
     std::size_t in_flight_ = 0;

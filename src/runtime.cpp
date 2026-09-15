@@ -168,7 +168,9 @@ boost::asio::awaitable<void> runtime::reconcile(
     for (auto it = reconciled_.begin(); it != reconciled_.end();) {
         auto* f = find(it->second);
         if (!f) {
+            auto path = it->first;
             it = reconciled_.erase(it);
+            entry_ctxs_.erase(path);
             continue;
         }
         auto dit = desired_by_path.find(it->first);
@@ -176,7 +178,9 @@ boost::asio::awaitable<void> runtime::reconcile(
             f->reactivate = -1;
             to_await.emplace_back(f->id, f->done);
             begin_unload(*f, false);
+            auto path = it->first;
             it = reconciled_.erase(it);
+            entry_ctxs_.erase(path);
             continue;
         }
 
@@ -188,7 +192,9 @@ boost::asio::awaitable<void> runtime::reconcile(
             f->reactivate = -1;
             to_await.emplace_back(f->id, f->done);
             begin_unload(*f, false);
+            auto path = it->first;
             it = reconciled_.erase(it);
+            entry_ctxs_.erase(path);
             continue;
         }
 
@@ -200,10 +206,42 @@ boost::asio::awaitable<void> runtime::reconcile(
                 f->reactivate = -1;
                 to_await.emplace_back(f->id, f->done);
                 begin_unload(*f, false);
+                auto path = it->first;
                 it = reconciled_.erase(it);
+                entry_ctxs_.erase(path);
                 continue;
             }
             f->spec.config = node->spec.config;
+        }
+
+        // Capture the realms the bindings live under before
+        // entry_scope_for refreshes the tags in place.
+        std::map<owned_service_id, std::string, transparent_id_less>
+            old_realms;
+        for (auto const& key : f->provide)
+            old_realms[key] = f->spec.parent->realm_for(key);
+        auto entry_scope = entry_scope_for(it->first, node->spec);
+        bool scope_moved = f->spec.parent != entry_scope;
+        bool realms_changed = f->spec.isolate != node->spec.isolate;
+        if (scope_moved && f->state == fiber_state::loading) {
+            // A scope move mid-transition would strand late provisions in
+            // the old scope; rebuild instead.
+            f->reactivate = -1;
+            to_await.emplace_back(f->id, f->done);
+            begin_unload(*f, false);
+            auto path = it->first;
+            it = reconciled_.erase(it);
+            entry_ctxs_.erase(path);
+            continue;
+        }
+        if (scope_moved || realms_changed) {
+            if (f->state == fiber_state::active ||
+                f->state == fiber_state::loading) {
+                reassign(*f, node->spec, entry_scope, old_realms);
+            } else {
+                f->spec.parent = entry_scope;
+                f->spec.isolate = node->spec.isolate;
+            }
         }
         ++it;
     }
@@ -220,10 +258,36 @@ boost::asio::awaitable<void> runtime::reconcile(
     for (auto const& node : desired) {
         if (reconciled_.contains(node.path))
             continue;
-        auto handle = co_await mount(node.spec);
+        auto spec = node.spec;
+        spec.parent = entry_scope_for(node.path, node.spec);
+        auto handle = co_await mount(std::move(spec));
         reconciled_[node.path] = handle.id();
     }
     diagnose();
+}
+
+std::shared_ptr<context> runtime::entry_scope_for(
+    std::string const& path, component_spec const& spec) {
+    auto base = spec.parent ? spec.parent : root_context_;
+    if (spec.isolate.empty()) {
+        entry_ctxs_.erase(path);
+        entry_isolates_.erase(path);
+        return base;
+    }
+    auto& ctx = entry_ctxs_[path];
+    if (!ctx || ctx->parent() != base)
+        ctx = std::shared_ptr<context>(new context(base, true));
+    // Apply the desired tags in place: the fiber's activation shares this
+    // context object, so its later provisions land at the updated realms.
+    for (auto const& [name, realm] : spec.isolate)
+        ctx->isolate(service_id{name, 1}, realm);
+    // Drop tags no longer present.
+    auto& applied = entry_isolates_[path];
+    for (auto const& [name, realm] : applied)
+        if (!spec.isolate.contains(name))
+            ctx->unisolate(service_id{name, 1});
+    applied = spec.isolate;
+    return ctx;
 }
 
 std::size_t runtime::fiber_count() const noexcept {
@@ -440,7 +504,7 @@ void runtime::publish(fiber_record& f) {
     }
     transition_finished();
     for (auto const& key : f.provide)
-        notify(key);
+        notify(key, f.spec.parent.get(), f.spec.parent->realm_for(key));
 }
 
 void runtime::begin_unload(fiber_record& f, bool reactivate) {
@@ -544,37 +608,10 @@ void runtime::finish_unload(fiber_record& f) {
     transition_finished();
     f.done->open();
     for (auto const& key : f.provide)
-        notify(key);
+        notify(key, f.spec.parent.get(), f.spec.parent->realm_for(key));
     if (f.reactivate > 0) {
         f.reactivate = 0;
         evaluate(f);
-    }
-}
-
-void runtime::notify(service_id key) {
-    auto it = consumers_of_.find(key);
-    if (it == consumers_of_.end())
-        return;
-    std::vector<fiber_id> stale;
-    for (auto id : it->second) {
-        auto fit = fibers_.find(id);
-        if (fit == fibers_.end()) {
-            stale.push_back(id);
-            continue;
-        }
-        evaluate(*fit->second);
-    }
-    for (auto id : stale)
-        it->second.erase(id);
-}
-
-void runtime::unindex(fiber_id id) {
-    for (auto it = consumers_of_.begin(); it != consumers_of_.end();) {
-        it->second.erase(id);
-        if (it->second.empty())
-            it = consumers_of_.erase(it);
-        else
-            ++it;
     }
 }
 
@@ -586,6 +623,80 @@ bool scope_on_chain(context const* probe, context const* from) {
     return false;
 }
 }  // namespace
+void runtime::notify(service_id key, context const* scope,
+                     std::string const& realm) {
+    auto it = consumers_of_.find(key);
+    if (it == consumers_of_.end())
+        return;
+    std::vector<fiber_id> stale;
+    for (auto id : it->second) {
+        auto fit = fibers_.find(id);
+        if (fit == fibers_.end()) {
+            stale.push_back(id);
+            continue;
+        }
+        auto& consumer = *fit->second;
+        // Algorithm 3: only fibers whose declared key resolves to the same
+        // realm, from a scope that can see the changed binding, are
+        // affected.
+        if (!scope_on_chain(scope, consumer.spec.parent.get()))
+            continue;
+        if (consumer.spec.parent->realm_for(key) != realm)
+            continue;
+        evaluate(consumer);
+    }
+    for (auto id : stale)
+        it->second.erase(id);
+}
+
+void runtime::reassign(
+    fiber_record& f, component_spec const& next,
+    std::shared_ptr<context> const& new_scope,
+    std::map<owned_service_id, std::string, transparent_id_less> const&
+        old_realms) {
+    auto old_scope = f.spec.parent;
+    bool moved = false;
+    for (auto const& key : f.provide) {
+        auto old_it = old_realms.find(key);
+        auto old_realm =
+            old_it != old_realms.end() ? old_it->second : std::string{};
+        auto const* b = old_scope->lookup_realm(key, old_realm);
+        if (!b || b->provider != f.id)
+            continue;
+        auto new_realm = new_scope->realm_for(key);
+        if (old_scope == new_scope && old_realm == new_realm)
+            continue;
+        if (new_scope->lookup_realm(key, new_realm))
+            continue;
+        new_scope->bind_realm(key, new_realm, *b);
+        old_scope->unbind_realm(key, old_realm);
+        moved = true;
+    }
+    if (moved || old_scope != new_scope) {
+        for (auto const& key : f.provide) {
+            auto old_it = old_realms.find(key);
+            auto old_realm = old_it != old_realms.end() ? old_it->second
+                                                        : std::string{};
+            notify(key, old_scope.get(), old_realm);
+            notify(key, new_scope.get(), new_scope->realm_for(key));
+        }
+    }
+    f.spec.parent = new_scope;
+    f.spec.isolate = next.isolate;
+    f.spec.name = next.name;
+    if (f.state == fiber_state::active)
+        evaluate(f);
+}
+
+void runtime::unindex(fiber_id id) {
+    for (auto it = consumers_of_.begin(); it != consumers_of_.end();) {
+        it->second.erase(id);
+        if (it->second.empty())
+            it = consumers_of_.erase(it);
+        else
+            ++it;
+    }
+}
 
 void runtime::diagnose() {
     auto emit = [this](diagnostic_kind kind, std::string key_name,
@@ -609,16 +720,19 @@ void runtime::diagnose() {
     };
 
     // Single-source discipline (Section 4.2.1): two fibers providing one key
-    // in one scope conflict; the bindings share a context map, so the last
-    // provider shadows the first. Diagnosed, not enforced.
+    // in one scope and one realm conflict; the bindings share a context map
+    // slot, so the last provider shadows the first. Diagnosed, not enforced.
     std::map<std::pair<context const*, std::string>,
              std::vector<fiber_id>>
         providers;
     for (auto const& [id, f] : fibers_)
-        for (auto const& k : f->provide)
+        for (auto const& k : f->provide) {
+            auto realm = f->spec.parent->realm_for(k);
             providers[{f->spec.parent.get(),
-                       k.name + ":" + std::to_string(k.version)}]
+                       (realm.empty() ? "" : realm + "@") + k.name + ":" +
+                           std::to_string(k.version)}]
                 .push_back(id);
+        }
     for (auto const& [scope_key, ids] : providers) {
         if (ids.size() < 2)
             continue;

@@ -24,13 +24,13 @@ namespace medulla {
 template <typename T = void>
 using task = boost::asio::awaitable<T, boost::asio::any_io_executor>;
 
-template <typename T>
-fiber_handle spawn(boost::asio::any_io_executor ex, task<T> t) {
+template <typename Awaitable>
+fiber_handle spawn(boost::asio::any_io_executor ex, Awaitable&& a) {
     auto strand = boost::asio::make_strand(std::move(ex));
     auto ctl = detail::make_fiber(strand);
     boost::asio::co_spawn(
         strand,
-        std::move(t),
+        std::forward<Awaitable>(a),
         boost::asio::bind_cancellation_slot(
             ctl->cell->signal->slot(),
             [ctl, strand](std::exception_ptr ep, auto&&...) mutable {

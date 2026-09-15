@@ -4,12 +4,14 @@
 
 #include <map>
 #include <memory>
+#include <string>
 
 namespace medulla {
 
 class context : public std::enable_shared_from_this<context> {
 public:
-    explicit context(std::shared_ptr<context> parent = nullptr);
+    explicit context(std::shared_ptr<context> parent = nullptr,
+                     bool pass_through_bind = false);
 
     static std::shared_ptr<context> root();
 
@@ -25,21 +27,57 @@ public:
 
     binding* lookup_mutable(service_id id) noexcept;
 
+    // Realm machinery (Section 3.2.3 / Section 5.2.1): a per-key realm tag
+    // redirects resolution of the key, inherited by descendant contexts.
+    // Bindings are stored under the realm resolved at bind time; the default
+    // (untagged) realm is the empty string, preserving the plain per-key
+    // binding model. Keys sharing a realm share one binding.
+    void isolate(service_id id, std::string realm);
+
+    void unisolate(service_id id);
+
+    std::string realm_for(service_id id) const;
+
+    void bind_realm(service_id id, std::string realm, binding b);
+
+    void unbind_realm(service_id id, std::string const& realm) noexcept;
+
+    binding const* lookup_realm(service_id id,
+                                std::string const& realm) const noexcept;
+
     void set_metadata(service_id id, service_metadata metadata);
 
     service_metadata metadata_for(service_id id) const;
 
-    // Invokes fn for every binding held by this context alone (not the
-    // parent chain). Diagnostics helper used by runtime::validate_invariants.
+    // Invokes fn(key, realm, binding) for every binding held by this
+    // context alone (not the parent chain). Diagnostics helper.
     template <class Fn>
     void visit_bindings(Fn&& fn) const {
-        for (auto const& [id, b] : bindings_)
-            fn(service_id{id.name, id.version}, b);
+        for (auto const& [k, b] : bindings_)
+            fn(service_id{k.name, k.version}, k.realm, b);
     }
 
 private:
+    struct binding_key {
+        std::string name;
+        std::uint32_t version = 1;
+        std::string realm;
+
+        bool operator<(binding_key const& other) const noexcept {
+            if (auto c = name.compare(other.name); c != 0)
+                return c < 0;
+            if (version != other.version)
+                return version < other.version;
+            return realm < other.realm;
+        }
+    };
+
+    static binding_key key(service_id id, std::string const& realm);
+
     std::shared_ptr<context> parent_;
-    std::map<owned_service_id, binding, transparent_id_less> bindings_;
+    bool pass_through_bind_ = false;
+    std::map<binding_key, binding> bindings_;
+    std::map<owned_service_id, std::string, transparent_id_less> realms_;
     std::map<owned_service_id, service_metadata, transparent_id_less>
         metadata_;
 };

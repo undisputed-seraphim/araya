@@ -137,13 +137,14 @@ struct harness {
         diagnostics.clear();
         rt->on_diagnostic([this](medulla::diagnostic const& d) {
             diagnostics.push_back(d);
-        });
-        boost::asio::co_spawn(
-            io.get_executor(),
-            [this, fn = std::forward<Fn>(fn)]() mutable -> medulla::task<void> {
-                co_await fn(*rt);
-            }(),
-            boost::asio::detached);
+        });        struct driver {
+            std::decay_t<Fn> fn;
+            harness* self;
+            medulla::task<void> operator()() { co_await fn(*self->rt); }
+        };
+        boost::asio::co_spawn(io.get_executor(),
+                              driver{std::forward<Fn>(fn), this},
+                              boost::asio::detached);
         io.run();
         io.restart();
     }

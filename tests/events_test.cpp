@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "coro_util.hpp"
+
 #include "medulla/events.hpp"
 #include "medulla/plugin_context.hpp"
 
@@ -54,7 +56,7 @@ TEST_CASE("serial dispatch awaits listeners in registration order") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.ctx.on(serial_key, [&](std::string const& m) {
                 order.push_back("sync:" + m);
             });
@@ -68,7 +70,7 @@ TEST_CASE("serial dispatch awaits listeners in registration order") {
             });
 
             co_await fx.bus->dispatch(serial_key, std::string("x"));
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -82,7 +84,7 @@ TEST_CASE("serial dispatch stops at the first failure") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.ctx.on(serial_key, [&](std::string const& m) {
                 order.push_back("first");
             });
@@ -99,7 +101,7 @@ TEST_CASE("serial dispatch stops at the first failure") {
             } catch (std::runtime_error const&) {
                 threw = true;
             }
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -114,7 +116,7 @@ TEST_CASE("parallel dispatch runs all listeners and rethrows after") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             for (int i = 0; i < 3; ++i) {
                 fx.ctx.on(parallel_key,
                           [&, i](std::string const& m) -> medulla::task<void> {
@@ -132,7 +134,7 @@ TEST_CASE("parallel dispatch runs all listeners and rethrows after") {
             } catch (std::runtime_error const&) {
                 threw = true;
             }
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -151,7 +153,7 @@ TEST_CASE("emit dispatches without awaiting and reports failures") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.ctx.on(emit_key, [&](std::string const& m) {
                 ran.push_back("ok:" + m);
             });
@@ -163,7 +165,7 @@ TEST_CASE("emit dispatches without awaiting and reports failures") {
             fx.bus->dispatch(emit_key, std::string("e"));
             ran.push_back("dispatch-returned");
             co_return;
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -179,7 +181,7 @@ TEST_CASE("waterfall delegates, transforms, and short-circuits") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.ctx.on(
                 waterfall_key,
                 [&](std::string const& m,
@@ -210,7 +212,7 @@ TEST_CASE("waterfall delegates, transforms, and short-circuits") {
 
             result = co_await fx.bus->dispatch(waterfall_key,
                                                std::string("x"));
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -224,7 +226,7 @@ TEST_CASE("waterfall passes through when no listener short-circuits") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.ctx.on(
                 waterfall_key,
                 [&](std::string const& m,
@@ -235,7 +237,7 @@ TEST_CASE("waterfall passes through when no listener short-circuits") {
 
             result = co_await fx.bus->dispatch(waterfall_key,
                                                std::string("x"));
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -249,7 +251,7 @@ TEST_CASE("waterfall exception terminates the chain") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.ctx.on(
                 waterfall_key,
                 [&](std::string const& m,
@@ -272,7 +274,7 @@ TEST_CASE("waterfall exception terminates the chain") {
             } catch (std::runtime_error const&) {
                 threw = true;
             }
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -285,13 +287,13 @@ TEST_CASE("listener registrations are owned effects") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.ctx.on(serial_key, [](std::string const&) {});
             CHECK(fx.bus->listener_count(serial_key.id) == 1);
             fx.act->teardown();
             CHECK(fx.bus->listener_count(serial_key.id) == 0);
             co_await fx.bus->dispatch(serial_key, std::string("x"));
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -303,14 +305,14 @@ TEST_CASE("early release removes a listener immediately") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             auto reg = fx.ctx.on(serial_key, [&](std::string const& m) {
                 order.push_back(m);
             });
             reg.release();
             CHECK(fx.bus->listener_count(serial_key.id) == 0);
             co_await fx.bus->dispatch(serial_key, std::string("x"));
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -323,7 +325,7 @@ TEST_CASE("listener added during dispatch affects only later dispatches") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.ctx.on(serial_key, [&](std::string const& m) -> medulla::task<void> {
                 order.push_back("first");
                 fx.ctx.on(serial_key, [&](std::string const& m2) {
@@ -334,7 +336,7 @@ TEST_CASE("listener added during dispatch affects only later dispatches") {
 
             co_await fx.bus->dispatch(serial_key, std::string("1"));
             co_await fx.bus->dispatch(serial_key, std::string("2"));
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -348,7 +350,7 @@ TEST_CASE("conflicting mode registration and dispatch are rejected") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.ctx.on(serial_key, [](std::string const&) {});
             CHECK_THROWS_AS(
                 fx.ctx.on(serial_id_parallel_mode, [](std::string const&) {}),
@@ -357,7 +359,7 @@ TEST_CASE("conflicting mode registration and dispatch are rejected") {
                 co_await fx.bus->dispatch(serial_id_parallel_mode,
                                           std::string("x")),
                 std::logic_error);
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();
@@ -376,7 +378,7 @@ TEST_CASE("in-flight emit observes the current sink without dangling") {
 
     boost::asio::co_spawn(
         fx.strand,
-        [&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             fx.bus->set_diagnostic_sink(
                 [&](std::exception_ptr ep) { first_sink_report = ep; });
             fx.ctx.on(emit_key, [&](std::string const& m) -> medulla::task<void> {
@@ -392,7 +394,7 @@ TEST_CASE("in-flight emit observes the current sink without dangling") {
             fx.bus->set_diagnostic_sink(
                 [&](std::exception_ptr ep) { second_sink_report = ep; });
             co_return;
-        }(),
+        }),
         boost::asio::detached);
 
     fx.io.run();

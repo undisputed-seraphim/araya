@@ -48,6 +48,9 @@ struct component_spec {
     plugin_config config;
     std::shared_ptr<context> parent;
     std::string name;
+    // Per-key isolation realms (Section 5.2.1): each entry maps a service
+    // key name to a realm tag. Entries sharing a tag share the binding.
+    std::map<std::string, std::string> isolate;
 };
 
 }  // namespace medulla

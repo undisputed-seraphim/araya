@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "coro_util.hpp"
+
 #include "medulla/task.hpp"
 
 #include <boost/asio/detached.hpp>
@@ -31,10 +33,10 @@ TEST_CASE("spawned task completes and fiber becomes active") {
     int result = 0;
     auto h = medulla::spawn(
         io.get_executor(),
-        medulla::task<int>{[&]() -> medulla::task<int> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<int> {
             result = 42;
             co_return 42;
-        }()});
+        }));
 
     CHECK(h.state() == medulla::fiber_state::loading);
     io.run();
@@ -47,10 +49,10 @@ TEST_CASE("exception marks fiber inactive") {
     boost::asio::io_context io;
     auto h = medulla::spawn(
         io.get_executor(),
-        medulla::task<void>{[&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             throw std::runtime_error("boom");
             co_return;
-        }()});
+        }));
 
     io.run();
     CHECK(h.state() == medulla::fiber_state::inactive);
@@ -61,9 +63,9 @@ TEST_CASE("cancel is observed cooperatively through this_stop_token") {
     bool seen = false;
     auto h = medulla::spawn(
         io.get_executor(),
-        medulla::task<void>{[&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             co_await wait_until_stopped(seen);
-        }()});
+        }));
 
     boost::asio::steady_timer cancel_timer{io, 50ms};
     cancel_timer.async_wait(
@@ -80,14 +82,14 @@ TEST_CASE("cancel does not abort an in-flight operation") {
     bool stop_seen = false;
     auto h = medulla::spawn(
         io.get_executor(),
-        medulla::task<void>{[&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             auto timer = boost::asio::steady_timer(
                 co_await boost::asio::this_coro::executor, 60ms);
             co_await timer.async_wait(boost::asio::use_awaitable);
             timer_done = true;
             auto token = co_await medulla::this_stop_token();
             stop_seen = token.stop_requested();
-        }()});
+        }));
 
     auto start = std::chrono::steady_clock::now();
     boost::asio::steady_timer cancel_timer{io, 20ms};
@@ -106,9 +108,9 @@ TEST_CASE("stop_requested resumes a suspended fiber") {
     bool resumed = false;
     auto h = medulla::spawn(
         io.get_executor(),
-        medulla::task<void>{[&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             resumed = co_await medulla::stop_requested();
-        }()});
+        }));
 
     boost::asio::steady_timer cancel_timer{io, 30ms};
     cancel_timer.async_wait(
@@ -124,9 +126,9 @@ TEST_CASE("stop_requested returns immediately outside a fiber") {
     bool value = false;
     boost::asio::co_spawn(
         io.get_executor(),
-        medulla::task<void>{[&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             value = co_await medulla::stop_requested();
-        }()},
+        }),
         boost::asio::detached);
 
     io.run();
@@ -138,9 +140,9 @@ TEST_CASE("nested coroutine in the same fiber sees the fiber stop token") {
     bool seen = false;
     auto h = medulla::spawn(
         io.get_executor(),
-        medulla::task<void>{[&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             co_await wait_until_stopped(seen);
-        }()});
+        }));
 
     boost::asio::steady_timer cancel_timer{io, 50ms};
     cancel_timer.async_wait(
@@ -155,10 +157,10 @@ TEST_CASE("coroutine outside a medulla fiber gets a non-stopping token") {
     bool non_stopping = false;
     boost::asio::co_spawn(
         io.get_executor(),
-        medulla::task<void>{[&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             auto token = co_await medulla::this_stop_token();
             non_stopping = !token.stop_requested();
-        }()},
+        }),
         boost::asio::detached);
 
     io.run();
@@ -172,16 +174,16 @@ TEST_CASE("cancelling one fiber does not disturb another") {
 
     auto first = medulla::spawn(
         io.get_executor(),
-        medulla::task<void>{[&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             co_await wait_until_stopped(first_seen);
-        }()});
+        }));
 
     auto second = medulla::spawn(
         io.get_executor(),
-        medulla::task<void>{[&]() -> medulla::task<void> {
+        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
             second_done = true;
             co_return;
-        }()});
+        }));
 
     boost::asio::steady_timer cancel_timer{io, 50ms};
     cancel_timer.async_wait(
@@ -196,14 +198,16 @@ TEST_CASE("cancelling one fiber does not disturb another") {
 
 TEST_CASE("fiber ids are unique and increasing") {
     boost::asio::io_context io;
-    auto a = medulla::spawn(io.get_executor(), medulla::task<void>{[&]()
-                                                                    -> medulla::task<void> {
-        co_return;
-    }()});
-    auto b = medulla::spawn(io.get_executor(), medulla::task<void>{[&]()
-                                                                    -> medulla::task<void> {
-        co_return;
-    }()});
+    auto a = medulla::spawn(io.get_executor(),
+                            medulla_test::heap_coroutine(
+                                [&]() -> medulla::task<void> {
+                                    co_return;
+                                }));
+    auto b = medulla::spawn(io.get_executor(),
+                            medulla_test::heap_coroutine(
+                                [&]() -> medulla::task<void> {
+                                    co_return;
+                                }));
 
     io.run();
     CHECK(a.id() != b.id());
