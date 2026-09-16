@@ -314,6 +314,13 @@ public:
 
     boost::asio::any_io_executor executor() const noexcept { return strand_; }
 
+    // Whether the calling thread is executing within this bus's control
+    // strand. Dispatch and listener registration must run there; teardown
+    // paths that may run elsewhere use this to skip notification.
+    bool on_control_strand() const noexcept {
+        return strand_.running_in_this_thread();
+    }
+
     void set_diagnostic_sink(
         std::move_only_function<void(std::exception_ptr)> sink);
 

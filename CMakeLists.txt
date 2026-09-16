@@ -17,6 +17,10 @@ option(MEDULLA_ENFORCE_INVARIANTS
     "Check engine invariants even in release builds (violations throw)"
     OFF)
 
+option(MEDULLA_BUILD_PLUGINS
+    "Build the first-party plugin libraries"
+    ON)
+
 add_library(medulla STATIC
     src/abi_host.cpp
     src/activation.cpp
@@ -55,6 +59,10 @@ endif()
 if(Catch2_FOUND)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(MEDULLA_BUILD_PLUGINS)
+    add_subdirectory(plugins)
 endif()
 
 install(TARGETS medulla
