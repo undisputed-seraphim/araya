@@ -62,6 +62,7 @@ if(Catch2_FOUND)
 endif()
 
 if(MEDULLA_BUILD_PLUGINS)
+    include(thirdparty/quill.cmake)
     add_subdirectory(plugins)
 endif()
 
