@@ -1,11 +1,11 @@
-#include "medulla/context.hpp"
+#include "araya/context.hpp"
 
-#include "medulla/detail/assert.hpp"
+#include "araya/detail/assert.hpp"
 
 #include <utility>
 #include <vector>
 
-namespace medulla {
+namespace araya {
 
 context::binding_key context::key(service_id id,
                                   std::string const& realm) {
@@ -41,8 +41,8 @@ std::string context::realm_for(service_id id) const {
 }
 
 void context::bind_realm(service_id id, std::string realm, binding b) {
-    MEDULLA_ASSERT(b.value != nullptr);
-    MEDULLA_ASSERT(b.provider != 0);
+    ARAYA_ASSERT(b.value != nullptr);
+    ARAYA_ASSERT(b.provider != 0);
     // KNOWN CONCURRENCY HAZARD (unfixed by design, noted deliberately):
     // bindings_ is a plain std::map mutated here from a plugin's fiber
     // strand while the control strand reads it via lookup(). This is benign
@@ -118,4 +118,4 @@ service_metadata context::metadata_for(service_id id) const {
     return merged;
 }
 
-}  // namespace medulla
+}  // namespace araya

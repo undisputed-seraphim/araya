@@ -1,9 +1,9 @@
-# Medulla
+# Araya
 
 A C++23 runtime for applications assembled from components that may appear, disappear, or be
 replaced while the process remains live.
 
-Medulla adapts the ideas of _A Programming Paradigm for Spatiotemporal Composability_
+Araya adapts the ideas of _A Programming Paradigm for Spatiotemporal Composability_
 (Y. Shi, W. Zhang, T. Cui — arXiv:2608.25512) and its reference implementation Cordis,
 without adopting their TypeScript-specific API or implementation choices.
 
@@ -12,7 +12,7 @@ without adopting their TypeScript-specific API or implementation choices.
 The paper identifies two dimensions of dynamic composability. **Temporal composability**
 demands that removing a component withdraws everything it installed in the shared environment;
 **spatial composability** demands that components declare their dependencies and activate only
-when they resolve. Medulla implements both in their global forms:
+when they resolve. Araya implements both in their global forms:
 
 - **Revertible effects.** Every managed operation (providing a service, registering a listener,
   acquiring a resource) records its cleanup the moment it succeeds, and an activation's cleanups
@@ -36,7 +36,7 @@ when they resolve. Medulla implements both in their global forms:
   Native modules are loaded with `dlopen` and unloaded only once no fiber, listener, or
   callback still reaches them.
 
-As in the paper, the guarantees hold within the managed boundary: Medulla cannot undo emitted
+As in the paper, the guarantees hold within the managed boundary: Araya cannot undo emitted
 network traffic, reclaim detached threads, or sandbox hostile native code.
 
 ## Building
@@ -52,7 +52,7 @@ cmake --build build
 ctest --test-dir build
 ```
 
-Medulla is a static library and provides a CMake package. To install:
+Araya is a static library and provides a CMake package. To install:
 
 ```sh
 cmake --install build --prefix /path/to/prefix
@@ -61,14 +61,14 @@ cmake --install build --prefix /path/to/prefix
 and consume it from another project:
 
 ```cmake
-find_package(medulla 0.1 REQUIRED)
-target_link_libraries(my_app PRIVATE medulla::medulla)
+find_package(araya 0.1 REQUIRED)
+target_link_libraries(my_app PRIVATE araya::araya)
 ```
 
 ## Public API (overview)
 
 ```cpp
-namespace medulla {
+namespace araya {
 
 // --- fibers and tasks ------------------------------------------------------
 
@@ -153,10 +153,10 @@ class module_loader {
 };
 
 // each .so exports:
-//   extern "C" const medulla_plugin_descriptor_v1*
-//   medulla_plugin_entry_v1(const medulla_host_api_v1*);
+//   extern "C" const araya_plugin_descriptor_v1*
+//   araya_plugin_entry_v1(const araya_host_api_v1*);
 
-}  // namespace medulla
+}  // namespace araya
 ```
 
 ## Status

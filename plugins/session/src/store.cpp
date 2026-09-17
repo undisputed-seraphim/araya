@@ -1,4 +1,4 @@
-#include "medulla/session/store.hpp"
+#include "araya/session/store.hpp"
 
 #include "repair.hpp"
 
@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace medulla::session {
+namespace araya::session {
 
 session::session(session_header header,
                  session_log_offset inherited_event_count,
@@ -45,7 +45,7 @@ session_seq session::append(std::string type, boost::json::value data) {
     return log_.back().seq;
 }
 
-medulla::task<void> session::flush() {
+araya::task<void> session::flush() {
     auto s = store_.lock();
     if (!s)
         co_return;
@@ -91,7 +91,7 @@ std::shared_ptr<session> session_store::create(
     // store dies first.
     std::weak_ptr<session_store> weak = weak_from_this();
     session_id sid = s->id();
-    (void)caller.effect([weak, sid]() -> medulla::cleanup_action {
+    (void)caller.effect([weak, sid]() -> araya::cleanup_action {
         return [weak, sid] {
             if (auto st = weak.lock())
                 st->dispose(sid);
@@ -181,7 +181,7 @@ bool session_store::dispose(session_id const& id) {
     return true;
 }
 
-medulla::registration session_store::register_message_projection(
+araya::registration session_store::register_message_projection(
     plugin_context& caller, message_projection projection) {
     if (has_projection(projection.event_type))
         throw std::logic_error("session message projection '" +
@@ -190,7 +190,7 @@ medulla::registration session_store::register_message_projection(
     std::string type = projection.event_type;
     projections_.push_back(std::move(projection));
     std::weak_ptr<session_store> weak = weak_from_this();
-    return caller.effect([weak, type]() -> medulla::cleanup_action {
+    return caller.effect([weak, type]() -> araya::cleanup_action {
         return [weak, type] {
             if (auto st = weak.lock()) {
                 std::erase_if(st->projections_,
@@ -202,7 +202,7 @@ medulla::registration session_store::register_message_projection(
     });
 }
 
-medulla::task<void> session_store::flush(session_id id) {
+araya::task<void> session_store::flush(session_id id) {
     if (!bus_ || !store_.contains(id))
         co_return;
     co_await bus_->dispatch(flush_key, session_flush_msg{id});
@@ -313,4 +313,4 @@ void session_store::validate_event(session_event const& ev) const {
     }
 }
 
-}  // namespace medulla::session
+}  // namespace araya::session

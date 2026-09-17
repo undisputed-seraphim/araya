@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "medulla/plugin.hpp"
-#include "medulla/runtime.hpp"
+#include "araya/plugin.hpp"
+#include "araya/runtime.hpp"
 
 #include <boost/asio/detached.hpp>
 #include <boost/asio/io_context.hpp>
@@ -18,41 +18,41 @@ struct database {
     std::string name;
 };
 
-inline constexpr medulla::service_key<database> db_key{"example.db", 1};
+inline constexpr araya::service_key<database> db_key{"example.db", 1};
 
 // ---- component pool --------------------------------------------------------
 
-struct provider_plugin : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct provider_plugin : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         ctx.provide(db_key, std::make_shared<database>("p"));
         co_return;
     }
 };
 
-struct consumer_plugin : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct consumer_plugin : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         (void)ctx.require<database>(db_key);
         co_return;
     }
 };
 
-struct optional_plugin : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct optional_plugin : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         (void)ctx.find<database>(db_key);
         co_return;
     }
 };
 
-struct self_plugin : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct self_plugin : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         (void)ctx.find<database>(db_key);
         ctx.provide(db_key, std::make_shared<database>("self"));
         co_return;
     }
 };
 
-struct broken_plugin : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct broken_plugin : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         (void)ctx.require<database>(db_key);
         throw std::runtime_error("boom");
         co_return;
@@ -60,31 +60,31 @@ struct broken_plugin : medulla::plugin {
 };
 
 template <class P>
-std::unique_ptr<medulla::plugin> make(medulla::plugin_config const&) {
+std::unique_ptr<araya::plugin> make(araya::plugin_config const&) {
     return std::make_unique<P>();
 }
 
-static constexpr std::span<medulla::dependency_spec const> g_no_deps{};
-static constexpr std::span<medulla::provision_spec const> g_no_provs{};
-static const medulla::dependency_spec g_db_dep[]{
-    {medulla::service_id{"example.db", 1}, true}};
-static const medulla::dependency_spec g_db_optional[]{
-    {medulla::service_id{"example.db", 1}, false}};
-static const medulla::provision_spec g_db_prov[]{
-    {medulla::service_id{"example.db", 1}}};
+static constexpr std::span<araya::dependency_spec const> g_no_deps{};
+static constexpr std::span<araya::provision_spec const> g_no_provs{};
+static const araya::dependency_spec g_db_dep[]{
+    {araya::service_id{"example.db", 1}, true}};
+static const araya::dependency_spec g_db_optional[]{
+    {araya::service_id{"example.db", 1}, false}};
+static const araya::provision_spec g_db_prov[]{
+    {araya::service_id{"example.db", 1}}};
 
-static const medulla::plugin_descriptor g_desc_P{
+static const araya::plugin_descriptor g_desc_P{
     "P", g_no_deps, g_db_prov, &make<provider_plugin>};
-static const medulla::plugin_descriptor g_desc_C{
+static const araya::plugin_descriptor g_desc_C{
     "C", g_db_dep, g_no_provs, &make<consumer_plugin>};
-static const medulla::plugin_descriptor g_desc_O{
+static const araya::plugin_descriptor g_desc_O{
     "O", g_db_optional, g_no_provs, &make<optional_plugin>};
-static const medulla::plugin_descriptor g_desc_S{
+static const araya::plugin_descriptor g_desc_S{
     "S", g_db_optional, g_db_prov, &make<self_plugin>};
-static const medulla::plugin_descriptor g_desc_B{
+static const araya::plugin_descriptor g_desc_B{
     "B", g_db_dep, g_no_provs, &make<broken_plugin>};
 
-medulla::plugin_descriptor const* descriptor_for(char c) {
+araya::plugin_descriptor const* descriptor_for(char c) {
     switch (c) {
         case 'P': return &g_desc_P;
         case 'C': return &g_desc_C;
@@ -95,9 +95,9 @@ medulla::plugin_descriptor const* descriptor_for(char c) {
     return nullptr;
 }
 
-std::shared_ptr<medulla::plugin_descriptor> shared_desc(char c) {
-    return std::shared_ptr<medulla::plugin_descriptor>(
-        const_cast<medulla::plugin_descriptor*>(descriptor_for(c)),
+std::shared_ptr<araya::plugin_descriptor> shared_desc(char c) {
+    return std::shared_ptr<araya::plugin_descriptor>(
+        const_cast<araya::plugin_descriptor*>(descriptor_for(c)),
         [](auto*) {});
 }
 
@@ -149,7 +149,7 @@ config final_config(std::vector<op> const& seq) {
 // The observable quiescent state, keyed by component identity rather than
 // per-run fiber ids so that different schedules can be compared.
 struct observable {
-    std::map<int, std::pair<medulla::fiber_state, bool>> fibers;
+    std::map<int, std::pair<araya::fiber_state, bool>> fibers;
     std::string db_provider;
 
     friend bool operator==(observable const&,
@@ -158,18 +158,18 @@ struct observable {
 
 struct seq_driver {
     std::vector<op> seq;
-    std::shared_ptr<medulla::runtime> rt;
+    std::shared_ptr<araya::runtime> rt;
     std::shared_ptr<observable> out = std::make_shared<observable>();
 
-    medulla::task<void> operator()() {
-        std::map<int, medulla::fiber_handle> slot;
-        std::map<medulla::fiber_id, char> id_to_component;
+    araya::task<void> operator()() {
+        std::map<int, araya::fiber_handle> slot;
+        std::map<araya::fiber_id, char> id_to_component;
         for (auto const& o : seq) {
             if (o.kind == 'M') {
                 if (slot.contains(o.slot))
                     continue;
                 auto h = co_await rt->mount(
-                    medulla::component_spec{shared_desc(o.component),
+                    araya::component_spec{shared_desc(o.component),
                                             {}, nullptr, ""});
                 slot[o.slot] = h;
                 id_to_component[h.id()] = o.component;
@@ -197,15 +197,15 @@ struct seq_driver {
 
 struct fresh_driver {
     std::vector<std::pair<int, char>> mounts;  // reversed order
-    std::shared_ptr<medulla::runtime> rt;
+    std::shared_ptr<araya::runtime> rt;
     std::shared_ptr<observable> out = std::make_shared<observable>();
 
-    medulla::task<void> operator()() {
-        std::map<int, medulla::fiber_handle> slot;
-        std::map<medulla::fiber_id, char> id_to_component;
+    araya::task<void> operator()() {
+        std::map<int, araya::fiber_handle> slot;
+        std::map<araya::fiber_id, char> id_to_component;
         for (auto const& [s, c] : mounts) {
             auto h = co_await rt->mount(
-                medulla::component_spec{shared_desc(c), {}, nullptr, ""});
+                araya::component_spec{shared_desc(c), {}, nullptr, ""});
             slot[s] = h;
             id_to_component[h.id()] = c;
         }
@@ -227,7 +227,7 @@ template <class Driver>
 struct ref_driver {
     std::shared_ptr<Driver> d;
 
-    medulla::task<void> operator()() {
+    araya::task<void> operator()() {
         co_await (*d)();
     }
 };
@@ -254,7 +254,7 @@ TEST_CASE("all short operation sequences quiesce, validate, and are "
 
     for (auto const& seq : all) {
         boost::asio::io_context io;
-        auto rt = std::make_shared<medulla::runtime>(io.get_executor());
+        auto rt = std::make_shared<araya::runtime>(io.get_executor());
         auto cfg = final_config(seq);
 
         observable ob;
@@ -271,7 +271,7 @@ TEST_CASE("all short operation sequences quiesce, validate, and are "
     // in a fixed, adversarially reversed order reaches the same state.
     for (auto const& [cfg, ob] : by_config) {
         boost::asio::io_context io;
-        auto rt = std::make_shared<medulla::runtime>(io.get_executor());
+        auto rt = std::make_shared<araya::runtime>(io.get_executor());
 
         std::vector<std::pair<int, char>> mounts(cfg.begin(), cfg.end());
         std::reverse(mounts.begin(), mounts.end());

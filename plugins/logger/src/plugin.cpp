@@ -1,10 +1,10 @@
-#include "medulla/logger/logger.hpp"
-#include "medulla/plugin_context.hpp"
+#include "araya/logger/logger.hpp"
+#include "araya/plugin_context.hpp"
 
 #include <memory>
 #include <span>
 
-namespace medulla::logger {
+namespace araya::logger {
 namespace {
 
 log_level parse_level(std::string const& value) noexcept {
@@ -19,11 +19,11 @@ log_level parse_level(std::string const& value) noexcept {
 
 // The logger provider: apply() constructs the service from config and
 // binds it under logger_key. No dependencies.
-struct logger_plugin : medulla::plugin {
-    std::string name = "medulla";
+struct logger_plugin : araya::plugin {
+    std::string name = "araya";
     log_level level = log_level::info;
 
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         auto service =
             std::make_shared<logger_service>(std::move(name), level);
         ctx.provide(logger_key, std::move(service));
@@ -31,8 +31,8 @@ struct logger_plugin : medulla::plugin {
     }
 };
 
-std::unique_ptr<medulla::plugin> make_logger(
-    medulla::plugin_config const& config) {
+std::unique_ptr<araya::plugin> make_logger(
+    araya::plugin_config const& config) {
     auto plugin = std::make_unique<logger_plugin>();
     if (auto it = config.find("name"); it != config.end() &&
                                         !it->second.empty())
@@ -42,16 +42,16 @@ std::unique_ptr<medulla::plugin> make_logger(
     return plugin;
 }
 
-static constexpr std::span<medulla::dependency_spec const> g_no_deps{};
-static const medulla::provision_spec g_logger_prov[]{
-    {medulla::service_id{"logger", 1}}};
-static const medulla::plugin_descriptor g_descriptor{
+static constexpr std::span<araya::dependency_spec const> g_no_deps{};
+static const araya::provision_spec g_logger_prov[]{
+    {araya::service_id{"logger", 1}}};
+static const araya::plugin_descriptor g_descriptor{
     "logger", g_no_deps, g_logger_prov, &make_logger};
 
 }  // namespace
 
-medulla::plugin_descriptor const& plugin_descriptor() {
+araya::plugin_descriptor const& plugin_descriptor() {
     return g_descriptor;
 }
 
-}  // namespace medulla::logger
+}  // namespace araya::logger

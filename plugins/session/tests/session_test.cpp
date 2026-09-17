@@ -1,9 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "medulla/plugin.hpp"
-#include "medulla/runtime.hpp"
-#include "medulla/session/events.hpp"
-#include "medulla/session/store.hpp"
+#include "araya/plugin.hpp"
+#include "araya/runtime.hpp"
+#include "araya/session/events.hpp"
+#include "araya/session/store.hpp"
 
 #include <boost/asio/detached.hpp>
 #include <boost/asio/io_context.hpp>
@@ -16,7 +16,7 @@
 
 namespace {
 
-using namespace medulla::session;
+using namespace araya::session;
 
 static std::vector<std::string> g_log;
 
@@ -53,8 +53,8 @@ boost::json::value tool_result(std::string id, std::string call_id) {
                                        {"call_id", std::move(call_id)}}}};
 }
 
-struct logger_plugin : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct logger_plugin : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         ctx.on(created_key, [](session_created_msg const& m) {
             g_log.push_back("created:" + m.s->id().value);
         });
@@ -64,7 +64,7 @@ struct logger_plugin : medulla::plugin {
         ctx.on(disposed_key, [](session_disposed_msg const& m) {
             g_log.push_back("disposed:" + m.id.value);
         });
-        ctx.on(flush_key, [](session_flush_msg const& m) -> medulla::task<void> {
+        ctx.on(flush_key, [](session_flush_msg const& m) -> araya::task<void> {
             g_log.push_back("flush:" + m.id.value);
             co_return;
         });
@@ -72,14 +72,14 @@ struct logger_plugin : medulla::plugin {
     }
 };
 
-std::unique_ptr<medulla::plugin> make_logger(medulla::plugin_config const&) {
+std::unique_ptr<araya::plugin> make_logger(araya::plugin_config const&) {
     return std::make_unique<logger_plugin>();
 }
 
 // A consumer fiber that owns one session: unloading it must dispose the
 // session it created.
-struct owner_plugin : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct owner_plugin : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         auto store = ctx.require<session_store>(sessions_key);
         auto s = store->create(ctx, session_id{"owned"});
         s->append("user/message",
@@ -88,12 +88,12 @@ struct owner_plugin : medulla::plugin {
     }
 };
 
-std::unique_ptr<medulla::plugin> make_owner(medulla::plugin_config const&) {
+std::unique_ptr<araya::plugin> make_owner(araya::plugin_config const&) {
     return std::make_unique<owner_plugin>();
 }
 
-struct projection_plugin : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct projection_plugin : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         auto store = ctx.require<session_store>(sessions_key);
         g_log.push_back("projection-registered");
         (void)store->register_message_projection(
@@ -110,26 +110,26 @@ struct projection_plugin : medulla::plugin {
     }
 };
 
-std::unique_ptr<medulla::plugin> make_projection(
-    medulla::plugin_config const&) {
+std::unique_ptr<araya::plugin> make_projection(
+    araya::plugin_config const&) {
     return std::make_unique<projection_plugin>();
 }
 
-static constexpr std::span<medulla::dependency_spec const> g_no_deps{};
-static constexpr std::span<medulla::provision_spec const> g_no_provs{};
-static const medulla::dependency_spec g_sessions_dep[]{
-    {medulla::service_id{"sessions", 1}, true}};
-static const medulla::plugin_descriptor g_logger_desc{
+static constexpr std::span<araya::dependency_spec const> g_no_deps{};
+static constexpr std::span<araya::provision_spec const> g_no_provs{};
+static const araya::dependency_spec g_sessions_dep[]{
+    {araya::service_id{"sessions", 1}, true}};
+static const araya::plugin_descriptor g_logger_desc{
     "logger", g_sessions_dep, g_no_provs, &make_logger};
-static const medulla::plugin_descriptor g_owner_desc{
+static const araya::plugin_descriptor g_owner_desc{
     "owner", g_sessions_dep, g_no_provs, &make_owner};
-static const medulla::plugin_descriptor g_projection_desc{
+static const araya::plugin_descriptor g_projection_desc{
     "projection", g_sessions_dep, g_no_provs, &make_projection};
 
 struct harness {
     boost::asio::io_context io;
-    std::shared_ptr<medulla::runtime> rt =
-        std::make_shared<medulla::runtime>(io.get_executor());
+    std::shared_ptr<araya::runtime> rt =
+        std::make_shared<araya::runtime>(io.get_executor());
 
     template <typename Fn>
     void run(Fn&& fn) {
@@ -137,7 +137,7 @@ struct harness {
         struct driver {
             std::decay_t<Fn> fn;
             harness* self;
-            medulla::task<void> operator()() { co_await fn(*self->rt); }
+            araya::task<void> operator()() { co_await fn(*self->rt); }
         };
         boost::asio::co_spawn(io.get_executor(),
                               driver{std::forward<Fn>(fn), this},
@@ -146,20 +146,20 @@ struct harness {
         io.restart();
     }
 
-    medulla::component_spec spec(medulla::plugin_descriptor const* d,
-                                 medulla::plugin_config cfg = {}) {
-        return medulla::component_spec{
-            std::shared_ptr<medulla::plugin_descriptor>(
-                const_cast<medulla::plugin_descriptor*>(d),
+    araya::component_spec spec(araya::plugin_descriptor const* d,
+                                 araya::plugin_config cfg = {}) {
+        return araya::component_spec{
+            std::shared_ptr<araya::plugin_descriptor>(
+                const_cast<araya::plugin_descriptor*>(d),
                 [](auto*) {}),
             std::move(cfg), nullptr, ""};
     }
 
-    medulla::component_spec session_spec() {
-        return spec(&medulla::session::plugin_descriptor());
+    araya::component_spec session_spec() {
+        return spec(&araya::session::plugin_descriptor());
     }
 
-    std::shared_ptr<session_store> store(medulla::plugin_context& root_ctx) {
+    std::shared_ptr<session_store> store(araya::plugin_context& root_ctx) {
         return root_ctx.require<session_store>(sessions_key).shared();
     }
 };
@@ -169,7 +169,7 @@ struct harness {
 TEST_CASE("create announces, dispose removes, and the firehose sees every "
           "append") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.session_spec());
         co_await rt.mount(h.spec(&g_logger_desc));
         co_await rt.wait_idle();
@@ -207,7 +207,7 @@ TEST_CASE("create announces, dispose removes, and the firehose sees every "
 
 TEST_CASE("the surface folds the built-in message types in order") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.session_spec());
         co_await rt.wait_idle();
 
@@ -235,7 +235,7 @@ TEST_CASE("the surface folds the built-in message types in order") {
 
 TEST_CASE("projections fold their type while their fiber lives") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.session_spec());
         co_await rt.mount(h.spec(&g_logger_desc));
         auto proj = co_await rt.mount(h.spec(&g_projection_desc));
@@ -263,7 +263,7 @@ TEST_CASE("projections fold their type while their fiber lives") {
 TEST_CASE("seeded forks carry lineage, an end-seed marker, and a live "
           "boundary") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.session_spec());
         co_await rt.mount(h.spec(&g_logger_desc));
         co_await rt.wait_idle();
@@ -307,7 +307,7 @@ TEST_CASE("seeded forks carry lineage, an end-seed marker, and a live "
 
 TEST_CASE("reconstruction closes interrupted tool calls") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.session_spec());
         co_await rt.wait_idle();
 
@@ -339,7 +339,7 @@ TEST_CASE("reconstruction closes interrupted tool calls") {
 
 TEST_CASE("unknown vocabulary is preserved and ignorable") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.session_spec());
         co_await rt.wait_idle();
 
@@ -356,7 +356,7 @@ TEST_CASE("unknown vocabulary is preserved and ignorable") {
 
 TEST_CASE("unloading the owning fiber disposes its session") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.session_spec());
         co_await rt.mount(h.spec(&g_logger_desc));
         auto owner = co_await rt.mount(h.spec(&g_owner_desc));
@@ -379,7 +379,7 @@ TEST_CASE("unloading the owning fiber disposes its session") {
 
 TEST_CASE("built-in message shapes are validated on append") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.session_spec());
         co_await rt.wait_idle();
 

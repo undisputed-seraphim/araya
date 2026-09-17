@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "medulla/logger/logger.hpp"
-#include "medulla/runtime.hpp"
+#include "araya/logger/logger.hpp"
+#include "araya/runtime.hpp"
 
 #include <boost/asio/detached.hpp>
 #include <boost/asio/io_context.hpp>
@@ -20,7 +20,7 @@
 
 namespace {
 
-using namespace medulla::logger;
+using namespace araya::logger;
 
 struct file_logger_guard {
     quill::Logger* logger;
@@ -38,7 +38,7 @@ struct file_logger_guard {
 // the write).
 file_logger_guard make_file_logger(std::string name) {
     auto path = std::filesystem::temp_directory_path() /
-                ("medulla-logger-test-" + name + "-" +
+                ("araya-logger-test-" + name + "-" +
                  std::to_string(::getpid()) + ".log");
     std::filesystem::remove(path);
     auto* logger = quill::Frontend::create_or_get_logger(
@@ -55,15 +55,15 @@ std::string read_file(std::filesystem::path const& path) {
 
 struct harness {
     boost::asio::io_context io;
-    std::shared_ptr<medulla::runtime> rt =
-        std::make_shared<medulla::runtime>(io.get_executor());
+    std::shared_ptr<araya::runtime> rt =
+        std::make_shared<araya::runtime>(io.get_executor());
 
     template <typename Fn>
     void run(Fn&& fn) {
         struct driver {
             std::decay_t<Fn> fn;
             harness* self;
-            medulla::task<void> operator()() { co_await fn(*self->rt); }
+            araya::task<void> operator()() { co_await fn(*self->rt); }
         };
         boost::asio::co_spawn(io.get_executor(),
                               driver{std::forward<Fn>(fn), this},
@@ -72,17 +72,17 @@ struct harness {
         io.restart();
     }
 
-    medulla::component_spec spec(medulla::plugin_descriptor const* d,
-                                 medulla::plugin_config cfg = {}) {
-        return medulla::component_spec{
-            std::shared_ptr<medulla::plugin_descriptor>(
-                const_cast<medulla::plugin_descriptor*>(d),
+    araya::component_spec spec(araya::plugin_descriptor const* d,
+                                 araya::plugin_config cfg = {}) {
+        return araya::component_spec{
+            std::shared_ptr<araya::plugin_descriptor>(
+                const_cast<araya::plugin_descriptor*>(d),
                 [](auto*) {}),
             std::move(cfg), nullptr, ""};
     }
 
-    medulla::component_spec logger_spec(medulla::plugin_config cfg = {}) {
-        return spec(&medulla::logger::plugin_descriptor(), std::move(cfg));
+    araya::component_spec logger_spec(araya::plugin_config cfg = {}) {
+        return spec(&araya::logger::plugin_descriptor(), std::move(cfg));
     }
 };
 
@@ -91,7 +91,7 @@ struct harness {
 TEST_CASE("records reach the quill backend through named loggers") {
     auto file = make_file_logger("reach-backend");
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.logger_spec());
         co_await rt.wait_idle();
 
@@ -112,7 +112,7 @@ TEST_CASE("records reach the quill backend through named loggers") {
 TEST_CASE("level gating filters below-threshold records") {
     auto file = make_file_logger("gated");
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.logger_spec());
         co_await rt.wait_idle();
 
@@ -135,7 +135,7 @@ TEST_CASE("level gating filters below-threshold records") {
 TEST_CASE("bad format strings degrade instead of throwing") {
     auto file = make_file_logger("bad-format");
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.logger_spec());
         co_await rt.wait_idle();
 
@@ -155,7 +155,7 @@ TEST_CASE("bad format strings degrade instead of throwing") {
 TEST_CASE("the default logger name comes from config") {
     auto file = make_file_logger("custom-root");
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.logger_spec({{"name", "custom-root"}}));
         co_await rt.wait_idle();
 

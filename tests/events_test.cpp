@@ -2,8 +2,8 @@
 
 #include "coro_util.hpp"
 
-#include "medulla/events.hpp"
-#include "medulla/plugin_context.hpp"
+#include "araya/events.hpp"
+#include "araya/plugin_context.hpp"
 
 #include <boost/asio/detached.hpp>
 #include <boost/asio/io_context.hpp>
@@ -21,29 +21,29 @@ using namespace std::chrono_literals;
 
 namespace {
 
-inline constexpr medulla::event_key<std::string, medulla::dispatch_mode::serial>
+inline constexpr araya::event_key<std::string, araya::dispatch_mode::serial>
     serial_key{"example.serial", 1};
 
-inline constexpr medulla::event_key<std::string,
-                                    medulla::dispatch_mode::parallel>
+inline constexpr araya::event_key<std::string,
+                                    araya::dispatch_mode::parallel>
     parallel_key{"example.parallel", 1};
 
-inline constexpr medulla::event_key<std::string, medulla::dispatch_mode::emit>
+inline constexpr araya::event_key<std::string, araya::dispatch_mode::emit>
     emit_key{"example.emit", 1};
 
-inline constexpr medulla::event_key<std::string,
-                                    medulla::dispatch_mode::waterfall>
+inline constexpr araya::event_key<std::string,
+                                    araya::dispatch_mode::waterfall>
     waterfall_key{"example.waterfall", 1};
 
 struct fixture {
     boost::asio::io_context io;
     boost::asio::strand<boost::asio::any_io_executor> strand =
         boost::asio::make_strand(io.get_executor());
-    std::shared_ptr<medulla::event_bus> bus = std::make_shared<medulla::event_bus>(strand);
-    std::shared_ptr<medulla::context> root = medulla::context::root();
-    std::shared_ptr<medulla::activation> act =
-        std::make_shared<medulla::activation>(root);
-    medulla::plugin_context ctx{act};
+    std::shared_ptr<araya::event_bus> bus = std::make_shared<araya::event_bus>(strand);
+    std::shared_ptr<araya::context> root = araya::context::root();
+    std::shared_ptr<araya::activation> act =
+        std::make_shared<araya::activation>(root);
+    araya::plugin_context ctx{act};
 
     fixture() { act->bus = bus; }
 };
@@ -56,12 +56,12 @@ TEST_CASE("serial dispatch awaits listeners in registration order") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             fx.ctx.on(serial_key, [&](std::string const& m) {
                 order.push_back("sync:" + m);
             });
             fx.ctx.on(serial_key,
-                      [&](std::string const& m) -> medulla::task<void> {
+                      [&](std::string const& m) -> araya::task<void> {
                           order.push_back("async:" + m);
                           co_return;
                       });
@@ -84,7 +84,7 @@ TEST_CASE("serial dispatch stops at the first failure") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             fx.ctx.on(serial_key, [&](std::string const& m) {
                 order.push_back("first");
             });
@@ -116,10 +116,10 @@ TEST_CASE("parallel dispatch runs all listeners and rethrows after") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             for (int i = 0; i < 3; ++i) {
                 fx.ctx.on(parallel_key,
-                          [&, i](std::string const& m) -> medulla::task<void> {
+                          [&, i](std::string const& m) -> araya::task<void> {
                               ran.push_back(m + std::to_string(i));
                               co_return;
                           });
@@ -153,7 +153,7 @@ TEST_CASE("emit dispatches without awaiting and reports failures") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             fx.ctx.on(emit_key, [&](std::string const& m) {
                 ran.push_back("ok:" + m);
             });
@@ -181,20 +181,20 @@ TEST_CASE("waterfall delegates, transforms, and short-circuits") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             fx.ctx.on(
                 waterfall_key,
                 [&](std::string const& m,
-                    medulla::waterfall_continuation<std::string> next)
-                    -> medulla::task<std::string> {
+                    araya::waterfall_continuation<std::string> next)
+                    -> araya::task<std::string> {
                     order.push_back("first:" + m);
                     co_return co_await next(m + "+1");
                 });
             fx.ctx.on(
                 waterfall_key,
                 [&](std::string const& m,
-                    medulla::waterfall_continuation<std::string> next)
-                    -> medulla::task<std::string> {
+                    araya::waterfall_continuation<std::string> next)
+                    -> araya::task<std::string> {
                     order.push_back("second:" + m);
                     if (m == "x+1") {
                         co_return "short-circuited";
@@ -204,8 +204,8 @@ TEST_CASE("waterfall delegates, transforms, and short-circuits") {
             fx.ctx.on(
                 waterfall_key,
                 [&](std::string const& m,
-                    medulla::waterfall_continuation<std::string>)
-                    -> medulla::task<std::string> {
+                    araya::waterfall_continuation<std::string>)
+                    -> araya::task<std::string> {
                     order.push_back("never");
                     co_return m;
                 });
@@ -226,12 +226,12 @@ TEST_CASE("waterfall passes through when no listener short-circuits") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             fx.ctx.on(
                 waterfall_key,
                 [&](std::string const& m,
-                    medulla::waterfall_continuation<std::string> next)
-                    -> medulla::task<std::string> {
+                    araya::waterfall_continuation<std::string> next)
+                    -> araya::task<std::string> {
                     co_return co_await next(m + "+");
                 });
 
@@ -251,20 +251,20 @@ TEST_CASE("waterfall exception terminates the chain") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             fx.ctx.on(
                 waterfall_key,
                 [&](std::string const& m,
-                    medulla::waterfall_continuation<std::string>)
-                    -> medulla::task<std::string> {
+                    araya::waterfall_continuation<std::string>)
+                    -> araya::task<std::string> {
                     order.push_back("boom");
                     throw std::runtime_error("waterfall failure");
                 });
             fx.ctx.on(
                 waterfall_key,
                 [&](std::string const& m,
-                    medulla::waterfall_continuation<std::string>)
-                    -> medulla::task<std::string> {
+                    araya::waterfall_continuation<std::string>)
+                    -> araya::task<std::string> {
                     order.push_back("never");
                     co_return m;
                 });
@@ -287,7 +287,7 @@ TEST_CASE("listener registrations are owned effects") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             fx.ctx.on(serial_key, [](std::string const&) {});
             CHECK(fx.bus->listener_count(serial_key.id) == 1);
             fx.act->teardown();
@@ -305,7 +305,7 @@ TEST_CASE("early release removes a listener immediately") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             auto reg = fx.ctx.on(serial_key, [&](std::string const& m) {
                 order.push_back(m);
             });
@@ -325,8 +325,8 @@ TEST_CASE("listener added during dispatch affects only later dispatches") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
-            fx.ctx.on(serial_key, [&](std::string const& m) -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(serial_key, [&](std::string const& m) -> araya::task<void> {
                 order.push_back("first");
                 fx.ctx.on(serial_key, [&](std::string const& m2) {
                     order.push_back("late");
@@ -345,12 +345,12 @@ TEST_CASE("listener added during dispatch affects only later dispatches") {
 
 TEST_CASE("conflicting mode registration and dispatch are rejected") {
     fixture fx;
-    medulla::event_key<std::string, medulla::dispatch_mode::parallel>
+    araya::event_key<std::string, araya::dispatch_mode::parallel>
         serial_id_parallel_mode{serial_key.id};
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             fx.ctx.on(serial_key, [](std::string const&) {});
             CHECK_THROWS_AS(
                 fx.ctx.on(serial_id_parallel_mode, [](std::string const&) {}),
@@ -378,10 +378,10 @@ TEST_CASE("in-flight emit observes the current sink without dangling") {
 
     boost::asio::co_spawn(
         fx.strand,
-        medulla_test::heap_coroutine([&]() -> medulla::task<void> {
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
             fx.bus->set_diagnostic_sink(
                 [&](std::exception_ptr ep) { first_sink_report = ep; });
-            fx.ctx.on(emit_key, [&](std::string const& m) -> medulla::task<void> {
+            fx.ctx.on(emit_key, [&](std::string const& m) -> araya::task<void> {
                 auto timer = boost::asio::steady_timer(
                     co_await boost::asio::this_coro::executor, 20ms);
                 co_await timer.async_wait(boost::asio::use_awaitable);

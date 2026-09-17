@@ -1,8 +1,8 @@
-#include "medulla/session/surface.hpp"
+#include "araya/session/surface.hpp"
 
 #include <boost/json.hpp>
 
-namespace medulla::session {
+namespace araya::session {
 
 bool is_builtin_surface_type(std::string_view type) noexcept {
     return type == "system/message" || type == "user/message" ||
@@ -108,4 +108,4 @@ std::optional<session_message> fold_event(
     return fold_builtin(ev);
 }
 
-}  // namespace medulla::session
+}  // namespace araya::session

@@ -1,9 +1,9 @@
-#include "medulla/version.hpp"
+#include "araya/version.hpp"
 
-namespace medulla {
+namespace araya {
 
 const char* version_string() {
     return "0.1.0";
 }
 
-}  // namespace medulla
+}  // namespace araya

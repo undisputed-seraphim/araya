@@ -1,10 +1,10 @@
-#include "medulla/abi_host.hpp"
+#include "araya/abi_host.hpp"
 
-#include "medulla/activation.hpp"
-#include "medulla/context.hpp"
-#include "medulla/detail/gate.hpp"
-#include "medulla/events.hpp"
-#include "medulla/plugin_context.hpp"
+#include "araya/activation.hpp"
+#include "araya/context.hpp"
+#include "araya/detail/gate.hpp"
+#include "araya/events.hpp"
+#include "araya/plugin_context.hpp"
 
 #include <boost/asio/post.hpp>
 #include <boost/asio/this_coro.hpp>
@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace medulla::abi {
+namespace araya::abi {
 
 struct abi_bridge {
     explicit abi_bridge(plugin_context c) : ctx(std::move(c)) {}
@@ -27,39 +27,39 @@ struct abi_bridge {
     std::exception_ptr error;
 };
 
-static abi_bridge* fiber_bridge(medulla_fiber fiber) {
+static abi_bridge* fiber_bridge(araya_fiber fiber) {
     return static_cast<abi_bridge*>(fiber);
 }
 
-static int host_require(medulla_fiber fiber, const char* name,
+static int host_require(araya_fiber fiber, const char* name,
                         std::uint32_t version, void** out) {
     try {
         auto b = fiber_bridge(fiber)->ctx.find_binding(
             service_id{name, version});
         if (!b)
-            return MEDULLA_ABI_UNRESOLVED;
+            return ARAYA_ABI_UNRESOLVED;
         *out = b->value.get();
-        return MEDULLA_ABI_OK;
+        return ARAYA_ABI_OK;
     } catch (...) {
-        return MEDULLA_ABI_ERROR;
+        return ARAYA_ABI_ERROR;
     }
 }
 
-static int host_find(medulla_fiber fiber, const char* name,
+static int host_find(araya_fiber fiber, const char* name,
                      std::uint32_t version, void** out) {
     try {
         auto b = fiber_bridge(fiber)->ctx.find_binding(
             service_id{name, version});
         *out = b ? b->value.get() : nullptr;
-        return MEDULLA_ABI_OK;
+        return ARAYA_ABI_OK;
     } catch (...) {
-        return MEDULLA_ABI_ERROR;
+        return ARAYA_ABI_ERROR;
     }
 }
 
-static int host_provide(medulla_fiber fiber, const char* name,
+static int host_provide(araya_fiber fiber, const char* name,
                         std::uint32_t version, void* value,
-                        void (*destroy_value)(void*), medulla_handle* out) {
+                        void (*destroy_value)(void*), araya_handle* out) {
     try {
         auto* b = fiber_bridge(fiber);
         std::shared_ptr<void> owned(
@@ -69,20 +69,20 @@ static int host_provide(medulla_fiber fiber, const char* name,
         b->handles.push_back(reg);
         if (out)
             *out = reg.get();
-        return MEDULLA_ABI_OK;
+        return ARAYA_ABI_OK;
     } catch (...) {
-        return MEDULLA_ABI_ERROR;
+        return ARAYA_ABI_ERROR;
     }
 }
 
-static int host_effect(medulla_fiber fiber,
-                       void (*setup)(void* data, medulla_cleanup_v1* cleanup),
-                       void* data, medulla_handle* out) {
+static int host_effect(araya_fiber fiber,
+                       void (*setup)(void* data, araya_cleanup_v1* cleanup),
+                       void* data, araya_handle* out) {
     try {
         auto* b = fiber_bridge(fiber);
         auto reg = std::make_shared<registration>(
             b->ctx.effect([setup, data]() -> cleanup_action {
-                medulla_cleanup_v1 c{};
+                araya_cleanup_v1 c{};
                 if (setup)
                     setup(data, &c);
                 if (!c.run)
@@ -92,23 +92,23 @@ static int host_effect(medulla_fiber fiber,
         b->handles.push_back(reg);
         if (out)
             *out = reg.get();
-        return MEDULLA_ABI_OK;
+        return ARAYA_ABI_OK;
     } catch (...) {
-        return MEDULLA_ABI_ERROR;
+        return ARAYA_ABI_ERROR;
     }
 }
 
-static int host_on(medulla_fiber fiber, const char* name,
+static int host_on(araya_fiber fiber, const char* name,
                    std::uint32_t version, std::uint32_t mode,
                    void (*invoke)(void* data, const void* msg), void* data,
-                   medulla_handle* out) {
+                   araya_handle* out) {
     try {
         auto* b = fiber_bridge(fiber);
-        if (mode == MEDULLA_MODE_WATERFALL)
-            return MEDULLA_ABI_UNSUPPORTED;
+        if (mode == ARAYA_MODE_WATERFALL)
+            return ARAYA_ABI_UNSUPPORTED;
         auto bus = b->act->bus;
         if (!bus)
-            return MEDULLA_ABI_ERROR;
+            return ARAYA_ABI_ERROR;
         auto id = service_id{name, version};
         auto token = bus->add_raw_listener(
             id, static_cast<dispatch_mode>(mode),
@@ -125,28 +125,28 @@ static int host_on(medulla_fiber fiber, const char* name,
         b->handles.push_back(reg);
         if (out)
             *out = reg.get();
-        return MEDULLA_ABI_OK;
+        return ARAYA_ABI_OK;
     } catch (...) {
-        return MEDULLA_ABI_ERROR;
+        return ARAYA_ABI_ERROR;
     }
 }
 
-static void host_release(medulla_handle handle) {
+static void host_release(araya_handle handle) {
     if (handle)
         static_cast<registration*>(handle)->release();
 }
 
-static int host_stop_requested(medulla_fiber fiber) {
+static int host_stop_requested(araya_fiber fiber) {
     return fiber_bridge(fiber)->act->stop_token().stop_requested() ? 1 : 0;
 }
 
-static void host_post(medulla_fiber fiber, void (*fn)(void* data),
+static void host_post(araya_fiber fiber, void (*fn)(void* data),
                       void* data) {
     boost::asio::post(fiber_bridge(fiber)->strand, [fn, data] { fn(data); });
 }
 
-static const medulla_host_api_v1 g_host_api{
-    MEDULLA_ABI_VERSION,
+static const araya_host_api_v1 g_host_api{
+    ARAYA_ABI_VERSION,
     &host_require,
     &host_find,
     &host_provide,
@@ -157,7 +157,7 @@ static const medulla_host_api_v1 g_host_api{
     &host_post,
 };
 
-medulla_host_api_v1 const& host_api() noexcept {
+araya_host_api_v1 const& host_api() noexcept {
     return g_host_api;
 }
 
@@ -165,7 +165,7 @@ namespace {
 
 class abi_plugin final : public plugin {
 public:
-    explicit abi_plugin(medulla_instance_v1* instance) : instance_(instance) {}
+    explicit abi_plugin(araya_instance_v1* instance) : instance_(instance) {}
 
     ~abi_plugin() override {
         if (instance_ && instance_->destroy)
@@ -176,7 +176,7 @@ public:
         auto b = std::make_shared<abi_bridge>(ctx);
         b->act = ctx.activation_ptr();
         b->strand = co_await boost::asio::this_coro::executor;
-        medulla_fiber fiber = b.get();
+        araya_fiber fiber = b.get();
         instance_->apply(instance_, fiber, &on_complete);
         co_await b->done->wait(boost::asio::use_awaitable);
         if (b->error)
@@ -186,7 +186,7 @@ public:
     bool reconfigure(plugin_config const& cfg) override {
         if (!instance_ || !instance_->reconfigure)
             return false;
-        std::vector<medulla_config_pair> pairs;
+        std::vector<araya_config_pair> pairs;
         pairs.reserve(cfg.size());
         for (auto const& [k, v] : cfg)
             pairs.push_back({k.c_str(), v.c_str()});
@@ -195,17 +195,17 @@ public:
     }
 
 private:
-    static void on_complete(medulla_fiber fiber, int code,
+    static void on_complete(araya_fiber fiber, int code,
                             const char* error) {
         auto* b = static_cast<abi_bridge*>(fiber);
-        if (code != MEDULLA_ABI_OK) {
+        if (code != ARAYA_ABI_OK) {
             b->error = std::make_exception_ptr(std::runtime_error(
                 error ? error : "module activation failed"));
         }
         b->done->open();
     }
 
-    medulla_instance_v1* instance_;
+    araya_instance_v1* instance_;
 };
 
 struct descriptor_holder {
@@ -217,14 +217,14 @@ struct descriptor_holder {
 
 }  // namespace
 
-std::shared_ptr<plugin_descriptor> wrap(medulla_plugin_entry_fn entry,
+std::shared_ptr<plugin_descriptor> wrap(araya_plugin_entry_fn entry,
                                         std::shared_ptr<void> keep_alive) {
     if (!entry)
         throw std::invalid_argument("null module entry point");
-    const medulla_plugin_descriptor_v1* c = entry(&g_host_api);
+    const araya_plugin_descriptor_v1* c = entry(&g_host_api);
     if (!c)
         throw std::runtime_error("module entry returned null descriptor");
-    if (c->abi_version != MEDULLA_ABI_VERSION)
+    if (c->abi_version != ARAYA_ABI_VERSION)
         throw std::runtime_error("module ABI version mismatch");
 
     auto holder = std::make_shared<descriptor_holder>();
@@ -255,11 +255,11 @@ std::shared_ptr<plugin_descriptor> wrap(medulla_plugin_entry_fn entry,
     holder->desc.create =
         [c, keep_alive = std::move(keep_alive)](
             plugin_config const& cfg) -> std::unique_ptr<plugin> {
-        std::vector<medulla_config_pair> pairs;
+        std::vector<araya_config_pair> pairs;
         pairs.reserve(cfg.size());
         for (auto const& [k, v] : cfg)
             pairs.push_back({k.c_str(), v.c_str()});
-        medulla_instance_v1* instance = c->create(pairs.data(), pairs.size());
+        araya_instance_v1* instance = c->create(pairs.data(), pairs.size());
         if (!instance)
             return nullptr;
         return std::make_unique<abi_plugin>(instance);
@@ -268,4 +268,4 @@ std::shared_ptr<plugin_descriptor> wrap(medulla_plugin_entry_fn entry,
     return std::shared_ptr<plugin_descriptor>(holder, &holder->desc);
 }
 
-}  // namespace medulla::abi
+}  // namespace araya::abi

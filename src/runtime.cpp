@@ -1,10 +1,10 @@
-#include "medulla/runtime.hpp"
+#include "araya/runtime.hpp"
 
-#include "medulla/activation.hpp"
+#include "araya/activation.hpp"
 
-#include "medulla/context.hpp"
-#include "medulla/detail/assert.hpp"
-#include "medulla/detail/fiber.hpp"
+#include "araya/context.hpp"
+#include "araya/detail/assert.hpp"
+#include "araya/detail/fiber.hpp"
 
 #include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace medulla {
+namespace araya {
 
 struct runtime::fiber_record {
     fiber_id id;
@@ -26,9 +26,9 @@ struct runtime::fiber_record {
     component_spec spec;
     std::string path;
     fiber_id parent_fiber = 0;
-    std::shared_ptr<medulla::activation> parent_activation;
+    std::shared_ptr<araya::activation> parent_activation;
     fiber_state state = fiber_state::inactive;
-    std::shared_ptr<medulla::activation> activation;
+    std::shared_ptr<araya::activation> activation;
     std::unique_ptr<plugin> instance;
     std::vector<owned_service_id> inject_keys;
     std::vector<std::pair<owned_service_id, bool>> inject;
@@ -115,12 +115,15 @@ void runtime::retire_child(fiber_id id) {
         f->reactivate = -1;
         begin_unload(*f, false);
         if (f->state == fiber_state::inactive) {
+            detail::retire_fiber(f->strand);
             fibers_.erase(id);
             unindex(id);
             return;
         }
         f->done->wait([this, id] {
             if (find(id)) {
+                auto* g = find(id);
+                detail::retire_fiber(g->strand);
                 fibers_.erase(id);
                 unindex(id);
             }
@@ -138,6 +141,7 @@ boost::asio::awaitable<void> runtime::retire(fiber_handle h) {
         co_await done->wait(boost::asio::use_awaitable);
     }
     if (find(h.id())) {
+        detail::retire_fiber(find(h.id())->strand);
         fibers_.erase(h.id());
         unindex(h.id());
     }
@@ -251,6 +255,7 @@ boost::asio::awaitable<void> runtime::reconcile(
         co_await gate->wait(boost::asio::use_awaitable);
     for (auto& [id, gate] : to_await) {
         if (fibers_.contains(id)) {
+            detail::retire_fiber(fibers_.at(id)->strand);
             fibers_.erase(id);
             unindex(id);
         }
@@ -368,9 +373,9 @@ void runtime::evaluate(fiber_record& f) {
 }
 
 void runtime::start_loading(fiber_record& f) {
-    MEDULLA_ASSERT(f.state == fiber_state::inactive);
-    MEDULLA_ASSERT(f.committed.empty());
-    MEDULLA_ASSERT(f.remaining == 0);
+    ARAYA_ASSERT(f.state == fiber_state::inactive);
+    ARAYA_ASSERT(f.committed.empty());
+    ARAYA_ASSERT(f.remaining == 0);
     f.error = nullptr;
     f.apply_failed = false;
     f.state = fiber_state::loading;
@@ -493,14 +498,14 @@ bool runtime::providers_still_active(fiber_record const& f) const {
 }
 
 void runtime::publish(fiber_record& f) {
-    MEDULLA_ASSERT(f.state == fiber_state::loading);
-    MEDULLA_ASSERT(f.activation);
-    MEDULLA_ASSERT(f.activation->state == fiber_state::loading);
-    MEDULLA_ASSERT(providers_still_active(f));
+    ARAYA_ASSERT(f.state == fiber_state::loading);
+    ARAYA_ASSERT(f.activation);
+    ARAYA_ASSERT(f.activation->state == fiber_state::loading);
+    ARAYA_ASSERT(providers_still_active(f));
     for (auto const& key : f.provide) {
         if (auto* b = f.spec.parent->lookup_mutable(key);
             b && b->provider == f.id) {
-            MEDULLA_ASSERT(b->state == provider_state::loading);
+            ARAYA_ASSERT(b->state == provider_state::loading);
             b->state = provider_state::active;
         }
     }
@@ -535,7 +540,7 @@ void runtime::begin_unload(fiber_record& f, bool reactivate) {
         f.control->cell->stop_source->request_stop();
         return;
     }
-    MEDULLA_ASSERT(f.state == fiber_state::active);
+    ARAYA_ASSERT(f.state == fiber_state::active);
 
     f.state = fiber_state::unloading;
     f.control->cell->state->store(fiber_state::unloading);
@@ -564,7 +569,7 @@ void runtime::begin_unload(fiber_record& f, bool reactivate) {
                 committed_here = true;
                 break;
             }
-        MEDULLA_ASSERT(committed_here);
+        ARAYA_ASSERT(committed_here);
         ++f.remaining;
     }
     for (auto cid : consumers) {
@@ -586,10 +591,10 @@ void runtime::maybe_finish_unload(fiber_record& f) {
 }
 
 void runtime::finish_unload(fiber_record& f) {
-    MEDULLA_ASSERT(f.state == fiber_state::unloading);
-    MEDULLA_ASSERT(f.remaining == 0);
+    ARAYA_ASSERT(f.state == fiber_state::unloading);
+    ARAYA_ASSERT(f.remaining == 0);
     if (f.activation) {
-        MEDULLA_ASSERT(f.activation->state == fiber_state::unloading);
+        ARAYA_ASSERT(f.activation->state == fiber_state::unloading);
         f.activation->teardown();
         f.activation->state = fiber_state::inactive;
     }
@@ -607,15 +612,15 @@ void runtime::finish_unload(fiber_record& f) {
         if (it != fibers_.end()) {
             [[maybe_unused]] auto erased =
                 it->second->consumers.erase(f.id);
-            MEDULLA_ASSERT(erased == 1);
+            ARAYA_ASSERT(erased == 1);
             if (it->second->remaining > 0) {
-                MEDULLA_ASSERT(it->second->state == fiber_state::unloading);
+                ARAYA_ASSERT(it->second->state == fiber_state::unloading);
                 --it->second->remaining;
             }
             maybe_finish_unload(*it->second);
         }
     }
-    MEDULLA_ASSERT(f.consumers.empty());
+    ARAYA_ASSERT(f.consumers.empty());
     transition_finished();
     f.done->open();
     for (auto const& key : f.provide)
@@ -833,7 +838,7 @@ void runtime::transition_started() {
 }
 
 void runtime::transition_finished() {
-    MEDULLA_ASSERT(in_flight_ > 0);
+    ARAYA_ASSERT(in_flight_ > 0);
     if (in_flight_ > 0)
         --in_flight_;
     if (in_flight_ == 0)
@@ -842,8 +847,8 @@ void runtime::transition_finished() {
 
 void runtime::validate_invariants() const {
     for (auto const& [id, f] : fibers_) {
-        MEDULLA_ASSERT(f->id == id);
-        MEDULLA_ASSERT(f->control);
+        ARAYA_ASSERT(f->id == id);
+        ARAYA_ASSERT(f->control);
 
         // Declaration immutability (Lemma 59(5)): inject/provide keys are
         // written once at mount and never revised.
@@ -852,19 +857,19 @@ void runtime::validate_invariants() const {
             inject_keys.reserve(f->spec.descriptor->inject.size());
             for (auto const& dep : f->spec.descriptor->inject)
                 inject_keys.push_back(owned_service_id{dep.key});
-            MEDULLA_ASSERT(f->inject_keys == inject_keys);
+            ARAYA_ASSERT(f->inject_keys == inject_keys);
 
             std::vector<owned_service_id> provide_keys;
             provide_keys.reserve(f->spec.descriptor->provide.size());
             for (auto const& prov : f->spec.descriptor->provide)
                 provide_keys.push_back(owned_service_id{prov.key});
-            MEDULLA_ASSERT(f->provide == provide_keys);
+            ARAYA_ASSERT(f->provide == provide_keys);
         }
 
         if (f->state == fiber_state::inactive) {
-            MEDULLA_ASSERT(f->committed.empty());
-            MEDULLA_ASSERT(f->remaining == 0);
-            MEDULLA_ASSERT(f->activation == nullptr ||
+            ARAYA_ASSERT(f->committed.empty());
+            ARAYA_ASSERT(f->remaining == 0);
+            ARAYA_ASSERT(f->activation == nullptr ||
                            (f->activation->state == fiber_state::inactive &&
                             f->activation->effects->size() == 0));
             continue;
@@ -873,22 +878,22 @@ void runtime::validate_invariants() const {
         // Committed-view hygiene (Definition 63(3)/(4)): a committed view
         // names only declared keys and installed providers.
         for (auto const& [k, p] : f->committed) {
-            MEDULLA_ASSERT(std::find(f->inject_keys.begin(),
+            ARAYA_ASSERT(std::find(f->inject_keys.begin(),
                                      f->inject_keys.end(),
                                      k) != f->inject_keys.end());
             [[maybe_unused]] auto pit = fibers_.find(p);
-            MEDULLA_ASSERT(pit != fibers_.end());
-            MEDULLA_ASSERT(pit->second->state != fiber_state::inactive);
+            ARAYA_ASSERT(pit != fibers_.end());
+            ARAYA_ASSERT(pit->second->state != fiber_state::inactive);
         }
         if (f->activation) {
-            MEDULLA_ASSERT(f->activation->committed_view.size() ==
+            ARAYA_ASSERT(f->activation->committed_view.size() ==
                            f->committed.size());
             for (auto const& [k, b] : f->activation->committed_view) {
-                MEDULLA_ASSERT(b.value != nullptr);
-                MEDULLA_ASSERT(b.provider != 0);
+                ARAYA_ASSERT(b.value != nullptr);
+                ARAYA_ASSERT(b.provider != 0);
                 [[maybe_unused]] auto cit = f->committed.find(k);
-                MEDULLA_ASSERT(cit != f->committed.end());
-                MEDULLA_ASSERT(cit->second == b.provider);
+                ARAYA_ASSERT(cit != f->committed.end());
+                ARAYA_ASSERT(cit->second == b.provider);
             }
         }
 
@@ -897,33 +902,33 @@ void runtime::validate_invariants() const {
         [[maybe_unused]] std::size_t expected = 0;
         for (auto cid : f->consumers) {
             auto cit = fibers_.find(cid);
-            MEDULLA_ASSERT(cit != fibers_.end());
+            ARAYA_ASSERT(cit != fibers_.end());
             [[maybe_unused]] bool committed_here = false;
             for (auto const& [k, p] : cit->second->committed)
                 if (p == id) {
                     committed_here = true;
                     break;
                 }
-            MEDULLA_ASSERT(committed_here);
+            ARAYA_ASSERT(committed_here);
             if (cit->second->state != fiber_state::inactive)
                 ++expected;
         }
         if (f->state == fiber_state::unloading)
-            MEDULLA_ASSERT(f->remaining == expected);
+            ARAYA_ASSERT(f->remaining == expected);
         else
-            MEDULLA_ASSERT(f->remaining == 0);
+            ARAYA_ASSERT(f->remaining == 0);
     }
 
     // consumers_of_ index consistency: no stale ids, every declared key
     // registered.
     for (auto const& [key, ids] : consumers_of_)
         for ([[maybe_unused]] auto cid : ids)
-            MEDULLA_ASSERT(fibers_.find(cid) != fibers_.end());
+            ARAYA_ASSERT(fibers_.find(cid) != fibers_.end());
     for (auto const& [id, f] : fibers_) {
         for (auto const& k : f->inject_keys) {
             [[maybe_unused]] auto it = consumers_of_.find(k);
-            MEDULLA_ASSERT(it != consumers_of_.end());
-            MEDULLA_ASSERT(it->second.contains(id));
+            ARAYA_ASSERT(it != consumers_of_.end());
+            ARAYA_ASSERT(it->second.contains(id));
         }
     }
 }
@@ -933,4 +938,4 @@ boost::asio::awaitable<void> runtime::validate_invariants_async() const {
     validate_invariants();
 }
 
-}  // namespace medulla
+}  // namespace araya

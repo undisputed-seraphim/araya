@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "medulla/plugin.hpp"
-#include "medulla/runtime.hpp"
+#include "araya/plugin.hpp"
+#include "araya/runtime.hpp"
 
 #include <boost/asio/detached.hpp>
 #include <boost/asio/io_context.hpp>
@@ -17,19 +17,19 @@ struct database {
     std::string name;
 };
 
-inline constexpr medulla::service_key<database> db_key{"example.db", 1};
-inline constexpr medulla::service_key<database> aux_key{"example.aux", 1};
+inline constexpr araya::service_key<database> db_key{"example.db", 1};
+inline constexpr araya::service_key<database> aux_key{"example.aux", 1};
 
 static std::vector<std::string> g_log;
-static medulla::plugin_descriptor* g_child_desc = nullptr;
-static std::vector<medulla::fiber_handle> g_child_handles;
+static araya::plugin_descriptor* g_child_desc = nullptr;
+static std::vector<araya::fiber_handle> g_child_handles;
 
-struct provider_plugin : medulla::plugin {
+struct provider_plugin : araya::plugin {
     std::string value;
 
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         auto tag = "p:" + value;
-        ctx.effect([tag]() -> medulla::cleanup_action {
+        ctx.effect([tag]() -> araya::cleanup_action {
             return [tag] { g_log.push_back("p-cleanup:" + tag); };
         });
         ctx.provide(db_key, std::make_shared<database>(value));
@@ -38,29 +38,29 @@ struct provider_plugin : medulla::plugin {
     }
 };
 
-std::unique_ptr<medulla::plugin> make_provider(
-    medulla::plugin_config const& cfg) {
+std::unique_ptr<araya::plugin> make_provider(
+    araya::plugin_config const& cfg) {
     auto p = std::make_unique<provider_plugin>();
     p->value = cfg.at("value");
     return p;
 }
 
 // A parent that requires db, mounts a child, and provides aux.
-struct parent_impl : medulla::plugin {
+struct parent_impl : araya::plugin {
     std::string tag;
 
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         auto db = ctx.require<database>(db_key);
         g_log.push_back("parent-active:" + db->name);
         ctx.provide(aux_key, std::make_shared<database>("aux"));
-        medulla::component_spec child_spec;
-        child_spec.descriptor = std::shared_ptr<medulla::plugin_descriptor>(
+        araya::component_spec child_spec;
+        child_spec.descriptor = std::shared_ptr<araya::plugin_descriptor>(
             g_child_desc, [](auto*) {});
         child_spec.config = {{"tag", tag}};
         auto child = co_await ctx.mount(std::move(child_spec));
         g_child_handles.push_back(child);
         auto cleanup_tag = tag;
-        ctx.effect([cleanup_tag]() -> medulla::cleanup_action {
+        ctx.effect([cleanup_tag]() -> araya::cleanup_action {
             return [cleanup_tag] {
                 g_log.push_back("parent-cleanup:" + cleanup_tag);
             };
@@ -69,23 +69,23 @@ struct parent_impl : medulla::plugin {
     }
 };
 
-std::unique_ptr<medulla::plugin> make_parent_impl(
-    medulla::plugin_config const& cfg) {
+std::unique_ptr<araya::plugin> make_parent_impl(
+    araya::plugin_config const& cfg) {
     auto p = std::make_unique<parent_impl>();
     p->tag = cfg.at("tag");
     return p;
 }
 
-struct child_impl : medulla::plugin {
+struct child_impl : araya::plugin {
     std::string tag;
 
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         // The child declares nothing; it reads db through the parent's
         // committed view (Algorithm 6).
         auto db = ctx.require<database>(db_key);
         g_log.push_back("child-active:" + tag + ":" + db->name);
         auto cleanup_tag = tag;
-        ctx.effect([cleanup_tag]() -> medulla::cleanup_action {
+        ctx.effect([cleanup_tag]() -> araya::cleanup_action {
             return [cleanup_tag] {
                 g_log.push_back("child-cleanup:" + cleanup_tag);
             };
@@ -94,57 +94,57 @@ struct child_impl : medulla::plugin {
     }
 };
 
-std::unique_ptr<medulla::plugin> make_child_impl(
-    medulla::plugin_config const& cfg) {
+std::unique_ptr<araya::plugin> make_child_impl(
+    araya::plugin_config const& cfg) {
     auto p = std::make_unique<child_impl>();
     p->tag = cfg.at("tag");
     return p;
 }
 
-struct broken_child : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct broken_child : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         (void)ctx.require<database>(db_key);
         throw std::runtime_error("child failed");
         co_return;
     }
 };
 
-std::unique_ptr<medulla::plugin> make_broken_child(
-    medulla::plugin_config const&) {
+std::unique_ptr<araya::plugin> make_broken_child(
+    araya::plugin_config const&) {
     return std::make_unique<broken_child>();
 }
 
-static constexpr std::span<medulla::dependency_spec const> g_no_deps{};
-static constexpr std::span<medulla::provision_spec const> g_no_provs{};
-static const medulla::dependency_spec g_db_dep[]{
-    {medulla::service_id{"example.db", 1}, true}};
-static const medulla::provision_spec g_db_prov[]{
-    {medulla::service_id{"example.db", 1}}};
-static const medulla::provision_spec g_aux_prov[]{
-    {medulla::service_id{"example.aux", 1}}};
+static constexpr std::span<araya::dependency_spec const> g_no_deps{};
+static constexpr std::span<araya::provision_spec const> g_no_provs{};
+static const araya::dependency_spec g_db_dep[]{
+    {araya::service_id{"example.db", 1}, true}};
+static const araya::provision_spec g_db_prov[]{
+    {araya::service_id{"example.db", 1}}};
+static const araya::provision_spec g_aux_prov[]{
+    {araya::service_id{"example.aux", 1}}};
 
-static const medulla::plugin_descriptor g_provider_desc{
+static const araya::plugin_descriptor g_provider_desc{
     "provider", g_no_deps, g_db_prov, &make_provider};
-static const medulla::plugin_descriptor g_parent_desc{
+static const araya::plugin_descriptor g_parent_desc{
     "parent", g_db_dep, g_aux_prov, &make_parent_impl};
-static const medulla::plugin_descriptor g_child_desc_v{
+static const araya::plugin_descriptor g_child_desc_v{
     "child", g_no_deps, g_no_provs, &make_child_impl};
-static const medulla::plugin_descriptor g_broken_child_desc{
+static const araya::plugin_descriptor g_broken_child_desc{
     "broken-child", g_no_deps, g_no_provs, &make_broken_child};
 
 struct harness {
     boost::asio::io_context io;
-    std::shared_ptr<medulla::runtime> rt =
-        std::make_shared<medulla::runtime>(io.get_executor());
+    std::shared_ptr<araya::runtime> rt =
+        std::make_shared<araya::runtime>(io.get_executor());
 
     template <typename Fn>
     void run(Fn&& fn) {
         g_log.clear();
         g_child_handles.clear();
-        g_child_desc = const_cast<medulla::plugin_descriptor*>(&g_child_desc_v);        struct driver {
+        g_child_desc = const_cast<araya::plugin_descriptor*>(&g_child_desc_v);        struct driver {
             std::decay_t<Fn> fn;
             harness* self;
-            medulla::task<void> operator()() { co_await fn(*self->rt); }
+            araya::task<void> operator()() { co_await fn(*self->rt); }
         };
         boost::asio::co_spawn(io.get_executor(),
                               driver{std::forward<Fn>(fn), this},
@@ -154,10 +154,10 @@ struct harness {
         g_child_desc = nullptr;
     }
 
-    medulla::component_spec spec(medulla::plugin_descriptor const* d,
-                                 medulla::plugin_config cfg = {}) {
-        return medulla::component_spec{std::shared_ptr<medulla::plugin_descriptor>(
-                                           const_cast<medulla::plugin_descriptor*>(d),
+    araya::component_spec spec(araya::plugin_descriptor const* d,
+                                 araya::plugin_config cfg = {}) {
+        return araya::component_spec{std::shared_ptr<araya::plugin_descriptor>(
+                                           const_cast<araya::plugin_descriptor*>(d),
                                            [](auto*) {}),
                                        std::move(cfg), nullptr, ""};
     }
@@ -167,12 +167,12 @@ struct harness {
 
 TEST_CASE("a plugin mounts a child that reads through the parent's view") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.spec(&g_provider_desc, {{"value", "p1"}}));
         auto parent = co_await rt.mount(h.spec(&g_parent_desc, {{"tag", "a"}}));
         co_await rt.wait_idle();
 
-        CHECK(rt.state_of(parent.id()) == medulla::fiber_state::active);
+        CHECK(rt.state_of(parent.id()) == araya::fiber_state::active);
         REQUIRE(rt.fiber_count() == 3);
         REQUIRE(g_child_handles.size() == 1);
     });
@@ -184,7 +184,7 @@ TEST_CASE("a plugin mounts a child that reads through the parent's view") {
 
 TEST_CASE("retiring a parent cascades to its children") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.spec(&g_provider_desc, {{"value", "p1"}}));
         auto parent = co_await rt.mount(h.spec(&g_parent_desc, {{"tag", "a"}}));
         co_await rt.wait_idle();
@@ -206,7 +206,7 @@ TEST_CASE("retiring a parent cascades to its children") {
 
 TEST_CASE("provider retirement cascades through parents to children") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         auto p = co_await rt.mount(h.spec(&g_provider_desc, {{"value", "p1"}}));
         co_await rt.mount(h.spec(&g_parent_desc, {{"tag", "a"}}));
         co_await rt.wait_idle();
@@ -235,7 +235,7 @@ TEST_CASE("provider retirement cascades through parents to children") {
 
 TEST_CASE("a reactivated parent mounts a fresh child") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         auto p1 = co_await rt.mount(h.spec(&g_provider_desc, {{"value", "p1"}}));
         auto parent = co_await rt.mount(h.spec(&g_parent_desc, {{"tag", "a"}}));
         co_await rt.wait_idle();
@@ -243,12 +243,12 @@ TEST_CASE("a reactivated parent mounts a fresh child") {
 
         co_await rt.retire(p1);
         co_await rt.wait_idle();
-        CHECK(rt.state_of(parent.id()) == medulla::fiber_state::inactive);
+        CHECK(rt.state_of(parent.id()) == araya::fiber_state::inactive);
         CHECK(rt.fiber_count() == 1);
 
         co_await rt.mount(h.spec(&g_provider_desc, {{"value", "p2"}}));
         co_await rt.wait_idle();
-        CHECK(rt.state_of(parent.id()) == medulla::fiber_state::active);
+        CHECK(rt.state_of(parent.id()) == araya::fiber_state::active);
         REQUIRE(rt.fiber_count() == 3);
         REQUIRE(g_child_handles.size() == 2);
         CHECK(std::find(g_log.begin(), g_log.end(), "child-active:a:p2") !=
@@ -258,25 +258,25 @@ TEST_CASE("a reactivated parent mounts a fresh child") {
 
 TEST_CASE("a child failure stays on the child and leaves the parent active") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
-        g_child_desc = const_cast<medulla::plugin_descriptor*>(
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        g_child_desc = const_cast<araya::plugin_descriptor*>(
             &g_broken_child_desc);
         co_await rt.mount(h.spec(&g_provider_desc, {{"value", "p1"}}));
         auto parent = co_await rt.mount(h.spec(&g_parent_desc, {{"tag", "a"}}));
         co_await rt.wait_idle();
 
-        CHECK(rt.state_of(parent.id()) == medulla::fiber_state::active);
+        CHECK(rt.state_of(parent.id()) == araya::fiber_state::active);
         REQUIRE(rt.fiber_count() == 3);
         REQUIRE(g_child_handles.size() == 1);
         CHECK(rt.state_of(g_child_handles[0].id()) ==
-              medulla::fiber_state::inactive);
+              araya::fiber_state::inactive);
         CHECK(rt.error_of(g_child_handles[0].id()) != nullptr);
     });
 }
 
 TEST_CASE("host retirement of a child makes the parent's inverse a no-op") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         co_await rt.mount(h.spec(&g_provider_desc, {{"value", "p1"}}));
         auto parent = co_await rt.mount(h.spec(&g_parent_desc, {{"tag", "a"}}));
         co_await rt.wait_idle();

@@ -1,7 +1,7 @@
-#include "medulla/module_loader.hpp"
+#include "araya/module_loader.hpp"
 
-#include "medulla/abi.hpp"
-#include "medulla/abi_host.hpp"
+#include "araya/abi.hpp"
+#include "araya/abi_host.hpp"
 
 #include <dlfcn.h>
 
@@ -11,7 +11,7 @@
 #include <string>
 #include <utility>
 
-namespace medulla {
+namespace araya {
 
 struct module_loader::module_impl {
     explicit module_impl(void* h) : handle(h) {}
@@ -46,11 +46,11 @@ std::shared_ptr<plugin_descriptor> module_loader::load(
 
     auto module = std::make_shared<module_impl>(handle);
 
-    auto entry = reinterpret_cast<medulla_plugin_entry_fn>(
-        dlsym(handle, "medulla_plugin_entry_v1"));
+    auto entry = reinterpret_cast<araya_plugin_entry_fn>(
+        dlsym(handle, "araya_plugin_entry_v1"));
     if (!entry)
         throw std::runtime_error("module '" + path +
-                                 "' does not export medulla_plugin_entry_v1");
+                                 "' does not export araya_plugin_entry_v1");
 
     try {
         auto descriptor = abi::wrap(entry, module);
@@ -78,4 +78,4 @@ std::size_t module_loader::module_count() const noexcept {
     return count;
 }
 
-}  // namespace medulla
+}  // namespace araya

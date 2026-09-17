@@ -1,6 +1,6 @@
-#include "medulla/events.hpp"
+#include "araya/events.hpp"
 
-namespace medulla {
+namespace araya {
 
 event_bus::event_bus(boost::asio::strand<boost::asio::any_io_executor>
                          control_strand)
@@ -59,4 +59,4 @@ void event_bus::report(std::exception_ptr ep) {
         (*sink_)(ep);
 }
 
-}  // namespace medulla
+}  // namespace araya

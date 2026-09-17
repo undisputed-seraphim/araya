@@ -5,7 +5,7 @@
 #include <set>
 #include <string>
 
-namespace medulla::session {
+namespace araya::session {
 
 void repair_interrupted_turns(std::vector<session_event>& log) {
     // Requested tool calls: every assistant content block carrying a
@@ -87,4 +87,4 @@ void repair_interrupted_turns(std::vector<session_event>& log) {
     }
 }
 
-}  // namespace medulla::session
+}  // namespace araya::session

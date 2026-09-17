@@ -1,10 +1,10 @@
-#include "medulla/plugin_context.hpp"
+#include "araya/plugin_context.hpp"
 
-#include "medulla/runtime.hpp"
+#include "araya/runtime.hpp"
 
 #include <stdexcept>
 
-namespace medulla {
+namespace araya {
 
 boost::asio::awaitable<fiber_handle> plugin_context::mount(component_spec spec) {
     // Copy everything this coroutine needs into its own frame before the
@@ -34,4 +34,4 @@ boost::asio::awaitable<fiber_handle> plugin_context::mount(component_spec spec) 
     co_return h;
 }
 
-}  // namespace medulla
+}  // namespace araya

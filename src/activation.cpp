@@ -1,9 +1,9 @@
-#include "medulla/activation.hpp"
+#include "araya/activation.hpp"
 
-#include "medulla/detail/assert.hpp"
-#include "medulla/detail/fiber.hpp"
+#include "araya/detail/assert.hpp"
+#include "araya/detail/fiber.hpp"
 
-namespace medulla {
+namespace araya {
 
 activation::activation(std::shared_ptr<context> scope)
     : id(detail::next_fiber_id()),
@@ -19,13 +19,13 @@ std::stop_token activation::stop_token() const noexcept {
 }
 
 void activation::teardown() noexcept {
-    MEDULLA_ASSERT_NOTHROW(state != fiber_state::inactive);
+    ARAYA_ASSERT_NOTHROW(state != fiber_state::inactive);
     if (effects) {
         effects->run_all();
         if (!error && effects->error)
             error = effects->error;
     }
-    MEDULLA_ASSERT_NOTHROW(!effects || effects->size() == 0);
+    ARAYA_ASSERT_NOTHROW(!effects || effects->size() == 0);
 }
 
-}  // namespace medulla
+}  // namespace araya

@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Boost 1.83)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/arayaTargets.cmake")
+
+check_required_components(araya)

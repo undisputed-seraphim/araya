@@ -1,9 +1,9 @@
-#include "medulla/detail/fiber.hpp"
+#include "araya/detail/fiber.hpp"
 
 #include <mutex>
 #include <vector>
 
-namespace medulla {
+namespace araya {
 namespace detail {
 namespace {
 
@@ -78,4 +78,4 @@ std::shared_ptr<std::stop_source> fiber_registry_lookup(
 }
 
 }  // namespace detail
-}  // namespace medulla
+}  // namespace araya

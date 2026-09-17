@@ -1,11 +1,11 @@
-#include "medulla/effects.hpp"
+#include "araya/effects.hpp"
 
-#include "medulla/detail/assert.hpp"
+#include "araya/detail/assert.hpp"
 
-namespace medulla {
+namespace araya {
 
 std::size_t effect_stack::add(cleanup_action action) {
-    MEDULLA_ASSERT(static_cast<bool>(action));
+    ARAYA_ASSERT(static_cast<bool>(action));
     entries_.push_back(entry{std::move(action), false});
     return entries_.size() - 1;
 }
@@ -42,4 +42,4 @@ void registration::release() noexcept {
     stack_.reset();
 }
 
-}  // namespace medulla
+}  // namespace araya

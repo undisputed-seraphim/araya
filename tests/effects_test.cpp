@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "medulla/effects.hpp"
-#include "medulla/plugin_context.hpp"
+#include "araya/effects.hpp"
+#include "araya/plugin_context.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -9,9 +9,9 @@
 
 namespace {
 
-medulla::registration record(std::vector<std::string>& log, std::string tag,
-                             medulla::plugin_context& ctx) {
-    return ctx.effect([&log, tag]() -> medulla::cleanup_action {
+araya::registration record(std::vector<std::string>& log, std::string tag,
+                             araya::plugin_context& ctx) {
+    return ctx.effect([&log, tag]() -> araya::cleanup_action {
         log.push_back("setup:" + tag);
         return [&log, tag] { log.push_back("cleanup:" + tag); };
     });
@@ -20,9 +20,9 @@ medulla::registration record(std::vector<std::string>& log, std::string tag,
 }  // namespace
 
 TEST_CASE("cleanup runs in reverse registration order") {
-    auto root = medulla::context::root();
-    auto act = std::make_shared<medulla::activation>(root);
-    medulla::plugin_context ctx{act};
+    auto root = araya::context::root();
+    auto act = std::make_shared<araya::activation>(root);
+    araya::plugin_context ctx{act};
 
     std::vector<std::string> log;
     record(log, "1", ctx);
@@ -36,9 +36,9 @@ TEST_CASE("cleanup runs in reverse registration order") {
 }
 
 TEST_CASE("early release runs the cleanup immediately") {
-    auto root = medulla::context::root();
-    auto act = std::make_shared<medulla::activation>(root);
-    medulla::plugin_context ctx{act};
+    auto root = araya::context::root();
+    auto act = std::make_shared<araya::activation>(root);
+    araya::plugin_context ctx{act};
 
     std::vector<std::string> log;
     record(log, "1", ctx);
@@ -54,13 +54,13 @@ TEST_CASE("early release runs the cleanup immediately") {
 }
 
 TEST_CASE("throwing setup records nothing and keeps earlier effects") {
-    auto root = medulla::context::root();
-    auto act = std::make_shared<medulla::activation>(root);
-    medulla::plugin_context ctx{act};
+    auto root = araya::context::root();
+    auto act = std::make_shared<araya::activation>(root);
+    araya::plugin_context ctx{act};
 
     std::vector<std::string> log;
     record(log, "1", ctx);
-    CHECK_THROWS_AS(ctx.effect([]() -> medulla::cleanup_action {
+    CHECK_THROWS_AS(ctx.effect([]() -> araya::cleanup_action {
                         throw std::runtime_error("setup failed");
                     }),
                     std::runtime_error);
@@ -70,13 +70,13 @@ TEST_CASE("throwing setup records nothing and keeps earlier effects") {
 }
 
 TEST_CASE("throwing cleanup does not stop remaining teardown") {
-    auto root = medulla::context::root();
-    auto act = std::make_shared<medulla::activation>(root);
-    medulla::plugin_context ctx{act};
+    auto root = araya::context::root();
+    auto act = std::make_shared<araya::activation>(root);
+    araya::plugin_context ctx{act};
 
     std::vector<std::string> log;
     record(log, "1", ctx);
-    ctx.effect([&log]() -> medulla::cleanup_action {
+    ctx.effect([&log]() -> araya::cleanup_action {
         return [&log] {
             log.push_back("cleanup:bad");
             throw std::runtime_error("cleanup failed");
@@ -91,9 +91,9 @@ TEST_CASE("throwing cleanup does not stop remaining teardown") {
 }
 
 TEST_CASE("registration token survives teardown and double release") {
-    auto root = medulla::context::root();
-    auto act = std::make_shared<medulla::activation>(root);
-    medulla::plugin_context ctx{act};
+    auto root = araya::context::root();
+    auto act = std::make_shared<araya::activation>(root);
+    araya::plugin_context ctx{act};
 
     std::vector<std::string> log;
     auto reg = record(log, "1", ctx);
@@ -108,19 +108,19 @@ TEST_CASE("registration token survives teardown and double release") {
 }
 
 TEST_CASE("null cleanup from setup records nothing") {
-    auto root = medulla::context::root();
-    auto act = std::make_shared<medulla::activation>(root);
-    medulla::plugin_context ctx{act};
+    auto root = araya::context::root();
+    auto act = std::make_shared<araya::activation>(root);
+    araya::plugin_context ctx{act};
 
-    auto reg = ctx.effect([]() -> medulla::cleanup_action { return nullptr; });
+    auto reg = ctx.effect([]() -> araya::cleanup_action { return nullptr; });
     CHECK_FALSE(reg);
     CHECK(act->effects->size() == 0);
 }
 
 TEST_CASE("activation stop token observes request_stop") {
-    auto root = medulla::context::root();
-    auto act = std::make_shared<medulla::activation>(root);
-    medulla::plugin_context ctx{act};
+    auto root = araya::context::root();
+    auto act = std::make_shared<araya::activation>(root);
+    araya::plugin_context ctx{act};
 
     auto token = ctx.stop_token();
     CHECK_FALSE(token.stop_requested());

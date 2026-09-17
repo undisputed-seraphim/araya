@@ -1,4 +1,4 @@
-#include "medulla/timer/timer.hpp"
+#include "araya/timer/timer.hpp"
 
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/use_awaitable.hpp>
@@ -7,12 +7,12 @@
 #include <memory>
 #include <utility>
 
-namespace medulla::timer {
+namespace araya::timer {
 
 timer_service::timer_service(boost::asio::any_io_executor executor)
     : executor_(std::move(executor)) {}
 
-medulla::registration timer_service::timeout(
+araya::registration timer_service::timeout(
     plugin_context& caller, duration d, std::move_only_function<void()> fn) {
     auto timer = std::make_shared<boost::asio::steady_timer>(executor_);
     timer->expires_after(d);
@@ -21,12 +21,12 @@ medulla::registration timer_service::timeout(
         if (!ec)
             fn();
     });
-    return caller.effect([timer]() -> medulla::cleanup_action {
+    return caller.effect([timer]() -> araya::cleanup_action {
         return [timer] { timer->cancel(); };
     });
 }
 
-medulla::registration timer_service::interval(
+araya::registration timer_service::interval(
     plugin_context& caller, duration d, std::move_only_function<bool()> fn) {
     // The pending wait owns the state: while the timer is armed, the
     // completion handler keeps it alive; once it completes without
@@ -55,15 +55,15 @@ medulla::registration timer_service::interval(
         std::move(fn));
     state->d = d;
     state->schedule();
-    return caller.effect([timer = state->timer]() -> medulla::cleanup_action {
+    return caller.effect([timer = state->timer]() -> araya::cleanup_action {
         return [timer] { timer->cancel(); };
     });
 }
 
-medulla::task<void> timer_service::sleep(duration d) {
+araya::task<void> timer_service::sleep(duration d) {
     boost::asio::steady_timer timer{executor_};
     timer.expires_after(d);
     co_await timer.async_wait(boost::asio::use_awaitable);
 }
 
-}  // namespace medulla::timer
+}  // namespace araya::timer

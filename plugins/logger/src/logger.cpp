@@ -1,4 +1,4 @@
-#include "medulla/logger/logger.hpp"
+#include "araya/logger/logger.hpp"
 
 #include <quill/Frontend.h>
 #include <quill/LogMacros.h>
@@ -8,7 +8,7 @@
 #include <memory>
 #include <utility>
 
-namespace medulla::logger {
+namespace araya::logger {
 
 namespace {
 
@@ -92,4 +92,4 @@ void logger_service::submit(quill::Logger* backend, log_level level,
     }
 }
 
-}  // namespace medulla::logger
+}  // namespace araya::logger

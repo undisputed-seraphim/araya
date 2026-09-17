@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "medulla/plugin.hpp"
-#include "medulla/runtime.hpp"
+#include "araya/plugin.hpp"
+#include "araya/runtime.hpp"
 
 #include <boost/asio/detached.hpp>
 #include <boost/asio/io_context.hpp>
@@ -17,56 +17,56 @@ struct database {
     std::string name;
 };
 
-inline constexpr medulla::service_key<database> db_key{"example.db", 1};
+inline constexpr araya::service_key<database> db_key{"example.db", 1};
 
 static std::vector<std::string> g_log;
 
-struct provider_plugin : medulla::plugin {
+struct provider_plugin : araya::plugin {
     std::string value;
 
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         g_log.push_back("apply:" + value);
         ctx.provide(db_key, std::make_shared<database>(value));
         co_return;
     }
 };
 
-std::unique_ptr<medulla::plugin> make_provider(
-    medulla::plugin_config const& cfg) {
+std::unique_ptr<araya::plugin> make_provider(
+    araya::plugin_config const& cfg) {
     auto p = std::make_unique<provider_plugin>();
     p->value = cfg.at("value");
     return p;
 }
 
-struct consumer_plugin : medulla::plugin {
-    medulla::task<void> apply(medulla::plugin_context& ctx) override {
+struct consumer_plugin : araya::plugin {
+    araya::task<void> apply(araya::plugin_context& ctx) override {
         auto db = ctx.require<database>(db_key);
         g_log.push_back("consume:" + db->name);
         co_return;
     }
 };
 
-std::unique_ptr<medulla::plugin> make_consumer(
-    medulla::plugin_config const&) {
+std::unique_ptr<araya::plugin> make_consumer(
+    araya::plugin_config const&) {
     return std::make_unique<consumer_plugin>();
 }
 
-static constexpr std::span<medulla::dependency_spec const> g_no_deps{};
-static constexpr std::span<medulla::provision_spec const> g_no_provs{};
-static const medulla::dependency_spec g_db_dep[]{
-    {medulla::service_id{"example.db", 1}, true}};
-static const medulla::provision_spec g_db_prov[]{
-    {medulla::service_id{"example.db", 1}}};
+static constexpr std::span<araya::dependency_spec const> g_no_deps{};
+static constexpr std::span<araya::provision_spec const> g_no_provs{};
+static const araya::dependency_spec g_db_dep[]{
+    {araya::service_id{"example.db", 1}, true}};
+static const araya::provision_spec g_db_prov[]{
+    {araya::service_id{"example.db", 1}}};
 
-static const medulla::plugin_descriptor g_provider_desc{
+static const araya::plugin_descriptor g_provider_desc{
     "provider", g_no_deps, g_db_prov, &make_provider};
-static const medulla::plugin_descriptor g_consumer_desc{
+static const araya::plugin_descriptor g_consumer_desc{
     "consumer", g_db_dep, g_no_provs, &make_consumer};
 
 struct harness {
     boost::asio::io_context io;
-    std::shared_ptr<medulla::runtime> rt =
-        std::make_shared<medulla::runtime>(io.get_executor());
+    std::shared_ptr<araya::runtime> rt =
+        std::make_shared<araya::runtime>(io.get_executor());
 
     template <typename Fn>
     void run(Fn&& fn) {
@@ -74,7 +74,7 @@ struct harness {
         struct driver {
             std::decay_t<Fn> fn;
             harness* self;
-            medulla::task<void> operator()() { co_await fn(*self->rt); }
+            araya::task<void> operator()() { co_await fn(*self->rt); }
         };
         boost::asio::co_spawn(io.get_executor(),
                               driver{std::forward<Fn>(fn), this},
@@ -83,17 +83,17 @@ struct harness {
         io.restart();
     }
 
-    medulla::component_spec spec(medulla::plugin_descriptor const* d,
-                                 medulla::plugin_config cfg = {}) {
-        return medulla::component_spec{std::shared_ptr<medulla::plugin_descriptor>(
-                                           const_cast<medulla::plugin_descriptor*>(d),
+    araya::component_spec spec(araya::plugin_descriptor const* d,
+                                 araya::plugin_config cfg = {}) {
+        return araya::component_spec{std::shared_ptr<araya::plugin_descriptor>(
+                                           const_cast<araya::plugin_descriptor*>(d),
                                            [](auto*) {}),
                                        std::move(cfg), nullptr, ""};
     }
 
-    static medulla::desired_component node(
-        std::string path, medulla::component_spec s) {
-        return medulla::desired_component{std::move(path), std::move(s)};
+    static araya::desired_component node(
+        std::string path, araya::component_spec s) {
+        return araya::desired_component{std::move(path), std::move(s)};
     }
 };
 
@@ -101,9 +101,9 @@ struct harness {
 
 TEST_CASE("isolating a key hides the ancestor binding and scopes its own") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         auto root = rt.root();
-        root->bind(db_key.id, medulla::binding{std::make_shared<database>(
+        root->bind(db_key.id, araya::binding{std::make_shared<database>(
                                                    database{"root"}), 7});
 
         auto isolated = root->make_child();
@@ -117,7 +117,7 @@ TEST_CASE("isolating a key hides the ancestor binding and scopes its own") {
         CHECK(static_cast<database*>(b->value.get())->name == "root");
 
         // A binding made under the isolated realm is visible only there.
-        isolated->bind(db_key.id, medulla::binding{std::make_shared<database>(
+        isolated->bind(db_key.id, araya::binding{std::make_shared<database>(
                                                        database{"test"}), 8});
         auto* iso = isolated->lookup(db_key.id);
         REQUIRE(iso != nullptr);
@@ -133,7 +133,7 @@ TEST_CASE("isolating a key hides the ancestor binding and scopes its own") {
         // Keys sharing a realm share one binding slot.
         auto shared = root->make_child();
         shared->isolate(db_key.id, "pool");
-        shared->bind(db_key.id, medulla::binding{
+        shared->bind(db_key.id, araya::binding{
                                     std::make_shared<database>(
                                         database{"pool"}), 9});
         CHECK(shared->lookup(db_key.id) ==
@@ -144,8 +144,8 @@ TEST_CASE("isolating a key hides the ancestor binding and scopes its own") {
 
 TEST_CASE("reconcile isolates a provider and its consumer into one realm") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
-        std::vector<medulla::desired_component> desired;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        std::vector<araya::desired_component> desired;
         auto provider = h.spec(&g_provider_desc, {{"value", "p1"}});
         provider.isolate = {{"example.db", "prod"}};
         auto consumer = h.spec(&g_consumer_desc);
@@ -166,8 +166,8 @@ TEST_CASE("reconcile isolates a provider and its consumer into one realm") {
 
 TEST_CASE("a plain consumer does not see an isolated provider") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
-        std::vector<medulla::desired_component> desired;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        std::vector<araya::desired_component> desired;
         auto provider = h.spec(&g_provider_desc, {{"value", "p1"}});
         provider.isolate = {{"example.db", "prod"}};
         desired.push_back(h.node("p", std::move(provider)));
@@ -185,8 +185,8 @@ TEST_CASE("a plain consumer does not see an isolated provider") {
 TEST_CASE("realm reassignment moves the binding without reloading the "
           "provider") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
-        std::vector<medulla::desired_component> desired;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        std::vector<araya::desired_component> desired;
         auto provider = h.spec(&g_provider_desc, {{"value", "p1"}});
         provider.isolate = {{"example.db", "prod"}};
         auto consumer = h.spec(&g_consumer_desc);
@@ -218,8 +218,8 @@ TEST_CASE("realm reassignment moves the binding without reloading the "
 
 TEST_CASE("removing the isolate annotation restores plain resolution") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
-        std::vector<medulla::desired_component> desired;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        std::vector<araya::desired_component> desired;
         auto provider = h.spec(&g_provider_desc, {{"value", "p1"}});
         provider.isolate = {{"example.db", "prod"}};
         desired.push_back(h.node("p", provider));
@@ -246,11 +246,11 @@ TEST_CASE("removing the isolate annotation restores plain resolution") {
 
 TEST_CASE("moving an entry between scopes carries its own binding") {
     harness h;
-    h.run([&](medulla::runtime& rt) -> medulla::task<void> {
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
         auto group_a = rt.root()->make_child();
         auto group_b = rt.root()->make_child();
 
-        std::vector<medulla::desired_component> desired;
+        std::vector<araya::desired_component> desired;
         auto provider = h.spec(&g_provider_desc, {{"value", "p1"}});
         provider.parent = group_a;
         desired.push_back(h.node("p", provider));
