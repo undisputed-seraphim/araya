@@ -28,11 +28,13 @@ endif()
 # (tla2tools.jar), which downstream users may not want to install.
 if(ARAYA_ENABLE_PROOF)
     find_program(ARAYA_JAVA java REQUIRED)
-    set(TLA2TOOLS_JAR "$ENV{TLA2TOOLS}" CACHE FILEPATH
-        "Path to tla2tools.jar (the TLA+ model checker)")
+    unset(TLA2TOOLS_JAR CACHE)
+    if(DEFINED ENV{TLA2TOOLS} AND NOT "$ENV{TLA2TOOLS}" STREQUAL "")
+        set(TLA2TOOLS_JAR "$ENV{TLA2TOOLS}")
+    endif()
     if(NOT TLA2TOOLS_JAR)
         find_file(TLA2TOOLS_JAR tla2tools.jar
-            PATHS /usr/share/java /usr/share/tla /usr/share/tla+
+            PATHS /usr/local/share/tla+ /usr/share/java /usr/share/tla+
             NO_DEFAULT_PATH)
     endif()
     if(NOT TLA2TOOLS_JAR)
@@ -41,7 +43,8 @@ if(ARAYA_ENABLE_PROOF)
             "set TLA2TOOLS=/path/to/tla2tools.jar")
     endif()
     add_test(NAME tlc_refinement
-        COMMAND bash tla/run-tlc.sh "${TLA2TOOLS_JAR}")
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tla/run-tlc.sh
+                "${TLA2TOOLS_JAR}")
     set_tests_properties(tlc_refinement PROPERTIES
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tla
         TIMEOUT 900)

@@ -69,19 +69,50 @@ simply pins the quiescent interleaving, which is the observable one.
    (all assertions pass before teardown); this is an Araya teardown
    wrinkle at the Asio layer to investigate.
 
-## Tier 2 — TLA+ refinement checking (next)
+## Tier 2 — TLA+ refinement checking (implemented)
 
-Planned layout: `tla/PaperRules.tla` (the nine rules over interleavings,
-with the abstract component table), `tla/ArayaMachine.tla` (the concrete
-fine-grained machine), `tla/Refine.tla` (the α mapping and the
-SPECIFICATION-Impl / PROPERTY-Abs-α refinement check), `tla/MC.cfg`, and
-`tla/run-tlc.sh`. Because the engine serializes everything through one
-strand, the only true interleaving is operation order — which is exactly
-what TLC enumerates exhaustively, including the bounded state space the
-single-threaded tests cannot see.
+- `tla/PaperRules.tla`: the paper's calculus (Section 4.2, pp. 34-37) at
+  the abstract level — all nine rules (O-Insert/O-Retire/O-Remove,
+  L-Begin/L-Iter/L-Finish, L-Divert/L-Leave/L-Unload) plus the
+  Asynchrony (p. 55) and Failure (p. 56) extensions, Definition 53's
+  target view (with bottom ≠ empty view), Definition 54's guard, and
+  eq. (49) quiescence. Every rule cites its page.
+- `tla/ArayaMachine.tla`: the concrete fine-grained machine, one action
+  per rule step, each citing its `src/runtime.cpp` function. The
+  stutter-vs-observable split is the README's abstraction contract.
+- `tla/Refine.tla`: the α mapping and the refinement — every concrete
+  step is a paper rule or a stutter.
+- `tla/MC.tla`/`MC.cfg`: two slots and the five-component pool shared
+  with the C++ universe. TLC checks (a) the refinement, (b) quiescence
+  as a liveness property (Theorem 73) under weak fairness on the
+  internal actions: 4,383 distinct states, no violation.
 
 Model checking is opt-in (`ARAYA_ENABLE_PROOF`, needs Java +
-tla2tools.jar on PATH or in `TLA2TOOLS`).
+tla2tools.jar on PATH or in `TLA2TOOLS`); run via `ctest -R
+tlc_refinement` or `tla/run-tlc.sh`.
+
+### What the model check teaches (and what it ruled out)
+
+The first model drafts failed refinement, and every failure was a
+*fidelity* bug in the model, not in the paper or the engine — but each
+forced out a precise statement of why the engine is safe:
+
+1. A retired fiber can never publish: the engine's retire flips a loading
+   fiber to unloading in the same handler (the paper's L-Finish reads
+   the same way through the τ premise of target).
+2. The engine's one-directional stale check (`providers_still_active`)
+   is sufficient because its single-strand scheduling never lets an
+   apply land after the binding map changed under it; the paper's
+   two-directional target re-check (pp. 55-56) covers the unreachable
+   interleavings.
+3. The `remaining` counter is exactly Definition 54's guard: it counts
+   only *installed* consumers, and a loading consumer is not yet relied
+   — the engine keeps Theorem 70's read-through-deactivation via the
+   committed-view snapshot, and the consumer's completion-time re-check
+   is the paper's L-Divert.
+4. A diverted fiber completes through its cancelled apply, never through
+   Finish (runtime's `finish_unload` runs for active-origin unloads
+   alone).
 
 ## Tier 3 — deferred
 

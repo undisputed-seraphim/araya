@@ -1,2 +1,6 @@
 [Bb]uild*/
 .cache/
+proof/tla/MC_TTrace_*.tla
+proof/tla/MC_TTrace_*.cfg
+proof/tla/MC_TTrace_*.bin
+proof/tla/states/
