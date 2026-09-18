@@ -98,6 +98,8 @@ fiber_handle runtime::mount_locked(component_spec spec, fiber_id parent) {
 
     for (auto const& key : rec->inject_keys)
         consumers_of_[key].insert(rec->id);
+    for (auto const& key : rec->provide)
+        providers_of_[key].insert(rec->id);
 
     auto id = rec->id;
     auto* rec_ptr = rec.get();
@@ -712,6 +714,13 @@ void runtime::unindex(fiber_id id) {
         else
             ++it;
     }
+    for (auto it = providers_of_.begin(); it != providers_of_.end();) {
+        it->second.erase(id);
+        if (it->second.empty())
+            it = providers_of_.erase(it);
+        else
+            ++it;
+    }
 }
 
 void runtime::diagnose() {
@@ -781,6 +790,8 @@ void runtime::diagnose() {
     // Dependency cycles (Section 6.5): edge m -> n when n provides a key m
     // declares and n's bindings are visible from m's scope. A fiber
     // declaring a key it provides itself is the degenerate n < n.
+    // The edge scan joins each declared key against the providers_of_
+    // index (O(edges x chain depth)) instead of scanning every fiber.
     // Tarjan runs over dense positions into reused tables; the recursion
     // is a self-referencing lambda (no std::function, no allocation).
     diag_order_.clear();
@@ -798,16 +809,16 @@ void runtime::diagnose() {
         targets.clear();
     for (auto const& [mid, m] : fibers_) {
         diag_targets_.clear();
-        for (auto const& k : m->inject_keys)
-            for (auto const& [nid, n] : fibers_) {
-                bool provides_key =
-                    std::find(n->provide.begin(), n->provide.end(), k) !=
-                    n->provide.end();
-                if (provides_key &&
-                    scope_on_chain(n->spec.parent.get(),
-                                   m->spec.parent.get()))
+        for (auto const& k : m->inject_keys) {
+            auto pit = providers_of_.find(k);
+            if (pit == providers_of_.end())
+                continue;
+            for (auto nid : pit->second)
+                if (scope_on_chain(
+                        fibers_.find(nid)->second->spec.parent.get(),
+                        m->spec.parent.get()))
                     diag_targets_.push_back(nid);
-            }
+        }
         std::sort(diag_targets_.begin(), diag_targets_.end());
         diag_targets_.erase(
             std::unique(diag_targets_.begin(), diag_targets_.end()),
@@ -958,7 +969,8 @@ void runtime::validate_invariants() const {
     }
 
     // consumers_of_ index consistency: no stale ids, every declared key
-    // registered.
+    // registered. providers_of_ mirrors the same discipline for provide
+    // keys.
     for (auto const& [key, ids] : consumers_of_)
         for ([[maybe_unused]] auto cid : ids)
             ARAYA_ASSERT(fibers_.find(cid) != fibers_.end());
@@ -966,6 +978,16 @@ void runtime::validate_invariants() const {
         for (auto const& k : f->inject_keys) {
             [[maybe_unused]] auto it = consumers_of_.find(k);
             ARAYA_ASSERT(it != consumers_of_.end());
+            ARAYA_ASSERT(it->second.contains(id));
+        }
+    }
+    for (auto const& [key, ids] : providers_of_)
+        for ([[maybe_unused]] auto pid : ids)
+            ARAYA_ASSERT(fibers_.find(pid) != fibers_.end());
+    for (auto const& [id, f] : fibers_) {
+        for (auto const& k : f->provide) {
+            [[maybe_unused]] auto it = providers_of_.find(k);
+            ARAYA_ASSERT(it != providers_of_.end());
             ARAYA_ASSERT(it->second.contains(id));
         }
     }

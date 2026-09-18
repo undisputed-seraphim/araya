@@ -166,6 +166,11 @@ private:
     std::map<fiber_id, std::unique_ptr<fiber_record>> fibers_;
     std::map<owned_service_id, std::set<fiber_id>, transparent_id_less>
         consumers_of_;
+    // The provider mirror of consumers_of_: which fibers provide each
+    // key. Maintained exactly like consumers_of_ (insert at mount, erase
+    // in unindex; provide keys are immutable, so reassign needs nothing).
+    std::map<owned_service_id, std::set<fiber_id>, transparent_id_less>
+        providers_of_;
     std::map<std::string, fiber_id> reconciled_;
     std::map<std::string, std::shared_ptr<context>> entry_ctxs_;
     std::map<std::string, std::map<std::string, std::string>>

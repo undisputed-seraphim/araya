@@ -364,3 +364,49 @@ TEST_CASE("realm-tagged provider conflicts report the realm prefix") {
                              {ra.id(), rb.id()}));
     });
 }
+
+TEST_CASE("provider replacement after retirement emits a fresh conflict "
+          "signature") {
+    harness h;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        auto p1 = co_await rt.mount(
+            h.spec(&g_provider_desc, {{"value", "p1"}}));
+        auto p2 = co_await rt.mount(
+            h.spec(&g_provider_desc, {{"value", "p2"}}));
+        co_await rt.wait_idle();
+        REQUIRE(has_conflict(h.diagnostics, "example.db", 1,
+                             {p1.id(), p2.id()}));
+
+        // The replacement: p1 leaves, p3 arrives. The provider index must
+        // drop p1, or the {p2, p3} conflict would be missed or merged.
+        co_await rt.retire(p1);
+        co_await rt.wait_idle();
+        auto p3 = co_await rt.mount(
+            h.spec(&g_provider_desc, {{"value", "p3"}}));
+        co_await rt.wait_idle();
+
+        REQUIRE(has_conflict(h.diagnostics, "example.db", 1,
+                             {p2.id(), p3.id()}));
+        co_await rt.validate_invariants_async();
+    });
+}
+
+TEST_CASE("cycle re-formation after retirement emits a new signature") {
+    harness h;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        auto x1 = co_await rt.mount(h.spec(&g_x_desc));
+        auto y1 = co_await rt.mount(h.spec(&g_y_desc));
+        co_await rt.wait_idle();
+        REQUIRE(has_cycle(h.diagnostics, {x1.id(), y1.id()}));
+
+        // Tear the cycle down and rebuild it: the fresh cycle has fresh
+        // fiber ids, so its signature is new and must be emitted again.
+        co_await rt.retire(y1);
+        co_await rt.wait_idle();
+        auto y2 = co_await rt.mount(h.spec(&g_y_desc));
+        co_await rt.wait_idle();
+
+        REQUIRE(has_cycle(h.diagnostics, {x1.id(), y2.id()}));
+        co_await rt.validate_invariants_async();
+    });
+}
