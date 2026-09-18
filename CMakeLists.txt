@@ -80,6 +80,8 @@ endif()
 
 add_subdirectory(proof)
 
+include(cmake/Format.cmake)
+
 install(TARGETS araya
     EXPORT arayaTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
