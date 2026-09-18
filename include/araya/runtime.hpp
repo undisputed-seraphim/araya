@@ -172,6 +172,43 @@ private:
         entry_isolates_;
     std::move_only_function<void(diagnostic const&)> diagnostic_sink_;
     std::set<std::string> reported_diagnostics_;
+
+    // A provider slot for the single-source scan: one (scope, realm, key)
+    // group. Ordered by (scope, realm, name, version) — equivalent to the
+    // old "(realm@)name:version" string key except for pathological
+    // realm/name strings containing '@' or ':' (which the string form
+    // accidentally merged).
+    struct diag_slot_key {
+        context const* scope = nullptr;
+        owned_service_id key;
+        std::string realm;
+
+        friend bool operator<(diag_slot_key const& a,
+                              diag_slot_key const& b) noexcept {
+            if (std::less<context const*>{}(a.scope, b.scope))
+                return true;
+            if (std::less<context const*>{}(b.scope, a.scope))
+                return false;
+            if (auto c = a.realm.compare(b.realm); c != 0)
+                return c < 0;
+            if (auto c = a.key.name.compare(b.key.name); c != 0)
+                return c < 0;
+            return a.key.version < b.key.version;
+        }
+    };
+
+    // diagnose() scratch space, reused across calls (clear()/assign()
+    // only, so a rescan allocates nothing after the first call).
+    std::vector<std::pair<diag_slot_key, fiber_id>> diag_slots_;
+    std::vector<fiber_id> diag_order_;
+    std::vector<std::vector<fiber_id>> diag_adj_;
+    std::vector<fiber_id> diag_targets_;
+    std::vector<int> diag_index_;
+    std::vector<int> diag_low_;
+    std::vector<int> diag_stack_;
+    std::vector<unsigned char> diag_on_stack_;
+    std::vector<fiber_id> diag_scc_;
+
     std::size_t in_flight_ = 0;
     std::shared_ptr<detail::gate_impl> idle_ = detail::make_gate(true);
 };

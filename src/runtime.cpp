@@ -738,32 +738,66 @@ void runtime::diagnose() {
     // Single-source discipline (Section 4.2.1): two fibers providing one key
     // in one scope and one realm conflict; the bindings share a context map
     // slot, so the last provider shadows the first. Diagnosed, not enforced.
-    std::map<std::pair<context const*, std::string>,
-             std::vector<fiber_id>>
-        providers;
+    //
+    // The scan gathers (slot, provider) pairs into reused storage and
+    // sorts in place: no per-entry map nodes or key strings are built
+    // (realm_for's "" fast path stays in SSO). Emission only allocates
+    // when a signature is actually reported, which is rare.
+    diag_slots_.clear();
     for (auto const& [id, f] : fibers_)
-        for (auto const& k : f->provide) {
-            auto realm = f->spec.parent->realm_for(k);
-            providers[{f->spec.parent.get(),
-                       (realm.empty() ? "" : realm + "@") + k.name + ":" +
-                           std::to_string(k.version)}]
-                .push_back(id);
+        for (auto const& k : f->provide)
+            diag_slots_.emplace_back(
+                diag_slot_key{f->spec.parent.get(), k,
+                              f->spec.parent->realm_for(k)},
+                id);
+    std::sort(diag_slots_.begin(), diag_slots_.end(),
+              [](auto const& a, auto const& b) {
+                  return a.first < b.first;
+              });
+    for (std::size_t i = 0; i < diag_slots_.size();) {
+        std::size_t j = i + 1;
+        while (j < diag_slots_.size() &&
+               !(diag_slots_[i].first < diag_slots_[j].first) &&
+               !(diag_slots_[j].first < diag_slots_[i].first))
+            ++j;
+        if (j - i >= 2) {
+            std::vector<fiber_id> ids;
+            ids.reserve(j - i);
+            for (std::size_t q = i; q < j; ++q)
+                ids.push_back(diag_slots_[q].second);
+            // The reported key name carries the realm prefix, exactly as
+            // the old string key did.
+            auto const& slot = diag_slots_[i].first;
+            std::string key_name =
+                slot.realm.empty()
+                    ? std::string(slot.key.name)
+                    : slot.realm + "@" + slot.key.name;
+            emit(diagnostic_kind::conflict, std::move(key_name),
+                 slot.key.version, std::move(ids));
         }
-    for (auto const& [scope_key, ids] : providers) {
-        if (ids.size() < 2)
-            continue;
-        auto colon = scope_key.second.rfind(':');
-        emit(diagnostic_kind::conflict,
-             scope_key.second.substr(0, colon),
-             std::stoul(scope_key.second.substr(colon + 1)), ids);
+        i = j;
     }
 
     // Dependency cycles (Section 6.5): edge m -> n when n provides a key m
     // declares and n's bindings are visible from m's scope. A fiber
     // declaring a key it provides itself is the degenerate n < n.
-    std::map<fiber_id, std::vector<fiber_id>> adj;
+    // Tarjan runs over dense positions into reused tables; the recursion
+    // is a self-referencing lambda (no std::function, no allocation).
+    diag_order_.clear();
+    for (auto const& [id, f] : fibers_)
+        diag_order_.push_back(id);
+    auto pos = [&](fiber_id id) {
+        return static_cast<int>(
+            std::lower_bound(diag_order_.begin(), diag_order_.end(), id) -
+            diag_order_.begin());
+    };
+
+    if (diag_adj_.size() < diag_order_.size())
+        diag_adj_.resize(diag_order_.size());
+    for (auto& targets : diag_adj_)
+        targets.clear();
     for (auto const& [mid, m] : fibers_) {
-        std::set<fiber_id> targets;
+        diag_targets_.clear();
         for (auto const& k : m->inject_keys)
             for (auto const& [nid, n] : fibers_) {
                 bool provides_key =
@@ -772,54 +806,58 @@ void runtime::diagnose() {
                 if (provides_key &&
                     scope_on_chain(n->spec.parent.get(),
                                    m->spec.parent.get()))
-                    targets.insert(nid);
+                    diag_targets_.push_back(nid);
             }
-        adj[mid].assign(targets.begin(), targets.end());
+        std::sort(diag_targets_.begin(), diag_targets_.end());
+        diag_targets_.erase(
+            std::unique(diag_targets_.begin(), diag_targets_.end()),
+            diag_targets_.end());
+        diag_adj_[pos(mid)] = diag_targets_;
     }
 
-    std::map<fiber_id, int> index;
-    std::map<fiber_id, int> low;
-    std::vector<fiber_id> stack;
-    std::set<fiber_id> on_stack;
-    std::vector<std::vector<fiber_id>> cycles;
+    diag_index_.assign(diag_order_.size(), -1);
+    diag_low_.assign(diag_order_.size(), 0);
+    diag_on_stack_.assign(diag_order_.size(), 0);
+    diag_stack_.clear();
     int next = 0;
 
-    std::function<void(fiber_id)> strongconnect =
-        [&](fiber_id v) {
-            index[v] = next;
-            low[v] = next;
-            ++next;
-            stack.push_back(v);
-            on_stack.insert(v);
-            for (auto w : adj[v]) {
-                if (!index.contains(w)) {
-                    strongconnect(w);
-                    low[v] = std::min(low[v], low[w]);
-                } else if (on_stack.contains(w)) {
-                    low[v] = std::min(low[v], index[w]);
-                }
+    auto strongconnect = [&](auto& self, int p) -> void {
+        diag_index_[p] = next;
+        diag_low_[p] = next;
+        ++next;
+        diag_stack_.push_back(p);
+        diag_on_stack_[p] = 1;
+        for (auto w : diag_adj_[p]) {
+            int wp = pos(w);
+            if (diag_index_[wp] == -1) {
+                self(self, wp);
+                diag_low_[p] = std::min(diag_low_[p], diag_low_[wp]);
+            } else if (diag_on_stack_[wp]) {
+                diag_low_[p] = std::min(diag_low_[p], diag_index_[wp]);
             }
-            if (low[v] != index[v])
-                return;
-            std::vector<fiber_id> scc;
-            while (true) {
-                auto w = stack.back();
-                stack.pop_back();
-                on_stack.erase(w);
-                scc.push_back(w);
-                if (w == v)
-                    break;
-            }
-            if (scc.size() > 1)
-                cycles.push_back(std::move(scc));
-        };
+        }
+        if (diag_low_[p] != diag_index_[p])
+            return;
+        // Pop the SCC into the reused buffer and emit inline: emission
+        // order is SCC discovery order, exactly as the collected form.
+        // emit() copies the buffer (and only when a real cycle is found),
+        // so the rescan path allocates nothing.
+        diag_scc_.clear();
+        while (true) {
+            int q = diag_stack_.back();
+            diag_stack_.pop_back();
+            diag_on_stack_[q] = 0;
+            diag_scc_.push_back(diag_order_[q]);
+            if (q == p)
+                break;
+        }
+        if (diag_scc_.size() > 1)
+            emit(diagnostic_kind::cycle, "", 0, diag_scc_);
+    };
 
-    for (auto const& [id, f] : fibers_)
-        if (!index.contains(id))
-            strongconnect(id);
-
-    for (auto& scc : cycles)
-        emit(diagnostic_kind::cycle, "", 0, std::move(scc));
+    for (std::size_t i = 0; i < diag_order_.size(); ++i)
+        if (diag_index_[i] == -1)
+            strongconnect(strongconnect, static_cast<int>(i));
 
     // Self-provision: a component declaring a key it provides itself.
     for (auto const& [id, f] : fibers_) {

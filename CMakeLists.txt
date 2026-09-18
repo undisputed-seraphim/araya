@@ -58,6 +58,11 @@ endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(araya PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    # GCC 14 false positive: awaitable frames are allocated through
+    # Boost.Asio's aligned_new (aligned_alloc) and released through the
+    # matching awaitable_frame_base::operator delete, which the
+    # mismatch detector cannot see across the inlining boundary at -O2.
+    target_compile_options(araya PRIVATE -Wno-mismatched-new-delete)
 endif()
 
 if(Catch2_FOUND)

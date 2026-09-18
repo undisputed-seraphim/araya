@@ -280,3 +280,87 @@ TEST_CASE("healthy graphs produce no diagnostics") {
         CHECK(h.diagnostics.empty());
     });
 }
+
+TEST_CASE("emissions arrive in deterministic order and rescans add nothing") {
+    harness h;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        auto p1 = co_await rt.mount(
+            h.spec(&g_provider_desc, {{"value", "p1"}}));
+        auto x = co_await rt.mount(h.spec(&g_x_desc));
+        co_await rt.wait_idle();
+        CHECK(h.diagnostics.empty());
+
+        // The mutual cycle appears exactly when the second half mounts,
+        // before any conflict: cycles are reported after the conflict
+        // scan but this graph has no conflict yet.
+        auto y = co_await rt.mount(h.spec(&g_y_desc));
+        co_await rt.wait_idle();
+        REQUIRE(h.diagnostics.size() == 1);
+        REQUIRE(h.diagnostics[0].kind == araya::diagnostic_kind::cycle);
+        REQUIRE(has_cycle(h.diagnostics, {x.id(), y.id()}));
+
+        // The conflict is the second emission.
+        auto p2 = co_await rt.mount(
+            h.spec(&g_provider_desc, {{"value", "p2"}}));
+        co_await rt.wait_idle();
+        REQUIRE(h.diagnostics.size() == 2);
+        REQUIRE(h.diagnostics[1].kind == araya::diagnostic_kind::conflict);
+        REQUIRE(has_conflict(h.diagnostics, "example.db", 1,
+                             {p1.id(), p2.id()}));
+
+        // A further healthy mount rescans the same graph: the reported
+        // set is deduplicated, so nothing new may arrive.
+        co_await rt.mount(h.spec(&g_consumer_desc));
+        co_await rt.wait_idle();
+        REQUIRE(h.diagnostics.size() == 2);
+    });
+}
+
+TEST_CASE("scratch reuse does not leak across scans") {
+    harness h;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        // First shape: a provider conflict, then both providers retire.
+        auto p1 = co_await rt.mount(
+            h.spec(&g_provider_desc, {{"value", "p1"}}));
+        auto p2 = co_await rt.mount(
+            h.spec(&g_provider_desc, {{"value", "p2"}}));
+        co_await rt.wait_idle();
+        REQUIRE(h.diagnostics.size() == 1);
+        co_await rt.retire(p2);
+        co_await rt.retire(p1);
+        co_await rt.wait_idle();
+
+        // Second shape: a mutual cycle in the same runtime. Stale scratch
+        // from the conflict scan would surface here as a bogus emission.
+        auto x = co_await rt.mount(h.spec(&g_x_desc));
+        auto y = co_await rt.mount(h.spec(&g_y_desc));
+        co_await rt.wait_idle();
+        REQUIRE(h.diagnostics.size() == 2);
+        REQUIRE(has_cycle(h.diagnostics, {x.id(), y.id()}));
+
+        // Third shape: the degenerate self-provision signature.
+        auto s = co_await rt.mount(h.spec(&g_self_optional_desc));
+        co_await rt.wait_idle();
+        REQUIRE(h.diagnostics.size() == 3);
+        REQUIRE(has_cycle(h.diagnostics, {s.id()}));
+        REQUIRE(rt.state_of(s.id()) == araya::fiber_state::active);
+    });
+}
+
+TEST_CASE("realm-tagged provider conflicts report the realm prefix") {
+    harness h;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        auto isolated = rt.root()->make_child();
+        isolated->isolate(db_key.id, "r");
+        auto a = h.spec(&g_provider_desc, {{"value", "p1"}});
+        a.parent = isolated;
+        auto b = h.spec(&g_provider_desc, {{"value", "p2"}});
+        b.parent = isolated;
+        auto ra = co_await rt.mount(std::move(a));
+        auto rb = co_await rt.mount(std::move(b));
+        co_await rt.wait_idle();
+
+        REQUIRE(has_conflict(h.diagnostics, "r@example.db", 1,
+                             {ra.id(), rb.id()}));
+    });
+}
