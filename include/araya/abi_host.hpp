@@ -15,8 +15,6 @@ araya_host_api_v1 const& host_api() noexcept;
 // into a araya plugin_descriptor. The optional keep_alive object is
 // retained by the returned descriptor's factory, so a module_loader can tie
 // descriptor lifetime to dlopen/delayed dlclose.
-std::shared_ptr<plugin_descriptor> wrap(
-    araya_plugin_entry_fn entry,
-    std::shared_ptr<void> keep_alive = nullptr);
+std::shared_ptr<plugin_descriptor> wrap(araya_plugin_entry_fn entry, std::shared_ptr<void> keep_alive = nullptr);
 
-}  // namespace araya::abi
+} // namespace araya::abi

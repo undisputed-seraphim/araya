@@ -20,24 +20,22 @@ namespace araya::timer {
 // constructed with); sleep is a plain awaitable delay.
 class timer_service {
 public:
-    using duration = std::chrono::steady_clock::duration;
+	using duration = std::chrono::steady_clock::duration;
 
-    explicit timer_service(boost::asio::any_io_executor executor);
+	explicit timer_service(boost::asio::any_io_executor executor);
 
-    // Runs fn once after d, unless the owning fiber unloads first.
-    araya::registration timeout(plugin_context& caller, duration d,
-                                  std::move_only_function<void()> fn);
+	// Runs fn once after d, unless the owning fiber unloads first.
+	araya::registration timeout(plugin_context& caller, duration d, std::move_only_function<void()> fn);
 
-    // Runs fn every d; returning false (or the owning fiber unloading)
-    // stops the interval.
-    araya::registration interval(plugin_context& caller, duration d,
-                                   std::move_only_function<bool()> fn);
+	// Runs fn every d; returning false (or the owning fiber unloading)
+	// stops the interval.
+	araya::registration interval(plugin_context& caller, duration d, std::move_only_function<bool()> fn);
 
-    // Awaits a plain delay.
-    araya::task<void> sleep(duration d);
+	// Awaits a plain delay.
+	araya::task<void> sleep(duration d);
 
 private:
-    boost::asio::any_io_executor executor_;
+	boost::asio::any_io_executor executor_;
 };
 
 inline constexpr araya::service_key<timer_service> timer_key{"timer", 1};
@@ -46,4 +44,4 @@ inline constexpr araya::service_key<timer_service> timer_key{"timer", 1};
 // activation's bus executor and provides it under timer_key.
 araya::plugin_descriptor const& plugin_descriptor();
 
-}  // namespace araya::timer
+} // namespace araya::timer

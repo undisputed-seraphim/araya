@@ -18,15 +18,15 @@ class plugin_context;
 // starts; the runtime rejects undeclared access at runtime and the
 // metadata here is the component-declared half of Definition 26's merge.
 struct dependency_spec {
-    service_id key;
-    bool required = true;
-    // Component-declared interception metadata (Definition 26); merged at
-    // access with the context-carried metadata, which takes priority.
-    service_metadata metadata;
+	service_id key;
+	bool required = true;
+	// Component-declared interception metadata (Definition 26); merged at
+	// access with the context-carried metadata, which takes priority.
+	service_metadata metadata;
 };
 
 struct provision_spec {
-    service_id key;
+	service_id key;
 };
 
 using plugin_config = std::map<std::string, std::string>;
@@ -42,11 +42,11 @@ using plugin_config = std::map<std::string, std::string>;
 // deactivate/reactivate) with the new config.
 class plugin {
 public:
-    virtual ~plugin() = default;
+	virtual ~plugin() = default;
 
-    virtual boost::asio::awaitable<void> apply(plugin_context&) = 0;
+	virtual boost::asio::awaitable<void> apply(plugin_context&) = 0;
 
-    virtual bool reconfigure(plugin_config const&) { return false; }
+	virtual bool reconfigure(plugin_config const&) { return false; }
 };
 
 // The static description of a component type.
@@ -56,10 +56,10 @@ public:
 // created from the descriptor (static storage in practice). create()
 // produces one plugin instance per fiber.
 struct plugin_descriptor {
-    std::string_view name;
-    std::span<dependency_spec const> inject;
-    std::span<provision_spec const> provide;
-    std::function<std::unique_ptr<plugin>(plugin_config const&)> create;
+	std::string_view name;
+	std::span<dependency_spec const> inject;
+	std::span<provision_spec const> provide;
+	std::function<std::unique_ptr<plugin>(plugin_config const&)> create;
 };
 
 class context;
@@ -68,13 +68,13 @@ class context;
 // which scope, under which name. The reconcile() diff keys on path, so
 // path must be stable across the host's desired-tree updates.
 struct component_spec {
-    std::shared_ptr<plugin_descriptor> descriptor;
-    plugin_config config;
-    std::shared_ptr<context> parent;
-    std::string name;
-    // Per-key isolation realms (Section 5.2.1): each entry maps a service
-    // key name to a realm tag. Entries sharing a tag share the binding.
-    std::map<std::string, std::string> isolate;
+	std::shared_ptr<plugin_descriptor> descriptor;
+	plugin_config config;
+	std::shared_ptr<context> parent;
+	std::string name;
+	// Per-key isolation realms (Section 5.2.1): each entry maps a service
+	// key name to a realm tag. Entries sharing a tag share the binding.
+	std::map<std::string, std::string> isolate;
 };
 
-}  // namespace araya
+} // namespace araya

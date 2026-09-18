@@ -14,14 +14,12 @@ namespace araya::session {
 // of derived state, rebuilt incrementally as events are appended.
 class session_surface {
 public:
-    std::vector<session_message> const& messages() const noexcept {
-        return messages_;
-    }
+	std::vector<session_message> const& messages() const noexcept { return messages_; }
 
-    void push(session_message msg) { messages_.push_back(std::move(msg)); }
+	void push(session_message msg) { messages_.push_back(std::move(msg)); }
 
 private:
-    std::vector<session_message> messages_;
+	std::vector<session_message> messages_;
 };
 
 // A plugin-owned interpreter for one event type. Registering a projection
@@ -30,14 +28,12 @@ private:
 // a tracked effect on the registering fiber, so projections vanish when
 // their owning plugin unloads.
 struct message_projection {
-    std::string event_type;
-    std::function<std::optional<session_message>(session_event const&)> fold;
+	std::string event_type;
+	std::function<std::optional<session_message>(session_event const&)> fold;
 };
 
 // Folds one event into an optional surface message: registered projections
 // win over the built-in fold; non-surface vocabulary yields nullopt.
-std::optional<session_message> fold_event(
-    session_event const& ev,
-    std::vector<message_projection> const& projections);
+std::optional<session_message> fold_event(session_event const& ev, std::vector<message_projection> const& projections);
 
-}  // namespace araya::session
+} // namespace araya::session

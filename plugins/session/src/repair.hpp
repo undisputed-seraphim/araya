@@ -12,4 +12,4 @@ namespace araya::session {
 // the closers are part of construction input and never publish.
 void repair_interrupted_turns(std::vector<session_event>& log);
 
-}  // namespace araya::session
+} // namespace araya::session

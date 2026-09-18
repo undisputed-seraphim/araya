@@ -41,8 +41,8 @@ namespace araya {
 
 template <auto... Ks>
 struct capabilities {
-    template <auto K>
-    static constexpr bool contains = ((K->id == Ks->id) || ...);
+	template <auto K>
+	static constexpr bool contains = ((K->id == Ks->id) || ...);
 };
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ struct capabilities {
 
 template <class F>
 concept reversible_effect = std::invocable<F> && requires(F&& f) {
-    { std::forward<F>(f)() } -> std::convertible_to<cleanup_action>;
+	{ std::forward<F>(f)() } -> std::convertible_to<cleanup_action>;
 };
 
 // A provider marks a service type commutative by specializing this trait.
@@ -77,31 +77,27 @@ struct live_tag {};
 template <class T, class Tag>
 class tagged_lease {
 public:
-    tagged_lease() = default;
+	tagged_lease() = default;
 
-    tagged_lease(service_lease<T> lease)
-        : lease_(std::move(lease)) {}
+	tagged_lease(service_lease<T> lease)
+		: lease_(std::move(lease)) {}
 
-    T* get() const noexcept { return lease_.get(); }
-    T* operator->() const noexcept { return lease_.get(); }
-    T& operator*() const noexcept { return *lease_; }
+	T* get() const noexcept { return lease_.get(); }
+	T* operator->() const noexcept { return lease_.get(); }
+	T& operator*() const noexcept { return *lease_; }
 
-    explicit operator bool() const noexcept { return !!lease_; }
+	explicit operator bool() const noexcept { return !!lease_; }
 
-    std::shared_ptr<T> const& shared() const noexcept {
-        return lease_.shared();
-    }
+	std::shared_ptr<T> const& shared() const noexcept { return lease_.shared(); }
 
-    std::uint64_t provider() const noexcept { return lease_.provider(); }
+	std::uint64_t provider() const noexcept { return lease_.provider(); }
 
-    service_metadata const& metadata() const noexcept {
-        return lease_.metadata();
-    }
+	service_metadata const& metadata() const noexcept { return lease_.metadata(); }
 
-    service_lease<T> const& untagged() const noexcept { return lease_; }
+	service_lease<T> const& untagged() const noexcept { return lease_; }
 
 private:
-    service_lease<T> lease_;
+	service_lease<T> lease_;
 };
 
 // ---------------------------------------------------------------------------
@@ -114,75 +110,61 @@ private:
 template <typename Caps>
 class typed_context {
 public:
-    explicit typed_context(plugin_context& ctx) : ctx_(&ctx) {}
+	explicit typed_context(plugin_context& ctx)
+		: ctx_(&ctx) {}
 
-    plugin_context& erased() noexcept { return *ctx_; }
+	plugin_context& erased() noexcept { return *ctx_; }
 
-    template <auto K>
-        requires Caps::template contains<K>
-    auto require() {
-        auto const& key = *K;
-        auto b = ctx_->find_binding(key.id);
-        if (!b)
-            throw resolution_error(key.id);
-        using value_type = typename std::remove_pointer_t<decltype(K)>::
-            value_type;
-        return tagged_lease<value_type, committed_tag>(
-            service_lease<value_type>(
-                std::static_pointer_cast<value_type>(b->value),
-                b->provider, ctx_->merged_metadata(key.id)));
-    }
+	template <auto K>
+		requires Caps::template
+	contains<K> auto require() {
+		auto const& key = *K;
+		auto b = ctx_->find_binding(key.id);
+		if (!b)
+			throw resolution_error(key.id);
+		using value_type = typename std::remove_pointer_t<decltype(K)>::value_type;
+		return tagged_lease<value_type, committed_tag>(service_lease<value_type>(
+			std::static_pointer_cast<value_type>(b->value), b->provider, ctx_->merged_metadata(key.id)));
+	}
 
-    template <auto K>
-        requires Caps::template contains<K>
-    auto find() {
-        auto const& key = *K;
-        auto b = ctx_->find_binding(key.id);
-        if (!b)
-            return std::optional<tagged_lease<
-                typename std::remove_pointer_t<decltype(K)>::value_type,
-                committed_tag>>{std::nullopt};
-        using value_type = typename std::remove_pointer_t<decltype(K)>::
-            value_type;
-        return std::optional<tagged_lease<value_type, committed_tag>>(
-            service_lease<value_type>(
-                std::static_pointer_cast<value_type>(b->value),
-                b->provider, ctx_->merged_metadata(key.id)));
-    }
+	template <auto K>
+		requires Caps::template
+	contains<K> auto find() {
+		auto const& key = *K;
+		auto b = ctx_->find_binding(key.id);
+		if (!b)
+			return std::optional<tagged_lease<typename std::remove_pointer_t<decltype(K)>::value_type, committed_tag>>{
+				std::nullopt};
+		using value_type = typename std::remove_pointer_t<decltype(K)>::value_type;
+		return std::optional<tagged_lease<value_type, committed_tag>>(service_lease<value_type>(
+			std::static_pointer_cast<value_type>(b->value), b->provider, ctx_->merged_metadata(key.id)));
+	}
 
-    template <auto K>
-        requires Caps::template contains<K> &&
-                 commutative_key<
-                     typename std::remove_pointer_t<decltype(K)>::value_type>
-    registration provide(
-        std::shared_ptr<
-            typename std::remove_pointer_t<decltype(K)>::value_type>
-            service) {
-        return ctx_->provide(*K, std::move(service));
-    }
+	template <auto K>
+		requires Caps::template
+	contains<K>&& commutative_key<typename std::remove_pointer_t<decltype(K)>::value_type>
+		registration provide(std::shared_ptr<typename std::remove_pointer_t<decltype(K)>::value_type> service) {
+		return ctx_->provide(*K, std::move(service));
+	}
 
-    template <reversible_effect Setup>
-    registration effect(Setup&& setup) {
-        return ctx_->effect(std::forward<Setup>(setup));
-    }
+	template <reversible_effect Setup>
+	registration effect(Setup&& setup) {
+		return ctx_->effect(std::forward<Setup>(setup));
+	}
 
-    template <class Message, dispatch_mode Mode, class Fn>
-    registration on(event_key<Message, Mode> const& key, Fn&& fn) {
-        return ctx_->on(key, std::forward<Fn>(fn));
-    }
+	template <class Message, dispatch_mode Mode, class Fn>
+	registration on(event_key<Message, Mode> const& key, Fn&& fn) {
+		return ctx_->on(key, std::forward<Fn>(fn));
+	}
 
-    // Child instantiation needs no declaration: the paper's instantiating
-    // iteration is the one registry effect every context may take.
-    boost::asio::awaitable<fiber_handle> mount(component_spec spec) {
-        return ctx_->mount(std::move(spec));
-    }
+	// Child instantiation needs no declaration: the paper's instantiating
+	// iteration is the one registry effect every context may take.
+	boost::asio::awaitable<fiber_handle> mount(component_spec spec) { return ctx_->mount(std::move(spec)); }
 
-    std::stop_token stop_token() const noexcept {
-        return ctx_->stop_token();
-    }
+	std::stop_token stop_token() const noexcept { return ctx_->stop_token(); }
 
 private:
-    plugin_context* ctx_;
+	plugin_context* ctx_;
 };
 
 // ---------------------------------------------------------------------------
@@ -195,33 +177,40 @@ private:
 template <fiber_state S>
 class typed_handle {
 public:
-    static typed_handle<fiber_state::active> claim(fiber_handle h) {
-        return typed_handle<fiber_state::active>(std::move(h));
-    }
+	static typed_handle<fiber_state::active> claim(fiber_handle h) {
+		return typed_handle<fiber_state::active>(std::move(h));
+	}
 
-    fiber_id id() const noexcept { return h_.id(); }
+	fiber_id id() const noexcept { return h_.id(); }
 
-    fiber_state state() const noexcept { return S; }
+	fiber_state state() const noexcept { return S; }
 
-    void cancel() requires(S == fiber_state::active) { h_.cancel(); }
+	void cancel()
+		requires(S == fiber_state::active)
+	{
+		h_.cancel();
+	}
 
-    // Consuming transition: retiring an active handle moves it to the
-    // inactive state.
-    boost::asio::awaitable<typed_handle<fiber_state::inactive>>
-    retire(runtime& rt) && requires(S == fiber_state::active) {
-        co_await rt.retire(h_);
-        co_return typed_handle<fiber_state::inactive>(std::move(h_));
-    }
+	// Consuming transition: retiring an active handle moves it to the
+	// inactive state.
+	boost::asio::awaitable<typed_handle<fiber_state::inactive>> retire(runtime& rt) &&
+		requires(S == fiber_state::active) {
+			co_await rt.retire(h_);
+			co_return typed_handle<fiber_state::inactive>(std::move(h_));
+		}
 
-    fiber_handle const& erased() const noexcept { return h_; }
+		fiber_handle const& erased() const noexcept {
+		return h_;
+	}
 
 private:
-    template <fiber_state>
-    friend class typed_handle;
+	template <fiber_state>
+	friend class typed_handle;
 
-    explicit typed_handle(fiber_handle h) : h_(std::move(h)) {}
+	explicit typed_handle(fiber_handle h)
+		: h_(std::move(h)) {}
 
-    fiber_handle h_;
+	fiber_handle h_;
 };
 
-}  // namespace araya
+} // namespace araya

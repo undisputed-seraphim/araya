@@ -16,18 +16,17 @@
 
 #ifdef ARAYA_ENFORCE_INVARIANTS
 
-#define ARAYA_ASSERT(cond)                                              \
-    do {                                                                  \
-        if (!(cond))                                                      \
-            throw ::std::logic_error(                                     \
-                std::string("araya invariant violated: ") + #cond);     \
-    } while (false)
+#define ARAYA_ASSERT(cond)                                                                                             \
+	do {                                                                                                               \
+		if (!(cond))                                                                                                   \
+			throw ::std::logic_error(std::string("araya invariant violated: ") + #cond);                               \
+	} while (false)
 
-#define ARAYA_ASSERT_NOTHROW(cond)         \
-    do {                                     \
-        if (!(cond))                         \
-            ::std::abort();                  \
-    } while (false)
+#define ARAYA_ASSERT_NOTHROW(cond)                                                                                     \
+	do {                                                                                                               \
+		if (!(cond))                                                                                                   \
+			::std::abort();                                                                                            \
+	} while (false)
 
 #elif defined(NDEBUG)
 

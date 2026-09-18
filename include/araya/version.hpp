@@ -10,4 +10,4 @@ constexpr std::uint32_t version_patch = 0;
 
 const char* version_string();
 
-}  // namespace araya
+} // namespace araya

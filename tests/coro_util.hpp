@@ -12,16 +12,14 @@ namespace araya_test {
 // use-after-scope once the initiating expression ends.
 template <class Fn>
 struct heap_coroutine_fn {
-    Fn fn;
+	Fn fn;
 
-    decltype(fn()) operator()() {
-        co_return co_await fn();
-    }
+	decltype(fn()) operator()() { co_return co_await fn(); }
 };
 
 template <class Fn>
 heap_coroutine_fn<std::decay_t<Fn>> heap_coroutine(Fn&& fn) {
-    return heap_coroutine_fn<std::decay_t<Fn>>{std::forward<Fn>(fn)};
+	return heap_coroutine_fn<std::decay_t<Fn>>{std::forward<Fn>(fn)};
 }
 
-}  // namespace araya_test
+} // namespace araya_test

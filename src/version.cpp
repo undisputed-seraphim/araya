@@ -2,8 +2,6 @@
 
 namespace araya {
 
-const char* version_string() {
-    return "0.1.0";
-}
+const char* version_string() { return "0.1.0"; }
 
-}  // namespace araya
+} // namespace araya
