@@ -3,41 +3,171 @@
 A C++23 runtime for applications assembled from components that may appear, disappear, or be
 replaced while the process remains live.
 
-Araya adapts the ideas of _A Programming Paradigm for Spatiotemporal Composability_
-(Y. Shi, W. Zhang, T. Cui — arXiv:2608.25512) and its reference implementation Cordis,
-without adopting their TypeScript-specific API or implementation choices.
+Araya adapts the component calculus of _A Programming Paradigm for Spatiotemporal
+Composability_ (Y. Shi, W. Zhang, T. Cui — arXiv:2608.25512): components install reversible
+effects into a shared environment, activate only when their declared dependencies resolve, and
+are withdrawn in a fixed order that lets dependents tear down safely. The observable semantics
+are continuously checked against the paper's transition rules by a TLA+ refinement model
+checker, so any engine feature that extends the calculus is added model-first and verified
+before it lands in the engine.
 
-## The model, briefly
+## The lifecycles
 
-The paper identifies two dimensions of dynamic composability. **Temporal composability**
-demands that removing a component withdraws everything it installed in the shared environment;
-**spatial composability** demands that components declare their dependencies and activate only
-when they resolve. Araya implements both in their global forms:
+Everything a component does — and everything the runtime does to it — happens inside one of
+the lifecycles below. They are the interface contract; the model checker holds the engine to
+them.
 
-- **Revertible effects.** Every managed operation (providing a service, registering a listener,
-  acquiring a resource) records its cleanup the moment it succeeds, and an activation's cleanups
-  run in reverse order on teardown. A component's `apply()` coroutine is the paper's "effect
-  iterator": each `co_await` is a step boundary, so an activation interrupted mid-load stops at a
-  boundary, runs the cleanup accumulated so far, and is never published.
-- **Reactive coeffects.** A component declares `inject` (what it requires) and `provide` (what it
-  may publish). Every binding change is classified against those declarations: unaffected, or
-  deactivated, or deactivated-and-reactivated. Resolution records the *provider identity*, not the
-  value, so replacing a provider re-evaluates its committed consumers.
-- **Ordered withdrawal.** When a provider leaves, it stops accepting new consumers first;
-  committed consumers tear down while still holding their provider's bindings; the provider's
-  own cleanup runs only after every consumer has reached `inactive`. This mirrors the paper's
-  `L-Leave`/`L-Unload` guard.
-- **Serialized topology.** All composition changes run on a control strand above an Asio
-  executor; component work is asynchronous and cooperatively cancellable through
-  `std::stop_token`. Transition completion re-checks the committed view ("inertia" in the
-  paper's terms).
-- **Reconciliation.** The host supplies a desired tree of component specs; the runtime diffs it
-  against live fibers: retain, mount, retire, replace, or apply a supported config update in place.
-  Native modules are loaded with `dlopen` and unloaded only once no fiber, listener, or
-  callback still reaches them.
+### Fiber lifecycle
 
-As in the paper, the guarantees hold within the managed boundary: Araya cannot undo emitted
-network traffic, reclaim detached threads, or sandbox hostile native code.
+A **fiber** is one mounted component instance. It moves through four states:
+
+```
+inactive ──▶ loading ──▶ active ──▶ unloading ──▶ inactive
+```
+
+- `plugin::apply(plugin_context&)` is the *loading* phase, written as a coroutine. Each
+  `co_await` in `apply` is a step boundary: if the activation is cancelled or throws
+  mid-load, the cleanup accumulated so far runs in reverse order and the fiber is never
+  published.
+- A fiber becomes `active` once `apply` returns; at that point its provisions are visible to
+  other components and its listeners may be invoked.
+- **Ordered withdrawal.** When a provider leaves, the runtime first stops handing it new
+  consumers; already-committed consumers tear down *while still holding their provider's
+  bindings*; the provider's own cleanup runs only after every consumer has reached
+  `inactive`. A component being torn down can therefore still read the dependencies it was
+  activated against.
+- `apply` is cooperative: watch `plugin_context::stop_token()` (or `this_stop_token()` /
+  `stop_requested()` in ad-hoc fibers) and return promptly when it fires. `fiber_handle::
+  cancel()` is a stop *request*, never a preemption.
+
+### Effect lifecycle
+
+Every managed operation (providing a service, registering a listener, acquiring a resource)
+records its cleanup the moment it succeeds:
+
+```cpp
+araya::registration r = ctx.effect([&] {
+    install_something();
+    return araya::cleanup_action{[&] { remove_something(); }};
+});
+```
+
+- The `registration` owns the cleanup. Unless `release()`d early, cleanups run in reverse
+  order when the fiber's activation is torn down — the paper's accumulator discipline.
+- `provide` and `on` return the same kind of `registration`; releasing one un-publishes that
+  single provision or listener without touching the rest.
+
+### Binding and availability lifecycle
+
+A component declares its dependencies and provisions; the runtime enforces them:
+
+```cpp
+static constexpr araya::service_key<database> db{"db", 1};
+
+araya::task<void> apply(araya::plugin_context& ctx) {
+    auto db_lease = ctx.require(db);            // throws resolution_error if absent
+    auto maybe    = ctx.find(db);               // std::nullopt if absent
+    ctx.provide(db, my_db);                     // throws if 'db' was not declared
+}
+```
+
+- **Declare, then use.** `require`/`find` of a key you did not declare is a logic error; so is
+  providing one you did not declare. Declarations are immutable for the fiber's lifetime.
+- Resolution records the *provider identity*, not the value: replacing a provider re-evaluates
+  its committed consumers, so consumers never keep a stale binding silently.
+- **Availability.** `provide(key, value, check)` evaluates `check` *once* at provide-time; a
+  failing or throwing check publishes the binding as unavailable. An unavailable binding
+  behaves as absent: required consumers park, optional ones proceed with the empty view.
+  The provider later promotes it — and only promotes it:
+
+```cpp
+ctx.set_available(db, true);   // the only transition; idempotent; must run on the strand
+```
+
+  There is no `set_available(db, false)`: it throws. In the paper's lifecycle there is no
+  edge back from active to loading, so deactivation is not expressible — to withdraw a
+  service, unload its provider (`runtime::retire`), which runs the ordered withdrawal above.
+
+### Service-lease lifecycle
+
+`require`/`find` return a `service_lease<T>`: a `shared_ptr` to the value plus the providing
+fiber's id and merged metadata.
+
+- Retaining a lease keeps the *value* alive past `apply` — the provider cannot be unloaded
+  out from under the object itself.
+- The *binding* is not a lease: after teardown the same key may be re-provided by a different
+  fiber. Hold a lease for the object; re-`require` for the current resolution.
+
+### The plugin context lifecycle
+
+`plugin_context` is a **view** into one activation, valid only while that activation runs:
+inside `apply`, and inside the listeners and cleanups that activation registered. Never store
+it — by the time any stored copy could be used, the activation it describes may be unloading.
+
+- `plugin_context::root()` walks to the runtime's root scope.
+- `plugin_context::mount(spec)` instantiates a child component; the instantiation is an
+  ordinary tracked effect, so unloading the parent cascades to its children.
+
+### Event-listener lifecycle
+
+```cpp
+static constexpr araya::event_key<std::string, araya::dispatch_mode::serial>
+    files{"files.changed"};
+
+araya::registration r = ctx.on(files, [](std::string const& path) -> araya::task<void> {
+    co_await rescan(path);
+});
+```
+
+- The listener belongs to the registering fiber: it is removed automatically at teardown, or
+  earlier via the returned `registration`.
+- `listener_options` adjust delivery: `prepend` (ahead of existing listeners), `once` (runs at
+  most once), `global` (delivers regardless of dispatching scope), and `scope` (delivers only
+  to dispatches carrying a scope with the same realm label).
+- Dispatch modes fix the listener signature and the flow: `emit` fire-and-forget, `parallel`
+  all listeners awaited together, `serial` in registration order, `waterfall` a chained
+  pipeline where each listener may transform the message, `bail` a chain that short-circuits
+  on the first listener returning `true`.
+- Registration and dispatch must run on the control strand (see below). Listener errors go
+  to the bus's diagnostic sink (`set_diagnostic_sink`); `parallel` dispatch additionally
+  rethrows the first listener failure at the dispatcher.
+
+### Config lifecycle
+
+Components receive a `plugin_config` (string map) through their factory. Typed access is
+strict — "optional presence, strict values":
+
+```cpp
+static constexpr araya::config_key<int> port{"port"};
+
+int p = araya::plugin_config_view(cfg)[port];      // throws config_error: missing/malformed
+auto m = araya::plugin_config_view(cfg).try_get(port); // nullopt only when absent
+```
+
+`config_key<T>` binds the C++ type to the key name, so a wrong-typed access does not compile;
+`araya::parse_value<T>(text)` is the free-function form for argv and other inputs; specialize
+`araya::config_parser<T>` for your own types.
+
+- `plugin::reconfigure(config)` is the in-place update hook. Returning `false` means "no
+  in-place update": the runtime deactivates and reactivates the fiber with the new config —
+  a full reload through the fiber lifecycle.
+
+### Native-module lifecycle
+
+A native plugin is a shared object exporting `araya_plugin_entry_v1` (see `araya/abi.hpp`:
+a plain-C ABI, strand-bounded, error codes only). `module_loader::load` dlopens it and hands
+back a `plugin_descriptor`; the `dlclose` is deferred until the last descriptor, plugin
+instance, and listener callback produced from the module are gone, so a module is never
+unmapped while any of its code or vtables can still run.
+
+### Threading in one paragraph
+
+All composition runs on the runtime's **control strand** (an Asio strand). The awaitable
+entry points — `mount`, `retire`, `reconcile`, `wait_idle` — hop onto it for you. A few
+synchronous operations require you to be there already: `event_bus` dispatch/registration,
+`plugin_context::set_available`, and `runtime::run_on_strand`, which is the escape hatch
+from any thread or coroutine. Component `apply` bodies run on the strand; offload real work
+to your own executors and return to the strand to touch the context.
 
 ## Building
 
@@ -45,11 +175,12 @@ network traffic, reclaim detached threads, or sandbox hostile native code.
 - Boost ≥ 1.83 (header-only Asio)
 - CMake ≥ 3.24, Ninja recommended
 - Catch2 v3 (optional, for tests)
+- Java 21 + the TLA+ tools jar (optional, for the TLC model check; the build skips it with a
+  notice when absent)
 
 ```sh
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
-ctest --test-dir build
 ```
 
 Araya is a static library and provides a CMake package. To install:
@@ -65,105 +196,8 @@ find_package(araya 0.1 REQUIRED)
 target_link_libraries(my_app PRIVATE araya::araya)
 ```
 
-## Public API (overview)
-
-```cpp
-namespace araya {
-
-// --- fibers and tasks ------------------------------------------------------
-
-template <class T = void>
-using task = boost::asio::awaitable<T, boost::asio::any_io_executor>;
-
-struct fiber_handle {
-    fiber_id id() const;
-    fiber_state state() const;         // inactive / loading / active / unloading
-    void cancel() const;               // cooperative: request_stop only
-};
-
-fiber_handle spawn(boost::asio::any_io_executor, task<T>);   // ad-hoc fiber
-boost::asio::awaitable<std::stop_token> this_stop_token();
-boost::asio::awaitable<bool> stop_requested();
-
-// --- services and scopes ----------------------------------------------------
-
-template <class T> struct service_key { service_id id; };    // name + version + C++ type
-template <class T> class service_lease;                      // committed-view access
-
-class context {                                              // scoped binding tree
-    void bind(service_id, binding);
-    void unbind(service_id);
-    binding const* lookup(service_id) const;
-    service_metadata metadata_for(service_id) const;         // per-key policy metadata
-};
-
-// --- the runtime (plugin manager) -------------------------------------------
-
-class runtime {
-public:
-    explicit runtime(boost::asio::any_io_executor);
-    plugin_context root_context();
-    boost::asio::awaitable<fiber_handle> mount(component_spec);
-    boost::asio::awaitable<void> retire(fiber_handle);
-    boost::asio::awaitable<void> reconcile(std::vector<desired_component>);
-    boost::asio::awaitable<void> wait_idle();
-    boost::asio::awaitable<void> run_on_strand(std::move_only_function<void()>);
-    std::shared_ptr<event_bus> bus() const;
-};
-
-// --- plugins ------------------------------------------------------------------
-
-class plugin {
-    virtual boost::asio::awaitable<void> apply(plugin_context&) = 0;
-    virtual bool reconfigure(plugin_config const&) { return false; }  // in-place updates
-};
-
-struct plugin_descriptor {
-    std::string_view name;
-    std::span<dependency_spec const> inject;   // {key, required}
-    std::span<provision_spec const> provide;
-    std::function<std::unique_ptr<plugin>(plugin_config const&)> create;
-};
-
-class plugin_context {
-    template <class T> service_lease<T> require(service_key<T> const&);
-    template <class T> std::optional<service_lease<T>> find(service_key<T> const&);
-    template <class T> registration provide(service_key<T> const&, std::shared_ptr<T>);
-    registration effect(std::move_only_function<cleanup_action()>);
-    template <event_key K, class Fn> registration on(K const&, Fn&&);
-    std::stop_token stop_token() const;
-};
-
-// --- events -------------------------------------------------------------------
-
-enum class dispatch_mode { emit, parallel, serial, waterfall };
-template <class Message, dispatch_mode Mode> struct event_key { service_id id; };
-
-class event_bus {   // typed, strand-bound; listeners are owned effects
-    void set_diagnostic_sink(std::move_only_function<void(std::exception_ptr)>);
-    // dispatch(key, msg): emit = fire-and-forget; parallel/serial = awaitable;
-    // waterfall = chain with short-circuit/transform via waterfall_continuation
-};
-
-// --- native modules ------------------------------------------------------------
-
-class module_loader {
-    std::shared_ptr<plugin_descriptor> load(std::string const& so_path);  // dlopen;
-    // dlclose deferred until the last descriptor / instance / listener is gone
-};
-
-// each .so exports:
-//   extern "C" const araya_plugin_descriptor_v1*
-//   araya_plugin_entry_v1(const araya_host_api_v1*);
-
-}  // namespace araya
-```
-
-## Status
-
-**Alpha.** The public API and internal design are subject to change. The core semantics
-(effects, reactivity, lifecycle ordering, reconciliation, the native module ABI) are implemented
-and covered by 70 tests, but there is no stability guarantee yet.
+The `bench/araya_bench` target is a complete example host exercising every lifecycle above
+and doubles as the profiling benchmark.
 
 ## License
 
