@@ -134,6 +134,16 @@ public:
     // Posts validate_invariants() to the control strand and waits for it.
     boost::asio::awaitable<void> validate_invariants_async() const;
 
+    // Promotes the provision of key (held by the provider fiber in scope)
+    // to available and re-evaluates the dependents: ArayaMachine.tla's
+    // AvailabilityFlip, which Refine.tla reads as the paper's L-Finish
+    // through the lagged provider state. Promotion is idempotent.
+    // Deactivation is retirement: marking a provision unavailable throws
+    // (the paper's lifecycle DAG has no active -> loading edge). Runs on
+    // the control strand.
+    void signal_availability(service_id key, context* scope,
+                             std::uint64_t provider, bool available);
+
 private:
     struct fiber_record;
     struct resolution;

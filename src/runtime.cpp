@@ -370,9 +370,10 @@ runtime::resolution runtime::resolve(fiber_record const& f) const {
         // A fiber's own bindings never satisfy its declarations: the paper's
         // precedence relation is assumed acyclic, and a self-provided key
         // cannot be active at the fiber's own L-Begin anyway. Excluding self
-        // also keeps an optional self-provision from oscillating.
+        // also keeps an optional self-provision from oscillating. An
+        // unavailable binding (the availability extension) reads as absent.
         if (b && b->value && b->state == provider_state::active &&
-            b->provider != f.id) {
+            b->available && b->provider != f.id) {
             r.providers[key] = b->provider;
             r.bindings[key] = *b;
         } else if (required) {
@@ -533,10 +534,31 @@ bool runtime::providers_still_active(fiber_record const& f) const {
     for (auto const& [key, p] : f.committed) {
         auto const* b = f.spec.parent->lookup(key);
         if (!b || !b->value || b->provider != p ||
-            b->state != provider_state::active)
+            b->state != provider_state::active || !b->available)
             return false;
     }
     return true;
+}
+
+void runtime::signal_availability(service_id key, context* scope,
+                                  std::uint64_t provider, bool available) {
+    auto* b = scope->lookup_mutable(key);
+    if (!b || !b->value)
+        throw std::logic_error("signal_availability: no binding for '" +
+                               std::string(key.name) + "'");
+    if (b->provider != provider)
+        throw std::logic_error(
+            "signal_availability: fiber " + std::to_string(provider) +
+            " does not provide '" + std::string(key.name) + "'");
+    if (!available)
+        throw std::logic_error(
+            "signal_availability: deactivation is retirement - unload the "
+            "provider of '" +
+            std::string(key.name) + "' instead");
+    if (b->available)
+        return;  // idempotent promotion
+    b->available = true;
+    notify(key, scope, scope->realm_for(key));
 }
 
 void runtime::publish(fiber_record& f) {

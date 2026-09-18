@@ -6,8 +6,16 @@
 
 namespace araya {
 
-boost::asio::awaitable<fiber_handle> plugin_context::mount(component_spec spec) {
-    // Copy everything this coroutine needs into its own frame before the
+void plugin_context::set_available_raw(service_id key,
+                                      bool available) const {
+    if (!act_ || !act_->owner)
+        throw std::logic_error(
+            "plugin_context is not attached to a runtime");
+    act_->owner->signal_availability(key, act_->scope.get(), act_->id,
+                                     available);
+}
+
+boost::asio::awaitable<fiber_handle> plugin_context::mount(component_spec spec) {    // Copy everything this coroutine needs into its own frame before the
     // first suspension: the calling plugin_context may live on the
     // initiating stack, which unwinds while this coroutine is suspended.
     auto act = act_;

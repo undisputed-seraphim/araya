@@ -125,7 +125,8 @@ public:
     // unloading this fiber cascades to its children (Theorem 73).
     boost::asio::awaitable<fiber_handle> mount(component_spec spec);
 
-    registration provide_raw(service_id id, std::shared_ptr<void> value) {
+    registration provide_raw(service_id id, std::shared_ptr<void> value,
+                             std::function<bool()> check = {}) {
         if (act_->spec_declared && !declared(act_->provide_specs, id))
             throw std::logic_error("undeclared provision: '" +
                                    std::string(id.name) + "'");
@@ -133,7 +134,19 @@ public:
         auto state = act_->state == fiber_state::active
                          ? provider_state::active
                          : provider_state::loading;
-        scope->bind(id, binding{std::move(value), act_->id, state});
+        // The availability check is evaluated once at provide-time; the
+        // outcome is promotion-only (see set_available below). A
+        // throwing check reads as unavailable.
+        bool available = true;
+        if (check) {
+            try {
+                available = check();
+            } catch (...) {
+                available = false;
+            }
+        }
+        scope->bind(id,
+                    binding{std::move(value), act_->id, state, available});
         auto index = act_->effects->add(
             [scope, key = owned_service_id(id), owner = act_->id] {
                 auto* b = scope->lookup_mutable(key);
@@ -145,10 +158,29 @@ public:
 
     template <class T>
     registration provide(service_key<T> const& key,
-                         std::shared_ptr<T> service) {
+                         std::shared_ptr<T> service,
+                         std::function<bool()> check = {}) {
         return provide_raw(key.id,
-                           std::shared_ptr<void>(std::move(service)));
+                           std::shared_ptr<void>(std::move(service)),
+                           std::move(check));
     }
+
+    // Promotes this fiber's provision of key to available and re-evaluates
+    // the dependents (ArayaMachine.tla's AvailabilityFlip, read as
+    // L-Finish through the lagged alpha). Promotion is idempotent.
+    // Deactivation is NOT expressible in the paper's lifecycle DAG:
+    // marking a provision unavailable throws - unload the provider
+    // instead. Must be called on the control strand (from apply or a
+    // listener).
+    template <class T>
+    void set_available(service_key<T> const& key, bool available) const {
+        set_available_raw(key.id, available);
+    }
+
+    // The runtime-touching half of set_available (defined in
+    // plugin_context.cpp, where the runtime is complete). Const on the
+    // context: the mutation goes through the activation's runtime.
+    void set_available_raw(service_id key, bool available) const;
 
     registration effect(
         std::move_only_function<cleanup_action()> setup) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -82,6 +83,12 @@ struct binding {
     std::shared_ptr<void> value;
     std::uint64_t provider = 0;
     provider_state state = provider_state::active;
+    // The availability gate (the tier-2 extension, ArayaMachine.tla's
+    // AvailInit/AvailabilityFlip): evaluated once at provide-time from
+    // the optional check predicate. Promotion-only - runtime::
+    // signal_availability flips it true; deactivation is retirement
+    // (the paper's lifecycle DAG has no active -> loading edge).
+    bool available = true;
 };
 
 template <class T>
