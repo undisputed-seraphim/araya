@@ -105,7 +105,20 @@ fiber_handle runtime::mount_locked(component_spec spec, fiber_id parent) {
     auto* rec_ptr = rec.get();
     fibers_.emplace(id, std::move(rec));
     evaluate(*rec_ptr);
-    diagnose();
+
+    // Cycle-scan gate: a new cycle signature needs a new node with an
+    // out-edge, i.e. one of the new fiber's declared keys must have a
+    // provider (itself included — the degenerate self-provision case
+    // always scans). Skipping the Tarjan pass here is conservative:
+    // removals cannot create cycles, and the reconcile batch runs a
+    // full scan at the end regardless.
+    bool cycles_possible = false;
+    for (auto const& k : rec_ptr->inject_keys)
+        if (providers_of_.contains(k)) {
+            cycles_possible = true;
+            break;
+        }
+    diagnose(cycles_possible);
     return rec_ptr->control->to_handle();
 }
 
@@ -723,7 +736,7 @@ void runtime::unindex(fiber_id id) {
     }
 }
 
-void runtime::diagnose() {
+void runtime::diagnose(bool scan_cycles) {
     auto emit = [this](diagnostic_kind kind, std::string key_name,
                        std::uint32_t key_version,
                        std::vector<fiber_id> ids) {
@@ -803,27 +816,29 @@ void runtime::diagnose() {
             diag_order_.begin());
     };
 
-    if (diag_adj_.size() < diag_order_.size())
-        diag_adj_.resize(diag_order_.size());
-    for (auto& targets : diag_adj_)
-        targets.clear();
-    for (auto const& [mid, m] : fibers_) {
-        diag_targets_.clear();
-        for (auto const& k : m->inject_keys) {
-            auto pit = providers_of_.find(k);
-            if (pit == providers_of_.end())
-                continue;
-            for (auto nid : pit->second)
-                if (scope_on_chain(
-                        fibers_.find(nid)->second->spec.parent.get(),
-                        m->spec.parent.get()))
-                    diag_targets_.push_back(nid);
+    if (scan_cycles) {
+        if (diag_adj_.size() < diag_order_.size())
+            diag_adj_.resize(diag_order_.size());
+        for (auto& targets : diag_adj_)
+            targets.clear();
+        for (auto const& [mid, m] : fibers_) {
+            diag_targets_.clear();
+            for (auto const& k : m->inject_keys) {
+                auto pit = providers_of_.find(k);
+                if (pit == providers_of_.end())
+                    continue;
+                for (auto nid : pit->second)
+                    if (scope_on_chain(
+                            fibers_.find(nid)->second->spec.parent.get(),
+                            m->spec.parent.get()))
+                        diag_targets_.push_back(nid);
+            }
+            std::sort(diag_targets_.begin(), diag_targets_.end());
+            diag_targets_.erase(
+                std::unique(diag_targets_.begin(), diag_targets_.end()),
+                diag_targets_.end());
+            diag_adj_[pos(mid)] = diag_targets_;
         }
-        std::sort(diag_targets_.begin(), diag_targets_.end());
-        diag_targets_.erase(
-            std::unique(diag_targets_.begin(), diag_targets_.end()),
-            diag_targets_.end());
-        diag_adj_[pos(mid)] = diag_targets_;
     }
 
     diag_index_.assign(diag_order_.size(), -1);
@@ -866,9 +881,10 @@ void runtime::diagnose() {
             emit(diagnostic_kind::cycle, "", 0, diag_scc_);
     };
 
-    for (std::size_t i = 0; i < diag_order_.size(); ++i)
-        if (diag_index_[i] == -1)
-            strongconnect(strongconnect, static_cast<int>(i));
+    if (scan_cycles)
+        for (std::size_t i = 0; i < diag_order_.size(); ++i)
+            if (diag_index_[i] == -1)
+                strongconnect(strongconnect, static_cast<int>(i));
 
     // Self-provision: a component declaring a key it provides itself.
     for (auto const& [id, f] : fibers_) {

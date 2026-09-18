@@ -410,3 +410,39 @@ TEST_CASE("cycle re-formation after retirement emits a new signature") {
         co_await rt.validate_invariants_async();
     });
 }
+
+TEST_CASE("the cycle-scan gate never masks a cycle") {
+    harness h;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        // The first half declares a key with no provider yet: the gate
+        // skips the Tarjan pass. Nothing to report.
+        auto x = co_await rt.mount(h.spec(&g_x_desc));
+        co_await rt.wait_idle();
+        CHECK(h.diagnostics.empty());
+
+        // The second half provides that key, so the gate scans and finds
+        // the now-closed cycle.
+        auto y = co_await rt.mount(h.spec(&g_y_desc));
+        co_await rt.wait_idle();
+        REQUIRE(has_cycle(h.diagnostics, {x.id(), y.id()}));
+        co_await rt.validate_invariants_async();
+    });
+}
+
+TEST_CASE("a consumer mounted before its provider never trips the scan") {
+    harness h;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        // C declares db while no provider exists: gate-skipped, parked.
+        auto c = co_await rt.mount(h.spec(&g_consumer_desc));
+        co_await rt.wait_idle();
+        CHECK(h.diagnostics.empty());
+
+        // The provider arrives: the gate scans, the graph is a DAG,
+        // the consumer activates, and nothing is reported.
+        co_await rt.mount(h.spec(&g_provider_desc, {{"value", "p1"}}));
+        co_await rt.wait_idle();
+        CHECK(h.diagnostics.empty());
+        CHECK(rt.state_of(c.id()) == araya::fiber_state::active);
+        co_await rt.validate_invariants_async();
+    });
+}

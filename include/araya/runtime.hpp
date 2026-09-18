@@ -151,7 +151,12 @@ private:
 
     // Rebuilds the declared dependency graph and reports newly appeared
     // single-source conflicts and dependency cycles to the diagnostic sink.
-    void diagnose();
+    // scan_cycles=false skips the Tarjan pass: safe when the event that
+    // triggered the scan cannot have created a new cycle signature (see
+    // mount_locked's gate), i.e. the new fiber declares no key that any
+    // provider — itself included — provides. The conflict scan and the
+    // self-provision pass always run.
+    void diagnose(bool scan_cycles = true);
 
     void transition_started();
     void transition_finished();
