@@ -8,6 +8,7 @@
 namespace araya::abi {
 
 // The host-side function table handed to native modules at load time.
+// One table per process, valid for the process lifetime.
 araya_host_api_v1 const& host_api() noexcept;
 
 // Calls a module entry point immediately and wraps the returned C descriptor

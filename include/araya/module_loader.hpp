@@ -8,6 +8,13 @@
 
 namespace araya {
 
+// Loads native plugins (shared objects exporting araya_plugin_entry_v1).
+//
+// RESIDENCY: the loader defers each dlclose until the last descriptor,
+// plugin instance, and listener callback produced from the module are
+// gone - fibers created from the descriptor keep the module resident
+// until fully retired, so no code or vtable outlives its mapping. The
+// loader itself must outlive every descriptor it produced.
 class module_loader {
 public:
     module_loader();

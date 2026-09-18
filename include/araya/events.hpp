@@ -25,6 +25,18 @@
 
 namespace araya {
 
+// The five delivery disciplines. The mode is part of the event key's
+// type and fixes the listener's signature:
+//   emit      - listener(Message), fire-and-forget; dispatch returns void
+//   parallel  - listener(Message), all listeners awaited together; the
+//               first listener failure is rethrown at the dispatcher
+//   serial    - listener(Message), run one after another in registration
+//               order; the first failure aborts the dispatch
+//   waterfall - listener(Message, continuation) -> Message: a pipeline;
+//               each listener may transform the message and call the
+//               continuation, which returns the final Message
+//   bail      - listener(Message) -> bool: the chain short-circuits on
+//               the first true; dispatch returns whether anyone bailed
 enum class dispatch_mode : std::uint8_t {
     emit,
     parallel,
@@ -421,6 +433,22 @@ private:
 
 }  // namespace detail
 
+// The typed event bus: one strand-bound registry of typed event entries.
+//
+// THREADING: registration (add_listener / remove_listener) and dispatch
+// must run on the control strand - everything else throws. plugin code
+// registers through plugin_context::on (its own strand) and dispatches
+// from within the runtime; raw hosts dispatch from run_on_strand.
+//
+// OWNERSHIP: listeners registered through plugin_context::on belong to
+// the registering fiber and are removed at its teardown. Raw listeners
+// (add_listener with an owner id) live until removed or until the bus is
+// destroyed with its runtime.
+//
+// ERRORS: emit-mode listener failures go to the diagnostic sink
+// (set_diagnostic_sink) - there is no dispatcher to throw at. parallel
+// rethrows the first failure; serial/waterfall/bail propagate the
+// failure that aborted them.
 class event_bus {
 public:
     using strand_type = boost::asio::strand<boost::asio::any_io_executor>;

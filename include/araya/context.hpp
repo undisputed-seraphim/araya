@@ -8,6 +8,20 @@
 
 namespace araya {
 
+// A scoped binding tree: the spatial composition structure. Each fiber
+// gets a scope (child of its parent's), and bindings, realm tags, and
+// metadata are stored per scope with parent-chain fallback.
+//
+// LIFETIME: contexts are shared_ptr-managed and owned by the runtime and
+// the activations' scopes; plugin code reads them through
+// plugin_context::scope()/root() and never binds into them directly
+// (provide does it on the fiber's behalf). Advanced hosts use
+// context::isolate to carve realm-tagged scopes (Section 5.2.1) before
+// mounting components into them.
+//
+// THREADING: engine-mutated on the control strand; treat as read-only
+// outside it (lookup/lookup_realm/metadata_for are safe to call from
+// listeners and cleanups, which run on the strand anyway).
 class context : public std::enable_shared_from_this<context> {
 public:
     explicit context(std::shared_ptr<context> parent = nullptr,

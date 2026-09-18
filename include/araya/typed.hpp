@@ -6,6 +6,21 @@
 // runtime; the engine remains the single source of truth and still
 // verifies every transition at runtime.
 
+// The compile-time encodings of the paper's static fragment (Section 6.4 /
+// 6.7): capability-typed access, acquisition-tagged leases, witness
+// concepts, and typestate host handles. All are facades over the erased
+// runtime; the engine remains the single source of truth and still
+// verifies every transition at runtime.
+//
+// Usage: the erased API (plugin_context) is the primary surface - these
+// facades are opt-in ergonomics. typed_context checks require/find/provide
+// against a declared capability set at compile time and provide against
+// the commutative-key witness; tagged_lease makes "this lease came from
+// the committed view" a type-level fact; typed_handle mirrors the fiber
+// lifecycle in the type. None of them changes runtime semantics: a bad
+// access is still rejected by the engine, these just make it a compile
+// error too.
+
 #include "araya/effects.hpp"
 #include "araya/fiber_handle.hpp"
 #include "araya/plugin_context.hpp"

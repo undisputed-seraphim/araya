@@ -21,9 +21,20 @@
 
 namespace araya {
 
+// The coroutine type every plugin apply() and event listener returns.
+// Executed on the strand it is co_spawned on; exceptions surface at the
+// co_spawn caller (for the engine) or in the fiber record (for plugins).
 template <typename T = void>
 using task = boost::asio::awaitable<T, boost::asio::any_io_executor>;
 
+// Spawns an ad-hoc fiber on a private strand and returns its handle.
+//
+// LIFETIME: independent of the runtime's fiber map - nothing to retire.
+// It runs until the awaitable returns (state -> active), throws
+// (state -> inactive; the exception is lost unless the awaitable
+// surfaces it), or its handle's cancel() is called, which merely
+// requests stop - watch this_stop_token()/stop_requested() inside the
+// task.
 template <typename Awaitable>
 fiber_handle spawn(boost::asio::any_io_executor ex, Awaitable&& a) {
     auto strand = boost::asio::make_strand(std::move(ex));
@@ -45,6 +56,9 @@ fiber_handle spawn(boost::asio::any_io_executor ex, Awaitable&& a) {
     return ctl->to_handle();
 }
 
+// The current fiber's stop token (ad-hoc fibers get theirs from spawn;
+// plugin apply bodies get it from plugin_context::stop_token()). An
+// empty token when not running inside a fiber.
 inline boost::asio::awaitable<std::stop_token> this_stop_token() {
     auto ex = co_await boost::asio::this_coro::executor;
     auto src = detail::fiber_registry_lookup(ex);

@@ -15,6 +15,12 @@ namespace araya {
 class event_bus;
 class runtime;
 
+// The engine-side record of one fiber's activation: its scope, its
+// effect accumulator, its committed view, and its parent chain.
+//
+// Advanced/internal: plugin code touches this only through
+// plugin_context (which wraps it); reading it directly is diagnostics-
+// grade. Fields are engine-owned and mutate on the control strand.
 class activation : public std::enable_shared_from_this<activation> {
 public:
     explicit activation(std::shared_ptr<context> scope);

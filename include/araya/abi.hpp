@@ -8,6 +8,20 @@
 // Everything here is plain C: no C++ exceptions, standard-library types,
 // RTTI identities, or virtual interfaces cross this boundary. All functions
 // return an error code (0 = success, negative = failure).
+//
+// THREADING: every host function and every module callback runs on the
+// control strand. A module's apply() hands work to its own threads or
+// executors and returns to the strand via host->post; complete() must
+// be called exactly once, from strand context.
+//
+// LIFETIME: pointers the host hands back from require/find are borrowed
+// and remain valid until the fiber's teardown completes. Pointers the
+// module hands to provide become host-owned and are released through
+// destroy_value (null = immortal).
+//
+// Not in the ABI (host-side only): bail dispatch, availability checks
+// and promotion, and the typed config/lease facades. Native modules see
+// the paper's core semantics plus the four event modes below.
 
 #define ARAYA_ABI_OK 0
 #define ARAYA_ABI_ERROR -1

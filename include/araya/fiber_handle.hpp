@@ -14,6 +14,9 @@ struct fiber_control;
 struct fiber_cell;
 }
 
+// Where a fiber is in the lifecycle (the engine's theta). Loading covers
+// apply() in progress; unloading covers teardown; a fiber that failed
+// during loading returns to inactive.
 enum class fiber_state : std::uint8_t {
     inactive,
     loading,
@@ -33,6 +36,13 @@ struct fiber_cell {
 
 }  // namespace detail
 
+// A fiber handle: a cheap, copyable value that names one live activation.
+// Handles do not keep the fiber alive - retire() the fiber and the
+// handle's state() reads inactive from then on. cancel() is a
+// cooperative stop request (request_stop only, never preemption); the
+// fiber honors it through its stop_token. The fiber's completion error
+// is not stored in the handle: mounted fibers report it via
+// runtime::error_of(id), ad-hoc fibers via their task's exception.
 class fiber_handle {
 public:
     constexpr fiber_id id() const noexcept { return id_; }

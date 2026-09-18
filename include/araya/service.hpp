@@ -7,8 +7,17 @@
 #include <string>
 #include <string_view>
 
+// Services and leases: the vocabulary of bindings.
+//
+// Threading: service_key/service_id/owned_service_id are plain values.
+// service_lease<T> is shared_ptr-backed - see the class comment for the
+// value-lifetime vs binding-lifetime distinction. bindings live in
+// contexts and are mutated by the engine only, on the control strand.
 namespace araya {
 
+// The erased identity of a service: name + version. A name_view into
+// caller-owned storage (string literals in practice); owned_service_id is
+// its owning counterpart for maps and long-lived records.
 struct service_id {
     std::string_view name;
     std::uint32_t version = 1;
@@ -73,6 +82,9 @@ struct service_key {
         : id{name, version} {}
 };
 
+// How far a published binding is through the provider's lifecycle. The
+// engine writes it; plugin code reads it only through the resolved lease
+// (which never hands out non-active bindings).
 enum class provider_state : std::uint8_t {
     loading,
     active,
@@ -91,6 +103,14 @@ struct binding {
     bool available = true;
 };
 
+// A resolved service: the value, the providing fiber, and the merged
+// interception metadata.
+//
+// Lifetime: the lease holds a shared_ptr to the value, so the object
+// outlives any teardown of the provider's activation. The binding itself
+// is not retained: after the provider unloads, the same key may be
+// re-provided by another fiber. Hold a lease for the object; require()
+// again for the current resolution.
 template <class T>
 class service_lease {
 public:

@@ -65,20 +65,47 @@ struct fiber_info {
         committed;
 };
 
+// The component runtime: the plugin manager, the control strand, and the
+// sole owner of fibers, scopes, and the event bus.
+//
+// LIFETIME: one runtime per Asio executor in practice. The runtime owns
+// its mounted fibers; destroying it tears them down. Retired fibers are
+// dropped from the fiber map once inactive, but handles and leases
+// outlive that (fiber_handle is a value type; service_lease holds a
+// shared_ptr to the value).
+//
+// THREADING: all composition runs on the control strand. The awaitable
+// entry points - mount, retire, reconcile, wait_idle - hop onto it for
+// you. The synchronous mutation points (mount_locked, retire_child,
+// signal_availability) and the read accessors (fiber_count, state_of,
+// error_of, fibers) must already be on the strand or hold the runtime
+// idle; run_on_strand is the escape hatch from anywhere else.
 class runtime {
 public:
     explicit runtime(boost::asio::any_io_executor ex);
 
     ~runtime();
 
+    // The runtime's root scope; runtime::root() and plugin_context::
+    // root() both end here. Bindings a host installs directly land here.
     plugin_context root_context();
 
+    // Installs one component. The fiber runs through the fiber lifecycle
+    // (loading -> active) before mount completes.
     boost::asio::awaitable<fiber_handle> mount(component_spec spec);
 
+    // The deactivation path: marks the fiber retired and waits out the
+    // ordered withdrawal (consumers tear down first, then the fiber's own
+    // effects). Idempotent.
     boost::asio::awaitable<void> retire(fiber_handle h);
 
+    // Completes when every fiber has settled at its target view: no
+    // transition in progress. The engine's quiescence predicate.
     boost::asio::awaitable<void> wait_idle();
 
+    // Diffs the desired tree against live fibers: retains, mounts,
+    // retires, replaces, or applies an in-place config update. Entries
+    // are keyed by desired_component::path.
     boost::asio::awaitable<void> reconcile(
         std::vector<desired_component> desired);
 
@@ -90,10 +117,15 @@ public:
 
     std::shared_ptr<context> root() const noexcept { return root_context_; }
 
+    // The read accessors below must be called on the control strand or
+    // while the runtime is idle; fibers_async() hops for you.
     std::size_t fiber_count() const noexcept;
 
     fiber_state state_of(fiber_id id) const noexcept;
 
+    // The completion error of a mounted fiber: null unless the fiber
+    // failed (apply threw, a dependency threw, or teardown reported).
+    // For ad-hoc spawn()ed fibers use the task's own exception.
     std::exception_ptr error_of(fiber_id id) const noexcept;
 
     // Read-only snapshot of every mounted fiber. Call on the control

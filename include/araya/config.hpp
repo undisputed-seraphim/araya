@@ -11,6 +11,17 @@
 #include <type_traits>
 #include <utility>
 
+// Typed config access: the config-side counterpart of service_key<T>.
+//
+// Usage: declare one config_key<T> per option (T binds the C++ type to
+// the name, so wrong-typed access does not compile), then read through a
+// plugin_config_view. The accessors are strict - "optional presence,
+// strict values": get()/operator[] throw config_error for absent and
+// malformed entries; try_get() returns nullopt only when the key is
+// absent, a present-but-malformed value still throws.
+//
+// Parser customization: specialize config_parser<T> for plugin-defined
+// types; parse_value is the free-function form for argv and friends.
 namespace araya {
 
 // A failed config lookup or parse, carrying the key, the offending value,

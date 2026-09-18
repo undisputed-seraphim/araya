@@ -14,6 +14,10 @@
 
 namespace araya {
 
+// Thrown by require() when a declared key has no binding (or its binding
+// is unavailable - an unavailable provision reads as absent). find()
+// returns nullopt instead of throwing; undeclared access is a
+// std::logic_error, not a resolution_error.
 class resolution_error : public std::runtime_error {
 public:
     explicit resolution_error(service_id id)
@@ -26,6 +30,17 @@ public:
     std::uint32_t version;
 };
 
+// The plugin-facing half of one activation.
+//
+// LIFETIME: this is a *view*, not a handle. It is valid only while the
+// activation runs - inside plugin::apply, and inside the listeners and
+// cleanups that apply registered. Never store it: by the time a stored
+// copy could be used, the activation it describes may be unloading.
+//
+// THREADING: everything here runs on the control strand already; apply
+// bodies and listeners execute on it. set_available is synchronous and
+// must be called from that strand - offload long work to your own
+// executors and return to the strand before touching the context.
 class plugin_context {
 public:
     explicit plugin_context(std::shared_ptr<activation> act)
@@ -110,6 +125,10 @@ public:
                                 b->provider, merged_metadata(key.id));
     }
 
+    // Like require, but absence (or an unavailable binding) is nullopt
+    // rather than an exception. A present-but-unavailable binding is
+    // exactly absence: optional consumers see the empty view and are
+    // re-applied when the provision is promoted.
     template <class T>
     std::optional<service_lease<T>> find(service_key<T> const& key) {
         auto b = find_binding(key.id);
@@ -125,6 +144,16 @@ public:
     // unloading this fiber cascades to its children (Theorem 73).
     boost::asio::awaitable<fiber_handle> mount(component_spec spec);
 
+    // Publishes a service under a declared provision key. Throws
+    // std::logic_error for undeclared keys. The binding is removed
+    // automatically at teardown (reverse order); the returned
+    // registration releases it early.
+    //
+    // Availability: check (if given) runs exactly once, here, before the
+    // binding is published. A false or throwing check publishes the
+    // binding as unavailable: required consumers park, optional consumers
+    // proceed with the empty view, and the provider promotes later via
+    // set_available. There is no demotion - see set_available.
     registration provide_raw(service_id id, std::shared_ptr<void> value,
                              std::function<bool()> check = {}) {
         if (act_->spec_declared && !declared(act_->provide_specs, id))
@@ -182,6 +211,11 @@ public:
     // context: the mutation goes through the activation's runtime.
     void set_available_raw(service_id key, bool available) const;
 
+    // Runs setup immediately (on the strand) and records its returned
+    // cleanup for reverse-order teardown, unless setup returns an empty
+    // cleanup (in which case the effect is a no-op and the returned
+    // registration is inert). Throw from setup to fail the activation -
+    // nothing is recorded.
     registration effect(
         std::move_only_function<cleanup_action()> setup) {
         auto cleanup = setup();
@@ -191,6 +225,11 @@ public:
         return registration{act_->effects, index};
     }
 
+    // Registers a listener owned by this activation: removed at teardown
+    // (or earlier via the returned registration). Throws if no event bus
+    // is bound to this activation. The listener's signature is fixed by
+    // the key's dispatch mode; see events.hpp for the per-mode contract
+    // and listener_options (prepend/once/global/scope).
     template <class Message, dispatch_mode Mode, class Fn>
     registration on(event_key<Message, Mode> const& key, Fn&& fn,
                     listener_options opts = {}) {
