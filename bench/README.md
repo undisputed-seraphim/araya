@@ -26,8 +26,8 @@ The profiling bench and example host application for the Araya engine.
 Profile with optimizations on and symbols in:
 
 ```
-cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build-bench --target araya_bench
+cmake -S . -B build/bench -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build/bench --target araya_bench
 ```
 
 Two optional knobs:
@@ -40,7 +40,7 @@ Two optional knobs:
 ## Workloads
 
 ```
-./build-bench/bench/araya_bench --workload all --iterations 1000
+./build/bench/bench/araya_bench --workload all --iterations 1000
 ```
 
 - `mount` — one provider, repeated mount+retire of required consumers
@@ -72,7 +72,7 @@ against it — same binary, same flags, same iteration count.
 ### perf (CPU)
 
 ```
-perf record -g --call-graph dwarf -- ./build-bench/bench/araya_bench --workload mount --iterations 50000 --log-level error
+perf record -g --call-graph dwarf -- ./build/bench/bench/araya_bench --workload mount --iterations 50000 --log-level error
 perf report
 ```
 
@@ -80,7 +80,7 @@ Quick counters without the record/report cycle:
 
 ```
 perf stat -e cycles,instructions,cache-misses,branch-misses -- \
-    ./build-bench/bench/araya_bench --workload all --iterations 5000 --log-level error
+    ./build/bench/bench/araya_bench --workload all --iterations 5000 --log-level error
 ```
 
 ### gperftools (CPU)
@@ -89,8 +89,8 @@ Build with `-DARAYA_BENCH_GPROF=ON`, then:
 
 ```
 CPUPROFILE=/tmp/cpu.prof CPUPROFILE_FREQUENCY=1000 \
-    ./build-gprof/bench/araya_bench --workload mount --iterations 100000 --log-level error
-google-pprof --text ./build-gprof/bench/araya_bench /tmp/cpu.prof
+    ./build/gprof/bench/araya_bench --workload mount --iterations 100000 --log-level error
+google-pprof --text ./build/gprof/bench/araya_bench /tmp/cpu.prof
 ```
 
 Note: link the combined `tcmalloc_and_profiler`, not `-lprofiler` and
@@ -101,8 +101,8 @@ CMake knob already does this).
 
 ```
 HEAPPROFILE=/tmp/heap \
-    ./build-gprof/bench/araya_bench --workload replace --iterations 20000 --log-level error
-google-pprof --text --inuse_space ./build-gprof/bench/araya_bench /tmp/heap.0001.heap
+    ./build/gprof/bench/araya_bench --workload replace --iterations 20000 --log-level error
+google-pprof --text --inuse_space ./build/gprof/bench/araya_bench /tmp/heap.0001.heap
 ```
 
 Expect the workload to run much slower: every allocation is recorded.
@@ -110,9 +110,9 @@ Expect the workload to run much slower: every allocation is recorded.
 ### heaptrack / valgrind
 
 ```
-heaptrack ./build-bench/bench/araya_bench --workload replace --iterations 20000 --log-level error
+heaptrack ./build/bench/bench/araya_bench --workload replace --iterations 20000 --log-level error
 heaptrack_print heaptrack.araya_bench.*.zst
-valgrind --tool=massif ./build-bench/bench/araya_bench --workload replace --iterations 5000 --log-level error
+valgrind --tool=massif ./build/bench/bench/araya_bench --workload replace --iterations 5000 --log-level error
 ```
 
 ## Optimization loop (the contract)

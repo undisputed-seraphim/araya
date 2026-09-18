@@ -188,12 +188,12 @@ cmake --build build
 The whole suite is clean under ASan + UBSan + LSan:
 
 ```sh
-cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+cmake -B build/asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -Wno-error=stringop-overflow" \
     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
     -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
-cmake --build build-asan
-ctest --test-dir build-asan
+cmake --build build/asan
+ctest --test-dir build/asan
 ```
 
 `-Wno-error=stringop-overflow` silences a GCC 14 false positive in the sanitizer-instrumented
