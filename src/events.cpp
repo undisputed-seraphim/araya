@@ -29,6 +29,10 @@ std::uint64_t event_bus::add_raw_listener(
     std::function<boost::asio::awaitable<void>(void const*)> fn,
     std::uint64_t owner) {
     ensure_on_strand();
+    if (mode == dispatch_mode::bail)
+        throw std::logic_error("raw listeners cannot register on bail-mode "
+                               "event '" +
+                               std::string(id.name) + "'");
     auto* base = entry_base_for(id);
     if (!base)
         throw std::logic_error("raw listener for undeclared event '" +

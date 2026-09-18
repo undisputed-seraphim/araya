@@ -29,6 +29,17 @@ enum class dispatch_mode : std::uint8_t {
     parallel,
     serial,
     waterfall,
+    bail,
+};
+
+// Options applied when a typed listener is registered through
+// add_listener / plugin_context::on. Raw (ABI) listeners take no options.
+struct listener_options {
+    // Insert the listener ahead of the existing ones.
+    bool prepend = false;
+    // Remove the listener just before its first invocation, so it runs
+    // at most once.
+    bool once = false;
 };
 
 template <class Message, dispatch_mode Mode>
@@ -63,6 +74,15 @@ struct notify_slot {
     std::function<boost::asio::awaitable<void>(Message const&)> fn;
 };
 
+// A bail listener returns true to stop the chain (no further listeners
+// run); dispatch reports whether anyone bailed.
+template <class Message>
+struct bail_slot {
+    std::uint64_t owner = 0;
+    std::uint64_t token = 0;
+    std::function<boost::asio::awaitable<bool>(Message const&)> fn;
+};
+
 template <class Message, class Fn>
 auto make_notify_listener(Fn fn) {
     return [fn = std::move(fn)](
@@ -93,10 +113,25 @@ auto make_waterfall_listener(Fn fn) {
     };
 }
 
+template <class Message, class Fn>
+auto make_bail_listener(Fn fn) {
+    return [fn = std::move(fn)](
+               Message const& m) -> boost::asio::awaitable<bool> {
+        using result_t = std::invoke_result_t<Fn const&, Message const&>;
+        if constexpr (std::is_same_v<result_t, bool>) {
+            co_return std::invoke(fn, m);
+        } else {
+            co_return co_await std::invoke(fn, m);
+        }
+    };
+}
+
 template <class Message, dispatch_mode Mode, class Fn>
 auto make_listener(Fn&& fn) {
     if constexpr (Mode == dispatch_mode::waterfall)
         return make_waterfall_listener<Message>(std::forward<Fn>(fn));
+    else if constexpr (Mode == dispatch_mode::bail)
+        return make_bail_listener<Message>(std::forward<Fn>(fn));
     else
         return make_notify_listener<Message>(std::forward<Fn>(fn));
 }
@@ -151,6 +186,25 @@ struct event_entry_base {
                          std::function<boost::asio::awaitable<void>(void const*)> fn) = 0;
 };
 
+// The listener-slot type for each dispatch mode.
+template <class Message, dispatch_mode Mode>
+struct mode_slot;
+
+template <class Message>
+struct mode_slot<Message, dispatch_mode::waterfall> {
+    using type = waterfall_slot<Message>;
+};
+
+template <class Message>
+struct mode_slot<Message, dispatch_mode::bail> {
+    using type = bail_slot<Message>;
+};
+
+template <class Message, dispatch_mode Mode>
+struct mode_slot {
+    using type = notify_slot<Message>;
+};
+
 struct parallel_state {
     explicit parallel_state(std::size_t total,
                             boost::asio::any_io_executor strand)
@@ -187,9 +241,7 @@ private:
 template <class Message, dispatch_mode Mode>
 class event_entry_impl : public event_entry_base {
 public:
-    using slot_t = std::conditional_t<Mode == dispatch_mode::waterfall,
-                                      waterfall_slot<Message>,
-                                      notify_slot<Message>>;
+    using slot_t = typename mode_slot<Message, Mode>::type;
     using snapshot_t = std::shared_ptr<std::vector<slot_t>>;
 
     dispatch_mode mode() const noexcept override { return Mode; }
@@ -197,9 +249,12 @@ public:
         return listeners_->size() + raw_->size();
     }
 
-    void add(slot_t slot) {
+    void add(slot_t slot, bool prepend) {
         auto updated = std::make_shared<std::vector<slot_t>>(*listeners_);
-        updated->push_back(std::move(slot));
+        if (prepend)
+            updated->insert(updated->begin(), std::move(slot));
+        else
+            updated->push_back(std::move(slot));
         listeners_ = std::move(updated);
     }
 
@@ -296,6 +351,14 @@ public:
         co_return co_await waterfall_continuation<Message>{snapshot, 0}(msg);
     }
 
+    boost::asio::awaitable<bool> dispatch_bail(Message const& msg) {
+        auto snapshot = listeners_;
+        for (auto const& slot : *snapshot)
+            if (co_await slot.fn(msg))
+                co_return true;
+        co_return false;
+    }
+
 private:
     snapshot_t listeners_ = std::make_shared<std::vector<slot_t>>();
     std::shared_ptr<std::vector<raw_slot<Message>>> raw_ =
@@ -328,7 +391,8 @@ public:
 
     template <class Message, dispatch_mode Mode, class Fn>
     std::uint64_t add_listener(event_key<Message, Mode> const& key, Fn&& fn,
-                               std::uint64_t owner) {
+                               std::uint64_t owner,
+                               listener_options opts = {}) {
         ensure_on_strand();
         auto* base = entry_base_for(key.id);
         if (!base) {
@@ -343,10 +407,26 @@ public:
         }
         auto* impl = static_cast<detail::event_entry_impl<Message, Mode>*>(
             base);
+        using slot_t =
+            typename detail::event_entry_impl<Message, Mode>::slot_t;
         auto token = next_token_++;
-        impl->add(typename detail::event_entry_impl<Message, Mode>::slot_t{
-            owner, token, detail::make_listener<Message, Mode>(
-                              std::forward<Fn>(fn))});
+        std::decay_t<decltype(slot_t::fn)> listener =
+            detail::make_listener<Message, Mode>(std::forward<Fn>(fn));
+        if (opts.once) {
+            // Remove-then-run: the slot leaves the list before its first
+            // invocation. The in-flight dispatch is unaffected (it holds
+            // a COW snapshot), and repeat removals are token no-ops.
+            listener = [listener = std::move(listener),
+                        remover = [this, id = owned_service_id(key.id),
+                                   token]() {
+                            remove_listener(id, token);
+                        }]<class... Args>(
+                           Args&&... args) mutable -> decltype(auto) {
+                remover();
+                return listener(std::forward<Args>(args)...);
+            };
+        }
+        impl->add(slot_t{owner, token, std::move(listener)}, opts.prepend);
         return token;
     }
 
@@ -400,6 +480,17 @@ public:
         if (!impl)
             co_return msg;
         co_return co_await impl->dispatch_waterfall(msg);
+    }
+
+    template <class Message>
+    boost::asio::awaitable<bool> dispatch(
+        event_key<Message, dispatch_mode::bail> const& key,
+        Message const& msg) {
+        ensure_on_strand();
+        auto* impl = typed_entry<Message, dispatch_mode::bail>(key.id);
+        if (!impl)
+            co_return false;
+        co_return co_await impl->dispatch_bail(msg);
     }
 
 private:

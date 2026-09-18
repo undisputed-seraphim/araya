@@ -147,12 +147,13 @@ public:
     }
 
     template <class Message, dispatch_mode Mode, class Fn>
-    registration on(event_key<Message, Mode> const& key, Fn&& fn) {
+    registration on(event_key<Message, Mode> const& key, Fn&& fn,
+                    listener_options opts = {}) {
         if (!act_->bus)
             throw std::logic_error(
                 "no event bus bound to this activation");
         auto token = act_->bus->add_listener(key, std::forward<Fn>(fn),
-                                             act_->id);
+                                             act_->id, opts);
         auto index = act_->effects->add(
             [bus = act_->bus, id = owned_service_id(key.id), token] {
                 bus->remove_listener(

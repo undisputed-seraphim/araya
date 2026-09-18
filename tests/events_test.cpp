@@ -35,6 +35,18 @@ inline constexpr araya::event_key<std::string,
                                     araya::dispatch_mode::waterfall>
     waterfall_key{"example.waterfall", 1};
 
+inline constexpr araya::event_key<std::string, araya::dispatch_mode::bail>
+    bail_key{"example.bail", 1};
+
+boost::asio::awaitable<void> dummy_raw(void const*) { co_return; }
+
+// Throws from a plain (non-coroutine) frame: the test coroutine only
+// unwinds through the call, mirroring the listener-throw pattern.
+void register_raw_on_bail(araya::event_bus& bus) {
+    bus.add_raw_listener(araya::service_id{"example.bail", 1},
+                         araya::dispatch_mode::bail, dummy_raw, 1);
+}
+
 struct fixture {
     boost::asio::io_context io;
     boost::asio::strand<boost::asio::any_io_executor> strand =
@@ -401,4 +413,190 @@ TEST_CASE("in-flight emit observes the current sink without dangling") {
     CHECK(ran == std::vector<std::string>{"bad:e"});
     CHECK(first_sink_report == nullptr);
     CHECK(second_sink_report != nullptr);
+}
+
+TEST_CASE("bail dispatch stops at the first listener returning true") {
+    fixture fx;
+    std::vector<std::string> order;
+    bool bailed = false;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(bail_key, [&](std::string const& m) -> bool {
+                order.push_back("false:" + m);
+                return false;
+            });
+            fx.ctx.on(bail_key, [&](std::string const& m) -> bool {
+                order.push_back("true:" + m);
+                return true;
+            });
+            fx.ctx.on(bail_key, [&](std::string const& m) -> bool {
+                order.push_back("never:" + m);
+                return false;
+            });
+
+            bailed = co_await fx.bus->dispatch(bail_key, std::string("x"));
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(bailed);
+    CHECK(order == std::vector<std::string>{"false:x", "true:x"});
+}
+
+TEST_CASE("bail dispatch reports false when nobody bails") {
+    fixture fx;
+    std::vector<std::string> ran;
+    bool bailed = true;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(bail_key, [&](std::string const& m) {
+                ran.push_back("sync:" + m);
+                return false;
+            });
+            fx.ctx.on(bail_key,
+                      [&](std::string const& m) -> araya::task<bool> {
+                          ran.push_back("async:" + m);
+                          co_return false;
+                      });
+
+            bailed = co_await fx.bus->dispatch(bail_key, std::string("x"));
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(!bailed);
+    CHECK(ran == std::vector<std::string>{"sync:x", "async:x"});
+}
+
+TEST_CASE("bail dispatch stops at the first failure") {
+    fixture fx;
+    std::vector<std::string> order;
+    bool threw = false;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(bail_key, [&](std::string const& m) -> bool {
+                order.push_back("boom:" + m);
+                throw std::runtime_error("bail listener failure");
+            });
+            fx.ctx.on(bail_key, [&](std::string const& m) -> bool {
+                order.push_back("never:" + m);
+                return false;
+            });
+
+            try {
+                (void)co_await fx.bus->dispatch(bail_key, std::string("x"));
+            } catch (std::runtime_error const&) {
+                threw = true;
+            }
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(threw);
+    CHECK(order == std::vector<std::string>{"boom:x"});
+}
+
+TEST_CASE("raw listeners are rejected on bail-mode events") {
+    fixture fx;
+    std::exception_ptr caught;
+
+    // The rejection surfaces through the co_spawn completion handler:
+    // try/catch around a plain call inside a coroutine frame is
+    // miscompiled by GCC 14 at -O0 (ud2 in the try region).
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(bail_key, [](std::string const&) { return true; });
+            register_raw_on_bail(*fx.bus);
+        }),
+        [&caught](std::exception_ptr ep) { caught = ep; });
+
+    fx.io.run();
+    REQUIRE(caught != nullptr);
+    bool is_logic = false;
+    try {
+        std::rethrow_exception(caught);
+    } catch (std::logic_error const&) {
+        is_logic = true;
+    }
+    CHECK(is_logic);
+}
+
+TEST_CASE("once listeners run at most once and self-remove") {
+    fixture fx;
+    int calls = 0;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(serial_key, [&](std::string const&) { ++calls; },
+                      araya::listener_options{.once = true});
+            CHECK(fx.bus->listener_count(serial_key.id) == 1);
+
+            co_await fx.bus->dispatch(serial_key, std::string("x"));
+            CHECK(fx.bus->listener_count(serial_key.id) == 0);
+
+            co_await fx.bus->dispatch(serial_key, std::string("y"));
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(calls == 1);
+}
+
+TEST_CASE("once listeners self-remove even when they throw") {
+    fixture fx;
+    int calls = 0;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(
+                serial_key,
+                [&](std::string const&) {
+                    ++calls;
+                    throw std::runtime_error("once failure");
+                },
+                araya::listener_options{.once = true});
+
+            try {
+                co_await fx.bus->dispatch(serial_key, std::string("x"));
+            } catch (std::runtime_error const&) {
+            }
+            CHECK(fx.bus->listener_count(serial_key.id) == 0);
+
+            co_await fx.bus->dispatch(serial_key, std::string("y"));
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(calls == 1);
+}
+
+TEST_CASE("prepend listeners run ahead of existing ones") {
+    fixture fx;
+    std::vector<std::string> order;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(serial_key, [&](std::string const&) {
+                order.push_back("first");
+            });
+            fx.ctx.on(serial_key, [&](std::string const&) {
+                order.push_back("second");
+            }, araya::listener_options{.prepend = true});
+
+            co_await fx.bus->dispatch(serial_key, std::string("x"));
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(order == std::vector<std::string>{"second", "first"});
 }
