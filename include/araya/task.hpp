@@ -31,10 +31,11 @@ using task = boost::asio::awaitable<T, boost::asio::any_io_executor>;
 //
 // LIFETIME: independent of the runtime's fiber map - nothing to retire.
 // It runs until the awaitable returns (state -> active), throws
-// (state -> inactive; the exception is lost unless the awaitable
-// surfaces it), or its handle's cancel() is called, which merely
-// requests stop - watch this_stop_token()/stop_requested() inside the
-// task.
+// (state -> inactive; the exception is published to the handle's
+// error() and stays readable after the task ends), or its handle's
+// cancel() is called, which merely requests stop - watch
+// this_stop_token()/stop_requested() inside the task. A task that exits
+// cleanly after a stop request publishes no error.
 template <typename Awaitable>
 fiber_handle spawn(boost::asio::any_io_executor ex, Awaitable&& a) {
     auto strand = boost::asio::make_strand(std::move(ex));
@@ -45,7 +46,7 @@ fiber_handle spawn(boost::asio::any_io_executor ex, Awaitable&& a) {
         boost::asio::bind_cancellation_slot(
             ctl->cell->signal->slot(),
             [ctl, strand](std::exception_ptr ep, auto&&...) mutable {
-                ctl->error = ep;
+                ctl->cell->publish_error(ep);
                 ctl->cell->state->store(
                     (ep || ctl->cell->stop_source->stop_requested())
                         ? fiber_state::inactive

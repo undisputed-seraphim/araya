@@ -125,7 +125,8 @@ public:
 
     // The completion error of a mounted fiber: null unless the fiber
     // failed (apply threw, a dependency threw, or teardown reported).
-    // For ad-hoc spawn()ed fibers use the task's own exception.
+    // Readable while the fiber record lives; the handle's error()
+    // carries the same outcome and survives the record's erasure.
     std::exception_ptr error_of(fiber_id id) const noexcept;
 
     // Read-only snapshot of every mounted fiber. Call on the control

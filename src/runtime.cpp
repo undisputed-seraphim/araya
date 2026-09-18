@@ -422,6 +422,7 @@ void runtime::start_loading(fiber_record& f) {
     f.error = nullptr;
     f.apply_failed = false;
     f.state = fiber_state::loading;
+    f.control->cell->reset_error();
     f.control->cell->state->store(fiber_state::loading);
 
     auto fresh_stop = std::make_shared<std::stop_source>();
@@ -447,6 +448,7 @@ void runtime::start_loading(fiber_record& f) {
     if (!r.satisfiable) {
         f.error = r.error;
         f.state = fiber_state::inactive;
+        f.control->cell->publish_error(f.error);
         f.control->cell->state->store(fiber_state::inactive);
         detail::retire_fiber(f.strand);
         return;
@@ -462,6 +464,7 @@ void runtime::start_loading(fiber_record& f) {
             "plugin factory returned null for '" +
             std::string(f.spec.descriptor->name) + "'"));
         f.state = fiber_state::inactive;
+        f.control->cell->publish_error(f.error);
         f.control->cell->state->store(fiber_state::inactive);
         f.activation.reset();
         f.committed.clear();
@@ -517,6 +520,7 @@ void runtime::on_apply_completed(fiber_id id, std::exception_ptr ep) {
             f->activation->state = fiber_state::inactive;
         }
         f->state = fiber_state::inactive;
+        f->control->cell->publish_error(f->error);
         f->control->cell->state->store(fiber_state::inactive);
         f->instance.reset();
         f->committed.clear();
@@ -668,6 +672,7 @@ void runtime::finish_unload(fiber_record& f) {
     // iterate the member map.
     auto committed = std::move(f.committed);
     f.state = fiber_state::inactive;
+    f.control->cell->publish_error(f.error);
     f.control->cell->state->store(fiber_state::inactive);
     f.instance.reset();
 

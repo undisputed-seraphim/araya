@@ -58,6 +58,57 @@ TEST_CASE("exception marks fiber inactive") {
     CHECK(h.state() == araya::fiber_state::inactive);
 }
 
+TEST_CASE("spawned failure is readable from the handle") {
+    boost::asio::io_context io;
+    auto h = araya::spawn(
+        io.get_executor(),
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            throw std::runtime_error("boom");
+            co_return;
+        }));
+
+    io.run();
+    auto ep = h.error();
+    REQUIRE(ep != nullptr);
+    try {
+        std::rethrow_exception(ep);
+    } catch (std::runtime_error const& e) {
+        CHECK(std::string(e.what()) == "boom");
+    }
+}
+
+TEST_CASE("spawned clean completion publishes a null error") {
+    boost::asio::io_context io;
+    auto h = araya::spawn(
+        io.get_executor(),
+        araya_test::heap_coroutine(
+            [&]() -> araya::task<void> { co_return; }));
+
+    io.run();
+    CHECK(h.state() == araya::fiber_state::active);
+    CHECK(h.error() == nullptr);
+}
+
+TEST_CASE("handle error is null while the task still runs") {
+    boost::asio::io_context io;
+    auto h = araya::spawn(
+        io.get_executor(),
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            auto timer = boost::asio::steady_timer(
+                co_await boost::asio::this_coro::executor, 40ms);
+            co_await timer.async_wait(boost::asio::use_awaitable);
+        }));
+
+    boost::asio::steady_timer check{io, 10ms};
+    check.async_wait([&](boost::system::error_code) {
+        CHECK(h.state() == araya::fiber_state::loading);
+        CHECK(h.error() == nullptr);
+    });
+
+    io.run();
+    CHECK(h.error() == nullptr);
+}
+
 TEST_CASE("cancel is observed cooperatively through this_stop_token") {
     boost::asio::io_context io;
     bool seen = false;

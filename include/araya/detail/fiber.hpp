@@ -16,7 +16,8 @@ namespace detail {
 struct fiber_control {
     fiber_id id;
     std::shared_ptr<fiber_cell> cell;
-    std::exception_ptr error;
+    // The terminal outcome lives in cell->error (published via
+    // fiber_cell::publish_error), shared with the handle.
 
     fiber_handle to_handle() const {
         fiber_handle h;

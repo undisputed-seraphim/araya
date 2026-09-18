@@ -334,6 +334,28 @@ TEST_CASE("plugin failure cleans partial effects and stays inactive") {
                                             "cleanup:broken"});
 }
 
+TEST_CASE("handle error agrees with error_of and survives retirement") {
+    harness h;
+    araya::fiber_handle broken;
+    h.run([&](araya::runtime& rt) -> araya::task<void> {
+        broken = co_await rt.mount(h.spec(&g_broken_desc));
+        co_await rt.wait_idle();
+        CHECK(rt.state_of(broken.id()) == araya::fiber_state::inactive);
+        CHECK(broken.error() == rt.error_of(broken.id()));
+
+        // Retiring the failed fiber erases its record, so error_of
+        // reads null afterwards; the handle's cell keeps the outcome.
+        co_await rt.retire(broken);
+        CHECK(rt.error_of(broken.id()) == nullptr);
+        REQUIRE(broken.error() != nullptr);
+    });
+    try {
+        std::rethrow_exception(broken.error());
+    } catch (std::runtime_error const& e) {
+        CHECK(std::string(e.what()) == "broken apply");
+    }
+}
+
 TEST_CASE("retire is idempotent and tolerates unknown handles") {
     harness h;
     h.run([&](araya::runtime& rt) -> araya::task<void> {
