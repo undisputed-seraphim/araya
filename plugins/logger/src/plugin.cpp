@@ -1,21 +1,35 @@
+#include "araya/config.hpp"
 #include "araya/logger/logger.hpp"
 #include "araya/plugin_context.hpp"
 
 #include <memory>
+#include <optional>
 #include <span>
+#include <string_view>
+
+namespace araya {
+
+// The word-valued log level, parsed through the config customization
+// point: unknown spellings fall back to info, exactly as before.
+template <>
+struct config_parser<logger::log_level> {
+    static std::optional<logger::log_level> parse(std::string_view text) {
+        if (text == "error")
+            return logger::log_level::error;
+        if (text == "warn")
+            return logger::log_level::warn;
+        if (text == "debug")
+            return logger::log_level::debug;
+        return logger::log_level::info;
+    }
+};
+
+}  // namespace araya
 
 namespace araya::logger {
 namespace {
 
-log_level parse_level(std::string const& value) noexcept {
-    if (value == "error")
-        return log_level::error;
-    if (value == "warn")
-        return log_level::warn;
-    if (value == "debug")
-        return log_level::debug;
-    return log_level::info;
-}
+inline constexpr araya::config_key<log_level> level_key{"level"};
 
 // The logger provider: apply() constructs the service from config and
 // binds it under logger_key. No dependencies.
@@ -37,8 +51,8 @@ std::unique_ptr<araya::plugin> make_logger(
     if (auto it = config.find("name"); it != config.end() &&
                                         !it->second.empty())
         plugin->name = it->second;
-    if (auto it = config.find("level"); it != config.end())
-        plugin->level = parse_level(it->second);
+    if (auto level = araya::plugin_config_view(config).try_get(level_key))
+        plugin->level = *level;
     return plugin;
 }
 

@@ -18,6 +18,7 @@
 // traffic and model traffic are comparable. This is the reference load
 // generator for engine profiling; see bench/README.md for the runbook.
 
+#include "araya/config.hpp"
 #include "araya/logger/logger.hpp"
 #include "araya/plugin.hpp"
 #include "araya/plugin_context.hpp"
@@ -342,10 +343,12 @@ struct app_plugin : araya::plugin {
     }
 };
 
+inline constexpr araya::config_key<int> children_key{"children"};
+
 std::unique_ptr<araya::plugin> make_app(plugin_config const& cfg) {
     auto p = std::make_unique<app_plugin>();
-    if (auto it = cfg.find("children"); it != cfg.end())
-        p->children = std::max(0, std::stoi(it->second));
+    if (auto n = araya::plugin_config_view(cfg).try_get(children_key))
+        p->children = std::max(0, *n);
     return p;
 }
 
@@ -566,6 +569,15 @@ void usage(FILE* out) {
         "  --help\n");
 }
 
+template <class T>
+T arg_value(std::string const& text, char const* option) {
+    if (auto parsed = araya::parse_value<T>(text))
+        return *parsed;
+    std::fprintf(stderr, "invalid value '%s' for %s\n", text.c_str(),
+                 option);
+    std::exit(2);
+}
+
 options parse_args(int argc, char** argv) {
     options o;
     for (int i = 1; i < argc; ++i) {
@@ -580,13 +592,17 @@ options parse_args(int argc, char** argv) {
         if (arg == "--workload")
             o.workload = next("--workload");
         else if (arg == "--iterations")
-            o.iterations = std::stoll(next("--iterations"));
+            o.iterations = arg_value<long long>(next("--iterations"),
+                                                "--iterations");
         else if (arg == "--components")
-            o.components = std::stoi(next("--components"));
+            o.components = arg_value<int>(next("--components"),
+                                          "--components");
         else if (arg == "--depth")
-            o.depth = std::max(1, std::stoi(next("--depth")));
+            o.depth = std::max(1, arg_value<int>(next("--depth"),
+                                                 "--depth"));
         else if (arg == "--steady-ms")
-            o.steady_ms = std::stoll(next("--steady-ms"));
+            o.steady_ms = arg_value<long long>(next("--steady-ms"),
+                                               "--steady-ms");
         else if (arg == "--log-level")
             o.log_level = next("--log-level");
         else if (arg == "--help") {
