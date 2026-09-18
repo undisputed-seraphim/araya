@@ -21,6 +21,10 @@ option(ARAYA_BUILD_PLUGINS
     "Build the first-party plugin libraries"
     ON)
 
+option(ARAYA_BUILD_BENCH
+    "Build the profiling bench application (requires plugins)"
+    ON)
+
 add_library(araya STATIC
     src/abi_host.cpp
     src/activation.cpp
@@ -64,6 +68,9 @@ endif()
 if(ARAYA_BUILD_PLUGINS)
     include(thirdparty/quill.cmake)
     add_subdirectory(plugins)
+    if(ARAYA_BUILD_BENCH)
+        add_subdirectory(bench)
+    endif()
 endif()
 
 add_subdirectory(proof)
