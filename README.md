@@ -199,6 +199,18 @@ ctest --test-dir build/asan
 `-Wno-error=stringop-overflow` silences a GCC 14 false positive in the sanitizer-instrumented
 session plugin builds; it is not needed for normal builds.
 
+ThreadSanitizer, same idea (GCC; `-Wno-tsan` silences GCC's "fences not supported with
+tsan" diagnostic, and Clang cannot link the GCC-LTO `libboost_json` this machine ships):
+
+```sh
+cmake -B build/tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -Wno-tsan -Wno-error=tsan" \
+    -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread"
+cmake --build build/tsan
+ctest --test-dir build/tsan
+```
+
 Araya is a static library and provides a CMake package. To install:
 
 ```sh
