@@ -18,6 +18,26 @@ The bridge's load-bearing decision is what counts as observable state
   `-1` retirement flag, `on_apply_completed`/`providers_still_active`
   internals — and any future data-structure optimization.
 
+## The availability extension (tier-2 addition)
+
+The concrete machine gained a value-level availability gate on
+provisions (the engine's `binding.check`, evaluated at provide-time;
+`runtime::signal_availability` promotes it). The model discovers the
+extension's semantic boundary:
+
+- **Promotion only.** The paper's lifecycle is a DAG with no
+  active → loading edge, so making a service unavailable again in place
+  is inexpressible — deactivation is retirement (the existing unload
+  path). `AvailabilityFlip` only moves the binding's provider state
+  `ld → ac`; the paper reads it as L-Finish (the provider's landing
+  completes when availability arrives), which is exactly the
+  lagged-state reading in `Refine.tla` (`AState`). The unavailable
+  provider's own landing (`ApplyComplete` publish) is a stutter under α.
+- `MC.tla` gained the lazy provider L (starts unavailable, promotes):
+  required consumers park, optional consumers proceed with the empty
+  view, promotion cascades through their own steps, and a retired
+  provider cannot promote. 639,122 distinct states, no violation.
+
 **Maintenance rule**: a change touching only stutters requires zero proof
 work (CI re-checks green). A change to observable semantics extends
 `oracle/oracle.hpp` and the TLA+ models in the same commit. This is the

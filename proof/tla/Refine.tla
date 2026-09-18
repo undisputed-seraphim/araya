@@ -33,20 +33,31 @@ EXTENDS ArayaMachine
 ABound == IF bstate = "ac" THEN binding ELSE 0
 ARetired == [n \in Slot |-> reactivate[n] = -1]
 AOk == [n \in Slot |-> ~afailed[n]]
+(* The availability extension reads through a lagged state: an
+   unavailable provider (binding = n, bstate = "ld") has landed
+   concretely but has not yet published from the paper's point of view,
+   so alpha keeps it loading. Its promotion (AvailabilityFlip) is the
+   paper's L-Finish; its landing (ApplyComplete's publish branch) is a
+   stutter. *)
+AState == [n \in Slot |-> IF binding = n /\ bstate = "ld" THEN "ld"
+                           ELSE state[n]]
 
 P == INSTANCE PaperRules WITH
       palive <- alive,
       pcomp <- comp,
-      pstate <- state,
+      pstate <- AState,
       pview <- committed,
       pretired <- ARetired,
       pok <- AOk,
       pbound <- ABound
 
-(* Stuttering: only the alpha-visible variables must hold still. *)
+(* Stuttering: only the alpha-images must hold still. With the
+   availability lag (AState) and the binding reading (ABound), the
+   concrete encodings state/binding/bstate may move while their images
+   do not - e.g. an unavailable provider's landing is a stutter. *)
 StutterAlpha ==
-  UNCHANGED <<alive, comp, state, committed, reactivate, afailed,
-              binding, bstate>>
+  UNCHANGED <<alive, comp, AState, committed, reactivate, afailed,
+              ABound>>
 
 (* The paper's spec read through alpha, as a temporal property of the
    concrete behavior: every concrete step either is a paper rule or

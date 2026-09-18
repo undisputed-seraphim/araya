@@ -23,12 +23,20 @@
                      Theorem 73 shows it always releases)
      consumers[n]  - fibers that published with n in their committed view
      binding       - the db binding under the one shared realm
-     bstate        - the binding's provider state (loading/active/retiring)
+     bstate        - the binding's provider state (loading/active/retiring);
+                     "ld" also encodes an unavailable binding (the
+                     availability extension: the provider landed but has
+                     not yet published from the dependents' point of
+                     view - runtime::binding.check, evaluated at
+                     provide-time, promoted through AvailabilityFlip /
+                     runtime::signal_availability). Promotion only: the
+                     paper's lifecycle DAG has no active -> loading edge,
+                     so deactivation is retirement, not a flip
      wl            - the pending-apply queue, FIFO in spawn order *)
 
 EXTENDS Integers, FiniteSets, Sequences
 
-CONSTANTS Slot, Comp, Provides, ReqDb, FAILS
+CONSTANTS Slot, Comp, Provides, ReqDb, FAILS, AvailInit
 
 MaxOf(a, b) == IF a >= b THEN a ELSE b
 
@@ -176,7 +184,10 @@ ApplyComplete(n) ==
              the same way through the tau premise of target. *)
           /\ state' = [state EXCEPT ![n] = "ac"]
           /\ binding' = (IF Provides[comp[n]] THEN n ELSE binding)
-          /\ bstate' = (IF Provides[comp[n]] THEN "ac" ELSE bstate)
+          /\ bstate' =
+               (IF Provides[comp[n]]
+                THEN (IF AvailInit[comp[n]] THEN "ac" ELSE "ld")
+                ELSE bstate)
           /\ consumers' =
                (IF committed[n] = 0 THEN consumers
                 ELSE [consumers EXCEPT
@@ -264,10 +275,27 @@ Erase(n) ==
   /\ UNCHANGED <<comp, state, committed, err, afailed, reactivate,
                  remaining, binding, bstate, wl>>
 
+(* The availability extension, promotion only: an unavailable provider
+   (binding = n, bstate = "ld" - it landed but has not yet published
+   from the dependents' point of view) becomes available;
+   runtime::signal_availability notifies the dependents, which move
+   through their own steps. Deactivation is NOT expressible in the
+   paper's lifecycle DAG (there is no ac -> ld edge), so making a
+   service unavailable again means unloading the provider - the existing
+   rules. Under alpha the provider lags in "ld" while unavailable, so
+   this step IS the paper's L-Finish. *)
+AvailabilityFlip(n) ==
+  /\ alive[n] /\ state[n] = "ac" /\ reactivate[n] # -1
+  /\ binding = n
+  /\ bstate = "ld"
+  /\ bstate' = "ac"
+  /\ UNCHANGED <<alive, comp, state, committed, err, afailed, reactivate,
+                 remaining, consumers, binding, wl>>
+
 Next ==
   \/ \E n \in Slot : RetireFlag(n) \/ EvaluateStart(n) \/ EvaluateErr(n)
                      \/ ApplyComplete(n) \/ UnloadEval(n) \/ UnloadDivert(n)
-                     \/ Finish(n) \/ Erase(n)
+                     \/ Finish(n) \/ Erase(n) \/ AvailabilityFlip(n)
   \/ \E n \in Slot, c \in Comp : Mount(n, c)
 
 (* Internal steps: driven to completion by the engine once the
