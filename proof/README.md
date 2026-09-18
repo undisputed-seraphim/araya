@@ -82,14 +82,17 @@ simply pins the quiescent interleaving, which is the observable one.
   stutter-vs-observable split is the README's abstraction contract.
 - `tla/Refine.tla`: the α mapping and the refinement — every concrete
   step is a paper rule or a stutter.
-- `tla/MC.tla`/`MC.cfg`: two slots and the five-component pool shared
-  with the C++ universe. TLC checks (a) the refinement, (b) quiescence
+- `tla/MC.tla`/`MC.cfg`: three slots and the five-component pool shared
+  with the C++ universe (the C++ tests drive two slots; the third widens
+  the interleaving net). TLC checks (a) the refinement, (b) quiescence
   as a liveness property (Theorem 73) under weak fairness on the
-  internal actions: 4,383 distinct states, no violation.
+  internal actions: 441,818 distinct states, no violation, ~16 s.
 
-Model checking is opt-in (`ARAYA_ENABLE_PROOF`, needs Java +
-tla2tools.jar on PATH or in `TLA2TOOLS`); run via `ctest -R
-tlc_refinement` or `tla/run-tlc.sh`.
+The model check is wired into ctest unconditionally: it runs whenever
+Java and tla2tools.jar are found (on `TLA2TOOLS` or in the usual
+locations) and is skipped with an INFO message otherwise. Run it via
+`ctest -R tlc_refinement` or `tla/run-tlc.sh`. Coq (tier 3) is never
+wired into the build.
 
 ### What the model check teaches (and what it ruled out)
 
@@ -113,6 +116,30 @@ forced out a precise statement of why the engine is safe:
 4. A diverted fiber completes through its cancelled apply, never through
    Finish (runtime's `finish_unload` runs for active-origin unloads
    alone).
+
+## What the rig does not cover (accepted limitations)
+
+1. **The model is not the code.** TLC proves properties of
+   `ArayaMachine.tla`; the tier-1 conformance suite is the empirical link
+   to `runtime.cpp` (exhaustive bounded sequences plus seeded chaos). If
+   the model drifts from the engine, conformance catches it — which is
+   why the maintenance rule requires model + code changes in the same
+   commit.
+2. **Single-strand scheduling.** The model encodes the engine's one-strand
+   serialization. Real concurrency across strands would add
+   interleavings the model cannot express; such a change must extend the
+   scheduling story in the model first.
+3. **Bounded universe.** TLC checks three slots and five components
+   exhaustively — not every instance. Deeper cascades than three slots
+   fall outside the model check (the Coq tier was the generalization;
+   it is parked). The C++ chaos suites remain the wider net.
+4. **The paper's metatheory is assumed.** The refinement transfers
+   Section 4.3 (Theorem 64/68/70/73/80) as proven in the paper; the
+   model check validates the *refinement*, not the paper's theorems.
+5. **Values are abstracted.** The model reduces the data plane to one key
+   (`example.db`) and abstracts the components' effect functions; what
+   `apply()` computes is outside the calculus, by the paper's own
+   confinement discipline (Definitions 55–56).
 
 ## Tier 3 — Coq (parked: model + invariants proven, refinement deferred)
 

@@ -21,10 +21,6 @@ option(ARAYA_BUILD_PLUGINS
     "Build the first-party plugin libraries"
     ON)
 
-option(ARAYA_ENABLE_PROOF
-    "Run the opt-in TLA+ refinement model check (needs Java + TLA+ tools)"
-    OFF)
-
 add_library(araya STATIC
     src/abi_host.cpp
     src/activation.cpp

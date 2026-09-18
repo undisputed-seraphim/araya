@@ -1,14 +1,16 @@
 ----------------------------- MODULE MC ------------------------------------
-(* The model-checking instance: two fiber names and the component pool
+(* The model-checking instance: three fiber names and the component pool
    shared with the C++ conformance universe (tests/model_test.cpp and
    proof/conformance/conformance_test.cpp): P provider, C required
    consumer, O optional consumer, S self-provider, B broken (raising)
-   consumer. S is confined by the single-source premise of O-Insert
-   (p. 34) exactly as the conformance universe confines it to one slot. *)
+   consumer. The C++ universe drives two slots; the third widens the
+   interleaving net (replacement cascades through three slots).
+   S is confined by the single-source premise of O-Insert (p. 34)
+   exactly as the conformance universe confines it to one slot. *)
 
 EXTENDS Integers, FiniteSets, Sequences
 
-Slot == {1, 2}
+Slot == {1, 2, 3}
 Comp == {"P", "C", "O", "S", "B"}
 
 (* Declaring the variables here binds the instances' variables to these
