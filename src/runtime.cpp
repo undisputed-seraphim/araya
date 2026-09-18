@@ -8,6 +8,7 @@
 
 #include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/co_spawn.hpp>
+#include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/use_awaitable.hpp>
 
@@ -59,6 +60,29 @@ runtime::runtime(boost::asio::any_io_executor ex)
 }
 
 runtime::~runtime() {
+	if (!fibers_.empty()) {
+		// Drive every live fiber through teardown before the maps drop:
+		// the unload cascade runs each activation's effects (listener
+		// removal, provision unbinding), dissolving the bus <-> listener
+		// <-> activation shared_ptr cycles a live fiber leaves behind.
+		// Best effort: requires the io_context to still be alive, and a
+		// plugin that ignores its stop token forever blocks its own
+		// teardown here exactly as it would block a host-side retire.
+		auto unload_all = [this] {
+			for (auto& [id, f] : fibers_) {
+				f->reactivate = -1;
+				begin_unload(*f, false);
+			}
+		};
+		if (strand_.running_in_this_thread()) {
+			unload_all();
+		} else {
+			boost::asio::post(strand_, unload_all);
+			auto& ctx = static_cast<boost::asio::io_context&>(strand_.get_inner_executor().context());
+			while (ctx.poll_one() != 0) {
+			}
+		}
+	}
 	for (auto& [id, f] : fibers_)
 		detail::retire_fiber(f->strand);
 }
