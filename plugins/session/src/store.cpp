@@ -52,8 +52,7 @@ araya::task<void> session::flush() {
 }
 
 session_store::session_store(plugin_context& owner)
-	: owner_(owner)
-	, bus_(owner.activation_ptr() ? owner.activation_ptr()->bus : nullptr) {}
+	: bus_(owner.activation_ptr() ? owner.activation_ptr()->bus : nullptr) {}
 
 // Store teardown (the sessions provider unloading) removes every entered
 // session; each announced session gets its 'session/disposed' event. When

@@ -135,7 +135,6 @@ private:
 
 	void validate_event(session_event const& ev) const;
 
-	plugin_context& owner_;
 	std::shared_ptr<araya::event_bus> bus_;
 	std::map<session_id, std::shared_ptr<session>> store_;
 	std::vector<message_projection> projections_;

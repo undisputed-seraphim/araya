@@ -64,7 +64,8 @@ runtime::~runtime() {
 		// the unload cascade runs each activation's effects (listener
 		// removal, provision unbinding), dissolving the bus <-> listener
 		// <-> activation shared_ptr cycles a live fiber leaves behind.
-		// Best effort: requires the io_context to still be alive, and a
+		// Best effort: requires the io_context to still be alive AND not
+		// concurrently driven by another thread (the drain polls it); a
 		// plugin that ignores its stop token forever blocks its own
 		// teardown here exactly as it would block a host-side retire.
 		//
