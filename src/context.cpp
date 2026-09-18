@@ -15,9 +15,9 @@ context::context(std::shared_ptr<context> parent, bool pass_through_bind)
 	: parent_(std::move(parent))
 	, pass_through_bind_(pass_through_bind) {}
 
-std::shared_ptr<context> context::root() { return std::shared_ptr<context>(new context(nullptr)); }
+std::shared_ptr<context> context::root() { return std::make_shared<context>(nullptr); }
 
-std::shared_ptr<context> context::make_child() { return std::shared_ptr<context>(new context(shared_from_this())); }
+std::shared_ptr<context> context::make_child() { return std::make_shared<context>(shared_from_this()); }
 
 void context::isolate(service_id id, std::string realm) {
 	realms_.insert_or_assign(owned_service_id(id), std::move(realm));

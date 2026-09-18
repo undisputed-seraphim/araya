@@ -286,7 +286,7 @@ std::shared_ptr<context> runtime::entry_scope_for(std::string const& path, compo
 	}
 	auto& ctx = entry_ctxs_[path];
 	if (!ctx || ctx->parent() != base)
-		ctx = std::shared_ptr<context>(new context(base, true));
+		ctx = std::make_shared<context>(base, true);
 	// Apply the desired tags in place: the fiber's activation shares this
 	// context object, so its later provisions land at the updated realms.
 	for (auto const& [name, realm] : spec.isolate)

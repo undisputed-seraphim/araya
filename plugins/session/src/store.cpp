@@ -137,6 +137,9 @@ std::shared_ptr<session> session_store::prepare(session_id id, create_session_op
 	h.origin = options.origin;
 	h.agent_preset = std::move(options.agent_preset);
 
+	// Not make_shared: session's constructor is private, minted only by
+	// its friend session_store, so the single-allocation form cannot
+	// reach it. shared_ptr(new ...) is the canonical idiom here.
 	return std::shared_ptr<session>(new session(
 		std::move(h), options.inherited_event_count, seed_size, std::move(seed), projections_, weak_from_this()));
 }
