@@ -39,12 +39,12 @@ logger_service::logger_service(std::string default_name, log_level level)
 }
 
 named_logger logger_service::root() const {
-	return named_logger(const_cast<logger_service*>(this), backend(default_name_), default_name_);
+	return named_logger(const_cast<logger_service&>(*this), *backend(default_name_), default_name_);
 }
 
 named_logger logger_service::named(std::string name) {
 	auto* backend = get_or_create(name);
-	return named_logger(this, backend, std::move(name));
+	return named_logger(*this, *backend, std::move(name));
 }
 
 quill::Logger* logger_service::get_or_create(std::string const& name) {

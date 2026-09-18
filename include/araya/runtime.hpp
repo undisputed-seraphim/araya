@@ -79,7 +79,7 @@ struct fiber_info {
 // signal_availability) and the read accessors (fiber_count, state_of,
 // error_of, fibers) must already be on the strand or hold the runtime
 // idle; run_on_strand is the escape hatch from anywhere else.
-class runtime {
+class runtime : public std::enable_shared_from_this<runtime> {
 public:
 	explicit runtime(boost::asio::any_io_executor ex);
 
@@ -170,7 +170,7 @@ public:
 	// Deactivation is retirement: marking a provision unavailable throws
 	// (the paper's lifecycle DAG has no active -> loading edge). Runs on
 	// the control strand.
-	void signal_availability(service_id key, context* scope, std::uint64_t provider, bool available);
+	void signal_availability(service_id key, context& scope, std::uint64_t provider, bool available);
 
 private:
 	struct fiber_record;
@@ -197,7 +197,7 @@ private:
 	// Re-evaluates fibers whose declarations include key, provided the
 	// changed binding's scope is visible to them and their realm tag for
 	// the key matches the binding's realm (Algorithm 3).
-	void notify(service_id key, context const* scope, std::string const& realm);
+	void notify(service_id key, context const& scope, std::string const& realm);
 
 	// Moves a fiber's own bindings to a new scope/realm without retiring
 	// the provider (the Section 5.2.1 realm reassignment shortcut).

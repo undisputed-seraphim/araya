@@ -56,7 +56,6 @@ runtime::runtime(boost::asio::any_io_executor ex)
 	, root_context_(context::root())
 	, root_activation_(std::make_shared<activation>(root_context_)) {
 	root_activation_->bus = bus_;
-	root_activation_->owner = this;
 }
 
 runtime::~runtime() {
@@ -68,11 +67,16 @@ runtime::~runtime() {
 		// Best effort: requires the io_context to still be alive, and a
 		// plugin that ignores its stop token forever blocks its own
 		// teardown here exactly as it would block a host-side retire.
+		//
+		// The retire flag is stamped in a separate pass BEFORE the first
+		// begin_unload: the cascade unloads consumers synchronously and
+		// would otherwise raise their (still-default) reactivate flag,
+		// re-activating fibers mid-teardown.
+		for (auto& [id, f] : fibers_)
+			f->reactivate = -1;
 		auto unload_all = [this] {
-			for (auto& [id, f] : fibers_) {
-				f->reactivate = -1;
+			for (auto& [id, f] : fibers_)
 				begin_unload(*f, false);
-			}
 		};
 		if (strand_.running_in_this_thread()) {
 			unload_all();
@@ -87,7 +91,14 @@ runtime::~runtime() {
 		detail::retire_fiber(f->strand);
 }
 
-plugin_context runtime::root_context() { return plugin_context{root_activation_}; }
+plugin_context runtime::root_context() {
+	// The root activation's owner can't be assigned in the constructor
+	// (shared_from_this needs a live control block), so it is attached
+	// here, idempotently, on first use.
+	if (root_activation_->owner.expired())
+		root_activation_->owner = shared_from_this();
+	return plugin_context{root_activation_};
+}
 
 boost::asio::awaitable<fiber_handle> runtime::mount(component_spec spec) {
 	co_await boost::asio::post(strand_, boost::asio::use_awaitable);
@@ -445,7 +456,7 @@ void runtime::start_loading(fiber_record& f) {
 	act->inject_specs = f.inject_keys;
 	act->provide_specs = f.provide;
 	act->parent = f.parent_activation;
-	act->owner = this;
+	act->owner = shared_from_this();
 	for (auto const& dep : f.spec.descriptor->inject) {
 		owned_service_id key{dep.key};
 		if (!dep.metadata.empty())
@@ -544,8 +555,8 @@ bool runtime::providers_still_active(fiber_record const& f) const {
 	return true;
 }
 
-void runtime::signal_availability(service_id key, context* scope, std::uint64_t provider, bool available) {
-	auto* b = scope->lookup_mutable(key);
+void runtime::signal_availability(service_id key, context& scope, std::uint64_t provider, bool available) {
+	auto* b = scope.lookup_mutable(key);
 	if (!b || !b->value)
 		throw std::logic_error("signal_availability: no binding for '" + std::string(key.name) + "'");
 	if (b->provider != provider)
@@ -560,7 +571,7 @@ void runtime::signal_availability(service_id key, context* scope, std::uint64_t 
 	if (b->available)
 		return; // idempotent promotion
 	b->available = true;
-	notify(key, scope, scope->realm_for(key));
+	notify(key, scope, scope.realm_for(key));
 }
 
 void runtime::publish(fiber_record& f) {
@@ -585,7 +596,7 @@ void runtime::publish(fiber_record& f) {
 	}
 	transition_finished();
 	for (auto const& key : f.provide)
-		notify(key, f.spec.parent.get(), f.spec.parent->realm_for(key));
+		notify(key, *f.spec.parent, f.spec.parent->realm_for(key));
 }
 
 void runtime::begin_unload(fiber_record& f, bool reactivate) {
@@ -688,7 +699,7 @@ void runtime::finish_unload(fiber_record& f) {
 	transition_finished();
 	f.done->open();
 	for (auto const& key : f.provide)
-		notify(key, f.spec.parent.get(), f.spec.parent->realm_for(key));
+		notify(key, *f.spec.parent, f.spec.parent->realm_for(key));
 	if (f.reactivate > 0) {
 		f.reactivate = 0;
 		evaluate(f);
@@ -696,14 +707,16 @@ void runtime::finish_unload(fiber_record& f) {
 }
 
 namespace {
-bool scope_on_chain(context const* probe, context const* from) {
-	for (auto const* c = from; c; c = c->parent().get())
-		if (c == probe)
+bool scope_on_chain(context const& probe, context const& from) {
+	// The walk itself stays pointer-shaped: the parent chain is null-
+	// terminated, so the loop cursor is the natural place for a pointer.
+	for (auto const* c = &from; c; c = c->parent().get())
+		if (c == &probe)
 			return true;
 	return false;
 }
 } // namespace
-void runtime::notify(service_id key, context const* scope, std::string const& realm) {
+void runtime::notify(service_id key, context const& scope, std::string const& realm) {
 	auto it = consumers_of_.find(key);
 	if (it == consumers_of_.end())
 		return;
@@ -718,7 +731,7 @@ void runtime::notify(service_id key, context const* scope, std::string const& re
 		// Algorithm 3: only fibers whose declared key resolves to the same
 		// realm, from a scope that can see the changed binding, are
 		// affected.
-		if (!scope_on_chain(scope, consumer.spec.parent.get()))
+		if (!scope_on_chain(scope, *consumer.spec.parent))
 			continue;
 		if (consumer.spec.parent->realm_for(key) != realm)
 			continue;
@@ -754,8 +767,8 @@ void runtime::reassign(
 		for (auto const& key : f.provide) {
 			auto old_it = old_realms.find(key);
 			auto old_realm = old_it != old_realms.end() ? old_it->second : std::string{};
-			notify(key, old_scope.get(), old_realm);
-			notify(key, new_scope.get(), new_scope->realm_for(key));
+			notify(key, *old_scope, old_realm);
+			notify(key, *new_scope, new_scope->realm_for(key));
 		}
 	}
 	f.spec.parent = new_scope;
@@ -860,7 +873,7 @@ void runtime::diagnose(bool scan_cycles) {
 				if (pit == providers_of_.end())
 					continue;
 				for (auto nid : pit->second)
-					if (scope_on_chain(fibers_.find(nid)->second->spec.parent.get(), m->spec.parent.get()))
+					if (scope_on_chain(*fibers_.find(nid)->second->spec.parent, *m->spec.parent))
 						diag_targets_.push_back(nid);
 			}
 			std::sort(diag_targets_.begin(), diag_targets_.end());

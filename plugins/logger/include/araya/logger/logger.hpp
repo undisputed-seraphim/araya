@@ -52,7 +52,7 @@ public:
 private:
 	friend class logger_service;
 
-	named_logger(logger_service* service, quill::Logger* backend, std::string name)
+	named_logger(logger_service& service, quill::Logger& backend, std::string name)
 		: service_(service)
 		, backend_(backend)
 		, name_(std::move(name)) {}
@@ -60,8 +60,10 @@ private:
 	template <class... Args>
 	void log(log_level level, std::string_view fmt, Args&&... args) const;
 
-	logger_service* service_;
-	quill::Logger* backend_;
+	// Both are borrowed, never null: the service owns the handle, quill
+	// owns the backend.
+	logger_service& service_;
+	quill::Logger& backend_;
 	std::string name_;
 };
 
@@ -119,7 +121,7 @@ void named_logger::log(log_level level, std::string_view fmt, Args&&... args) co
 		// into the caller's log statement.
 		text = std::string(fmt) + " <format error>";
 	}
-	service_->submit(backend_, level, std::move(text));
+	service_.submit(&backend_, level, std::move(text));
 }
 
 } // namespace araya::logger

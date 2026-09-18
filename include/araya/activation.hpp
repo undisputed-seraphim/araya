@@ -36,8 +36,10 @@ public:
 	// The activation of the fiber that instantiated this one, if any; the
 	// chain realizes the parent-fiber walk of Algorithm 6.
 	std::shared_ptr<activation> parent;
-	// The runtime this activation belongs to; enables plugin_context::mount.
-	runtime* owner = nullptr;
+	// The runtime this activation belongs to; enables plugin_context::mount
+	// and set_available. Weak to keep the activation <-> runtime graph
+	// cycle-free; lock() at use (a null lock means the runtime is gone).
+	std::weak_ptr<runtime> owner;
 
 	fiber_state state = fiber_state::active;
 	bool spec_declared = false;

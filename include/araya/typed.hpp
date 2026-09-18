@@ -111,60 +111,61 @@ template <typename Caps>
 class typed_context {
 public:
 	explicit typed_context(plugin_context& ctx)
-		: ctx_(&ctx) {}
+		: ctx_(ctx) {}
 
-	plugin_context& erased() noexcept { return *ctx_; }
+	plugin_context& erased() noexcept { return ctx_; }
 
 	template <auto K>
 		requires Caps::template
 	contains<K> auto require() {
 		auto const& key = *K;
-		auto b = ctx_->find_binding(key.id);
+		auto b = ctx_.find_binding(key.id);
 		if (!b)
 			throw resolution_error(key.id);
 		using value_type = typename std::remove_pointer_t<decltype(K)>::value_type;
 		return tagged_lease<value_type, committed_tag>(service_lease<value_type>(
-			std::static_pointer_cast<value_type>(b->value), b->provider, ctx_->merged_metadata(key.id)));
+			std::static_pointer_cast<value_type>(b->value), b->provider, ctx_.merged_metadata(key.id)));
 	}
 
 	template <auto K>
 		requires Caps::template
 	contains<K> auto find() {
 		auto const& key = *K;
-		auto b = ctx_->find_binding(key.id);
+		auto b = ctx_.find_binding(key.id);
 		if (!b)
 			return std::optional<tagged_lease<typename std::remove_pointer_t<decltype(K)>::value_type, committed_tag>>{
 				std::nullopt};
 		using value_type = typename std::remove_pointer_t<decltype(K)>::value_type;
 		return std::optional<tagged_lease<value_type, committed_tag>>(service_lease<value_type>(
-			std::static_pointer_cast<value_type>(b->value), b->provider, ctx_->merged_metadata(key.id)));
+			std::static_pointer_cast<value_type>(b->value), b->provider, ctx_.merged_metadata(key.id)));
 	}
 
 	template <auto K>
 		requires Caps::template
 	contains<K>&& commutative_key<typename std::remove_pointer_t<decltype(K)>::value_type>
 		registration provide(std::shared_ptr<typename std::remove_pointer_t<decltype(K)>::value_type> service) {
-		return ctx_->provide(*K, std::move(service));
+		return ctx_.provide(*K, std::move(service));
 	}
 
 	template <reversible_effect Setup>
 	registration effect(Setup&& setup) {
-		return ctx_->effect(std::forward<Setup>(setup));
+		return ctx_.effect(std::forward<Setup>(setup));
 	}
 
 	template <class Message, dispatch_mode Mode, class Fn>
 	registration on(event_key<Message, Mode> const& key, Fn&& fn) {
-		return ctx_->on(key, std::forward<Fn>(fn));
+		return ctx_.on(key, std::forward<Fn>(fn));
 	}
 
 	// Child instantiation needs no declaration: the paper's instantiating
 	// iteration is the one registry effect every context may take.
-	boost::asio::awaitable<fiber_handle> mount(component_spec spec) { return ctx_->mount(std::move(spec)); }
+	boost::asio::awaitable<fiber_handle> mount(component_spec spec) { return ctx_.mount(std::move(spec)); }
 
-	std::stop_token stop_token() const noexcept { return ctx_->stop_token(); }
+	std::stop_token stop_token() const noexcept { return ctx_.stop_token(); }
 
 private:
-	plugin_context* ctx_;
+	// A view, never null: the erased context this facade fronts.
+	plugin_context& ctx_;
 };
 
 // ---------------------------------------------------------------------------
