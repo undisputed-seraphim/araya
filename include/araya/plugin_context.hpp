@@ -39,6 +39,19 @@ public:
         return act_->scope;
     }
 
+    // The runtime's root context: the top of this activation's scope
+    // chain. Every scope in a runtime descends from the root, so the walk
+    // is the definition, not a lookup. Returns null for a default
+    // plugin_context.
+    std::shared_ptr<context> root() const noexcept {
+        auto s = act_ ? act_->scope : nullptr;
+        if (!s)
+            return nullptr;
+        while (s->parent())
+            s = s->parent();
+        return s;
+    }
+
     std::stop_token stop_token() const noexcept {
         return act_ ? act_->stop_token() : std::stop_token{};
     }

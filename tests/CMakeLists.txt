@@ -11,6 +11,7 @@ add_executable(araya_tests
     effects_test.cpp
     events_test.cpp
     invariants_test.cpp
+    introspection_test.cpp
     manager_test.cpp
     model_test.cpp
     module_loader_test.cpp
