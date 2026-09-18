@@ -1,5 +1,6 @@
 #pragma once
 
+#include "araya/context.hpp"
 #include "araya/service.hpp"
 #include "araya/task.hpp"
 
@@ -40,6 +41,12 @@ struct listener_options {
     // Remove the listener just before its first invocation, so it runs
     // at most once.
     bool once = false;
+    // Deliver regardless of the dispatching scope (see scope below).
+    bool global = false;
+    // When set, the listener delivers only to dispatches carrying a scope
+    // with the same realm label for the event key (the Section 5.2.1
+    // realm machinery). Dispatches without a scope reach every listener.
+    context const* scope = nullptr;
 };
 
 template <class Message, dispatch_mode Mode>
@@ -65,6 +72,7 @@ struct waterfall_slot {
     std::function<boost::asio::awaitable<Message>(
         Message const&, waterfall_continuation<Message>)>
         fn;
+    listener_options opts;
 };
 
 template <class Message>
@@ -72,6 +80,7 @@ struct notify_slot {
     std::uint64_t owner = 0;
     std::uint64_t token = 0;
     std::function<boost::asio::awaitable<void>(Message const&)> fn;
+    listener_options opts;
 };
 
 // A bail listener returns true to stop the chain (no further listeners
@@ -81,6 +90,7 @@ struct bail_slot {
     std::uint64_t owner = 0;
     std::uint64_t token = 0;
     std::function<boost::asio::awaitable<bool>(Message const&)> fn;
+    listener_options opts;
 };
 
 template <class Message, class Fn>
@@ -283,11 +293,25 @@ public:
         raw_ = std::move(raw_updated);
     }
 
+    // Whether a listener delivers a dispatch: without a dispatching scope
+    // every listener runs; with one, scoped listeners run only when the
+    // realm labels for the event key match (Section 5.2.1), unless the
+    // listener is marked global.
+    bool deliver(slot_t const& slot, service_id id,
+                 context const* scope) const noexcept {
+        if (!scope || slot.opts.global || !slot.opts.scope)
+            return true;
+        return scope->realm_for(id) == slot.opts.scope->realm_for(id);
+    }
+
     void dispatch_emit(
-        Message msg, boost::asio::any_io_executor strand,
+        Message msg, boost::asio::any_io_executor strand, service_id id,
+        context const* scope,
         std::shared_ptr<std::move_only_function<void(std::exception_ptr)>> sink) {
         auto snapshot = listeners_;
         for (auto const& slot : *snapshot) {
+            if (!deliver(slot, id, scope))
+                continue;
             Message m = msg;
             auto t = invoke_owned(slot.fn, std::move(m));
             boost::asio::co_spawn(
@@ -311,14 +335,23 @@ public:
     }
 
     boost::asio::awaitable<void> dispatch_parallel(
-        Message const& msg, boost::asio::any_io_executor strand) {
+        Message const& msg, boost::asio::any_io_executor strand,
+        service_id id, context const* scope) {
         auto snapshot = listeners_;
-        if (snapshot->empty())
-            co_return;
         auto raw_snapshot = raw_;
-        auto state = std::make_shared<parallel_state>(
-            snapshot->size() + raw_snapshot->size(), strand);
+        if (snapshot->empty() && raw_snapshot->empty())
+            co_return;
+        std::size_t total = 0;
+        for (auto const& slot : *snapshot)
+            if (deliver(slot, id, scope))
+                ++total;
+        total += raw_snapshot->size();
+        if (total == 0)
+            co_return;
+        auto state = std::make_shared<parallel_state>(total, strand);
         for (auto const& slot : *snapshot) {
+            if (!deliver(slot, id, scope))
+                continue;
             auto t = slot.fn(msg);
             boost::asio::co_spawn(strand, std::move(t),
                                   [state](std::exception_ptr ep) {
@@ -337,25 +370,46 @@ public:
             std::rethrow_exception(state->first);
     }
 
-    boost::asio::awaitable<void> dispatch_serial(Message const& msg) {
+    boost::asio::awaitable<void> dispatch_serial(Message const& msg,
+                                                 service_id id,
+                                                 context const* scope) {
         auto snapshot = listeners_;
-        for (auto const& slot : *snapshot)
+        for (auto const& slot : *snapshot) {
+            if (!deliver(slot, id, scope))
+                continue;
             co_await slot.fn(msg);
+        }
         auto raw_snapshot = raw_;
         for (auto const& slot : *raw_snapshot)
             co_await slot.fn(&msg);
     }
 
-    boost::asio::awaitable<Message> dispatch_waterfall(Message const& msg) {
-        auto snapshot = listeners_;
-        co_return co_await waterfall_continuation<Message>{snapshot, 0}(msg);
+    boost::asio::awaitable<Message> dispatch_waterfall(Message const& msg,
+                                                       service_id id,
+                                                       context const* scope) {
+        if (!scope) {
+            auto snapshot = listeners_;
+            co_return co_await waterfall_continuation<Message>{snapshot,
+                                                               0}(msg);
+        }
+        // Scope filtering: compose the chain from the delivering slots.
+        auto filtered = std::make_shared<std::vector<slot_t>>();
+        for (auto const& slot : *listeners_)
+            if (deliver(slot, id, scope))
+                filtered->push_back(slot);
+        co_return co_await waterfall_continuation<Message>{filtered, 0}(msg);
     }
 
-    boost::asio::awaitable<bool> dispatch_bail(Message const& msg) {
+    boost::asio::awaitable<bool> dispatch_bail(Message const& msg,
+                                               service_id id,
+                                               context const* scope) {
         auto snapshot = listeners_;
-        for (auto const& slot : *snapshot)
+        for (auto const& slot : *snapshot) {
+            if (!deliver(slot, id, scope))
+                continue;
             if (co_await slot.fn(msg))
                 co_return true;
+        }
         co_return false;
     }
 
@@ -426,7 +480,8 @@ public:
                 return listener(std::forward<Args>(args)...);
             };
         }
-        impl->add(slot_t{owner, token, std::move(listener)}, opts.prepend);
+        impl->add(slot_t{owner, token, std::move(listener), opts},
+                  opts.prepend);
         return token;
     }
 
@@ -441,56 +496,56 @@ public:
 
     template <class Message>
     void dispatch(event_key<Message, dispatch_mode::emit> const& key,
-                  Message msg) {
+                  Message msg, context const* scope = nullptr) {
         ensure_on_strand();
         auto* impl = typed_entry<Message, dispatch_mode::emit>(key.id);
         if (!impl)
             return;
-        impl->dispatch_emit(std::move(msg), strand_, sink_);
+        impl->dispatch_emit(std::move(msg), strand_, key.id, scope, sink_);
     }
 
     template <class Message>
     boost::asio::awaitable<void> dispatch(
         event_key<Message, dispatch_mode::parallel> const& key,
-        Message const& msg) {
+        Message const& msg, context const* scope = nullptr) {
         ensure_on_strand();
         auto* impl = typed_entry<Message, dispatch_mode::parallel>(key.id);
         if (!impl)
             co_return;
-        co_await impl->dispatch_parallel(msg, strand_);
+        co_await impl->dispatch_parallel(msg, strand_, key.id, scope);
     }
 
     template <class Message>
     boost::asio::awaitable<void> dispatch(
         event_key<Message, dispatch_mode::serial> const& key,
-        Message const& msg) {
+        Message const& msg, context const* scope = nullptr) {
         ensure_on_strand();
         auto* impl = typed_entry<Message, dispatch_mode::serial>(key.id);
         if (!impl)
             co_return;
-        co_await impl->dispatch_serial(msg);
+        co_await impl->dispatch_serial(msg, key.id, scope);
     }
 
     template <class Message>
     boost::asio::awaitable<Message> dispatch(
         event_key<Message, dispatch_mode::waterfall> const& key,
-        Message const& msg) {
+        Message const& msg, context const* scope = nullptr) {
         ensure_on_strand();
         auto* impl = typed_entry<Message, dispatch_mode::waterfall>(key.id);
         if (!impl)
             co_return msg;
-        co_return co_await impl->dispatch_waterfall(msg);
+        co_return co_await impl->dispatch_waterfall(msg, key.id, scope);
     }
 
     template <class Message>
     boost::asio::awaitable<bool> dispatch(
         event_key<Message, dispatch_mode::bail> const& key,
-        Message const& msg) {
+        Message const& msg, context const* scope = nullptr) {
         ensure_on_strand();
         auto* impl = typed_entry<Message, dispatch_mode::bail>(key.id);
         if (!impl)
             co_return false;
-        co_return co_await impl->dispatch_bail(msg);
+        co_return co_await impl->dispatch_bail(msg, key.id, scope);
     }
 
 private:

@@ -600,3 +600,171 @@ TEST_CASE("prepend listeners run ahead of existing ones") {
     fx.io.run();
     CHECK(order == std::vector<std::string>{"second", "first"});
 }
+
+TEST_CASE("scoped listeners deliver only to matching-scope dispatches") {
+    fixture fx;
+    auto iso = fx.root->make_child();
+    iso->isolate(serial_key.id, "r");
+    std::vector<std::string> got;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(serial_key, [&](std::string const& m) {
+                got.push_back("scoped:" + m);
+            }, araya::listener_options{.scope = iso.get()});
+
+            // Root scope has no realm label for the key: mismatch.
+            co_await fx.bus->dispatch(serial_key, std::string("a"),
+                                      fx.root.get());
+            // The isolated scope carries the "r" label: match.
+            co_await fx.bus->dispatch(serial_key, std::string("b"),
+                                      iso.get());
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(got == std::vector<std::string>{"scoped:b"});
+}
+
+TEST_CASE("scope-less dispatch broadcasts to scoped and unscoped listeners") {
+    fixture fx;
+    auto iso = fx.root->make_child();
+    iso->isolate(serial_key.id, "r");
+    std::vector<std::string> got;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(serial_key, [&](std::string const& m) {
+                got.push_back("unscoped:" + m);
+            });
+            fx.ctx.on(serial_key, [&](std::string const& m) {
+                got.push_back("scoped:" + m);
+            }, araya::listener_options{.scope = iso.get()});
+
+            co_await fx.bus->dispatch(serial_key, std::string("x"));
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(got == std::vector<std::string>{"unscoped:x", "scoped:x"});
+}
+
+TEST_CASE("unscoped listeners deliver even to foreign scopes") {
+    fixture fx;
+    auto iso = fx.root->make_child();
+    iso->isolate(serial_key.id, "r");
+    std::vector<std::string> got;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(serial_key, [&](std::string const& m) {
+                got.push_back("unscoped:" + m);
+            });
+
+            // The dispatching scope matches nothing the listener declared;
+            // an unscoped listener still receives.
+            co_await fx.bus->dispatch(serial_key, std::string("x"),
+                                      iso.get());
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(got == std::vector<std::string>{"unscoped:x"});
+}
+
+TEST_CASE("global scoped listeners ignore the dispatch scope") {
+    fixture fx;
+    auto iso = fx.root->make_child();
+    iso->isolate(serial_key.id, "r");
+    std::vector<std::string> got;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(serial_key, [&](std::string const& m) {
+                got.push_back("global:" + m);
+            }, araya::listener_options{.global = true, .scope = iso.get()});
+
+            co_await fx.bus->dispatch(serial_key, std::string("x"),
+                                      fx.root.get());
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(got == std::vector<std::string>{"global:x"});
+}
+
+TEST_CASE("realm labels are inherited by descendant scopes") {
+    fixture fx;
+    auto iso = fx.root->make_child();
+    iso->isolate(serial_key.id, "r");
+    auto child = iso->make_child();
+    std::vector<std::string> got;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(serial_key, [&](std::string const& m) {
+                got.push_back("scoped:" + m);
+            }, araya::listener_options{.scope = iso.get()});
+
+            // The child has no own tag; realm_for walks the chain to "r".
+            co_await fx.bus->dispatch(serial_key, std::string("x"),
+                                      child.get());
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(got == std::vector<std::string>{"scoped:x"});
+}
+
+TEST_CASE("scopes sharing a realm label join") {
+    fixture fx;
+    auto a = fx.root->make_child();
+    auto b = fx.root->make_child();
+    a->isolate(serial_key.id, "shared");
+    b->isolate(serial_key.id, "shared");
+    std::vector<std::string> got;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(serial_key, [&](std::string const& m) {
+                got.push_back("joined:" + m);
+            }, araya::listener_options{.scope = a.get()});
+
+            co_await fx.bus->dispatch(serial_key, std::string("x"),
+                                      b.get());
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(got == std::vector<std::string>{"joined:x"});
+}
+
+TEST_CASE("scope filtering applies to parallel dispatch") {
+    fixture fx;
+    auto iso = fx.root->make_child();
+    iso->isolate(parallel_key.id, "r");
+    std::vector<std::string> got;
+
+    boost::asio::co_spawn(
+        fx.strand,
+        araya_test::heap_coroutine([&]() -> araya::task<void> {
+            fx.ctx.on(parallel_key, [&](std::string const& m) {
+                got.push_back("scoped:" + m);
+            }, araya::listener_options{.scope = iso.get()});
+
+            co_await fx.bus->dispatch(parallel_key, std::string("a"),
+                                      fx.root.get());
+            co_await fx.bus->dispatch(parallel_key, std::string("b"),
+                                      iso.get());
+        }),
+        boost::asio::detached);
+
+    fx.io.run();
+    CHECK(got == std::vector<std::string>{"scoped:b"});
+}
