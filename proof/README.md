@@ -114,9 +114,40 @@ forced out a precise statement of why the engine is safe:
    Finish (runtime's `finish_unload` runs for active-origin unloads
    alone).
 
-## Tier 3 — deferred
+## Tier 3 — Coq (parked: model + invariants proven, refinement deferred)
 
-A Coq/Lean simulation proof of the α mapping would turn the bridge into a
-theorem (paper theorems transfer to a model of the engine). Recorded as
-"fun later": it needs a Coq-capable contributor, and tiers 1+2 are the
-sustainable rig for an evolving core.
+A Coq development under `coq/` (commit `ccf9e8a`) generalizes the TLA+
+check from its two-slot universe to *all* instances:
+
+- `coq/Machine.v` — the concrete machine as a faithful Coq transcription
+  of `tla/ArayaMachine.tla` (one inductive step per action, each citing
+  its paper rule and `src/runtime.cpp` function); components are a type
+  parameter, slots an unbounded nat.
+- `coq/PaperCalculus.v` — the paper's calculus at the abstraction level:
+  the nine rules, the Failure extension, Definition 53's target
+  (bottom ≠ empty), Definition 54's relied, eq. (49) quiet, Definition 63
+  well-formedness.
+- `coq/ConcreteInvariants.v` — the 21-clause `Good` invariant (the
+  optimization-guard contracts: well-formedness, the guard counter
+  implementing reliedₙ, the consumers index, worklist bookkeeping,
+  retirement stickiness, the failure outcome, the finite-name universe)
+  with preservation proofs for all 13 actions, `init_good`,
+  `good_step`, `reach_good`, and per-clause projections prepared for the
+  refinement proof.
+
+Status: `Machine.v` and `PaperCalculus.v` check in under a second.
+`ConcreteInvariants.v`'s proofs are written in full, but the clause
+tactic (`eauto 8`) makes the check impractically slow (~25 min) — the
+file is committed as-is and parked. Not yet written: `Refinement.v`
+(the α simulation that transfers the paper's Section 4.3 metatheory to
+the engine for all instances) and `Progress.v` (Theorem 73's
+no-deadlock). The debugging that remains is tactical, not mathematical:
+a shape-dispatched solver (eauto 4 + explicit clause matching) is the
+known fix.
+
+Why parked: for the intended use — guarding engine optimizations — the
+tier-2 model check is exhaustive on the shared universe and finishes in
+~1.5 s, and tiers 1+2 already hold the engine to the paper. Coq's value
+(unbounded generalization, machine-checked transfer of the paper's
+theorems) is real but not needed at this stage; it is a fun exercise for
+later.
