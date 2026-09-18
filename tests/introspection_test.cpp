@@ -131,3 +131,96 @@ TEST_CASE("plugin_context::root reaches the runtime root from any scope") {
     REQUIRE(g_seen_root->parent() == nullptr);
 }
 
+TEST_CASE("fibers() snapshots ids, states, declarations, and views") {
+    boost::asio::io_context io;
+    auto rt = std::make_shared<araya::runtime>(io.get_executor());
+
+    araya::fiber_handle p, c, b;
+    run(io, [&]() -> araya::task<void> {
+        p = co_await rt->mount(araya::component_spec{
+            shared_desc(g_desc_P), {}, nullptr, "p-instance", {}});
+        c = co_await rt->mount(araya::component_spec{
+            shared_desc(g_desc_C), {}, nullptr, "", {}});
+        b = co_await rt->mount(araya::component_spec{
+            shared_desc(g_desc_B), {}, nullptr, "b-instance", {}});
+        co_await rt->wait_idle();
+    });
+
+    auto snap = rt->fibers();
+    REQUIRE(snap.size() == 3);
+    REQUIRE(p.id() != c.id());
+    REQUIRE(c.id() != b.id());
+    REQUIRE(p.id() != b.id());
+
+    auto pinfo = [&](araya::fiber_id id) -> araya::fiber_info const* {
+        for (auto const& f : snap)
+            if (f.id == id)
+                return &f;
+        return nullptr;
+    };
+
+    auto const* pi = pinfo(p.id());
+    auto const* ci = pinfo(c.id());
+    auto const* bi = pinfo(b.id());
+    REQUIRE(pi != nullptr);
+    REQUIRE(ci != nullptr);
+    REQUIRE(bi != nullptr);
+
+    // The provider: active, declares the provision, instance name kept.
+    CHECK(pi->descriptor == "P");
+    CHECK(pi->name == "p-instance");
+    CHECK(pi->state == araya::fiber_state::active);
+    CHECK(pi->error == nullptr);
+    CHECK(pi->parent == 0);
+    CHECK(pi->scope == rt->root());
+    CHECK(pi->inject.empty());
+    REQUIRE(pi->provide.size() == 1);
+    CHECK(pi->provide[0] == araya::owned_service_id{db_key.id});
+
+    // The consumer: its committed view names the provider.
+    CHECK(ci->descriptor == "C");
+    CHECK(ci->state == araya::fiber_state::active);
+    REQUIRE(ci->inject.size() == 1);
+    CHECK(ci->inject[0] == araya::owned_service_id{db_key.id});
+    CHECK(ci->provide.empty());
+    REQUIRE(ci->committed.size() == 1);
+    CHECK(ci->committed.begin()->first ==
+          araya::owned_service_id{db_key.id});
+    CHECK(ci->committed.begin()->second == p.id());
+
+    // The broken component: failed with an error, still enumerated.
+    CHECK(bi->descriptor == "B");
+    CHECK(bi->name == "b-instance");
+    CHECK(bi->state == araya::fiber_state::inactive);
+    CHECK(bi->error != nullptr);
+
+    // Retiring a fiber removes it from the snapshot.
+    run(io, [&]() -> araya::task<void> {
+        co_await rt->retire(b);
+        co_await rt->wait_idle();
+    });
+    snap = rt->fibers();
+    REQUIRE(snap.size() == 2);
+    CHECK(pinfo(b.id()) == nullptr);
+}
+
+TEST_CASE("fibers_async returns the snapshot from off-strand callers") {
+    boost::asio::io_context io;
+    auto rt = std::make_shared<araya::runtime>(io.get_executor());
+
+    run(io, [&]() -> araya::task<void> {
+        co_await rt->mount(araya::component_spec{
+            shared_desc(g_desc_P), {}, nullptr, "p", {}});
+        co_await rt->wait_idle();
+    });
+
+    std::vector<araya::fiber_info> seen;
+    run(io, [&]() -> araya::task<void> {
+        seen = co_await rt->fibers_async();
+    });
+
+    REQUIRE(seen.size() == 1);
+    CHECK(seen.size() == rt->fibers().size());
+    if (!seen.empty())
+        CHECK(seen[0].descriptor == "P");
+}

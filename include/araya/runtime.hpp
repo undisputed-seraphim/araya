@@ -42,6 +42,29 @@ struct diagnostic {
     std::vector<fiber_id> fibers;
 };
 
+// A read-only snapshot of one mounted fiber, produced by runtime::fibers()
+// and fibers_async(). Diagnostics-grade: no API-stability promise, and
+// safe to read while the runtime is idle or on the control strand (the
+// same contract as state_of()).
+struct fiber_info {
+    fiber_id id = 0;
+    // The component_spec's instance name (may be empty).
+    std::string name;
+    // The plugin descriptor's name.
+    std::string descriptor;
+    fiber_state state = fiber_state::inactive;
+    std::exception_ptr error;
+    // The instantiating fiber, or 0 for an orchestrator-level insertion.
+    std::uint64_t parent = 0;
+    std::shared_ptr<context> scope;
+    // Declared dependency and provision keys (immutable, Lemma 59(5)).
+    std::vector<owned_service_id> inject;
+    std::vector<owned_service_id> provide;
+    // The committed view: declared key -> providing fiber id.
+    std::map<owned_service_id, std::uint64_t, transparent_id_less>
+        committed;
+};
+
 class runtime {
 public:
     explicit runtime(boost::asio::any_io_executor ex);
@@ -72,6 +95,14 @@ public:
     fiber_state state_of(fiber_id id) const noexcept;
 
     std::exception_ptr error_of(fiber_id id) const noexcept;
+
+    // Read-only snapshot of every mounted fiber. Call on the control
+    // strand or while the runtime is idle.
+    std::vector<fiber_info> fibers() const;
+
+    // Posts the snapshot to the control strand and returns it; safe to
+    // call from any coroutine.
+    boost::asio::awaitable<std::vector<fiber_info>> fibers_async() const;
 
     // Registers the sink the declarative-graph diagnostics are reported to.
     // The sink runs on the control strand when a conflict or dependency

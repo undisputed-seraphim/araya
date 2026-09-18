@@ -325,6 +325,33 @@ std::exception_ptr runtime::error_of(fiber_id id) const noexcept {
     return it != fibers_.end() ? it->second->error : nullptr;
 }
 
+std::vector<fiber_info> runtime::fibers() const {
+    std::vector<fiber_info> out;
+    out.reserve(fibers_.size());
+    for (auto const& [id, f] : fibers_) {
+        fiber_info info;
+        info.id = id;
+        info.name = f->spec.name;
+        if (f->spec.descriptor)
+            info.descriptor = std::string(f->spec.descriptor->name);
+        info.state = f->state;
+        info.error = f->error;
+        info.parent = f->parent_fiber;
+        info.scope = f->spec.parent;
+        info.inject = f->inject_keys;
+        info.provide = f->provide;
+        for (auto const& [k, p] : f->committed)
+            info.committed.emplace(k, p);
+        out.push_back(std::move(info));
+    }
+    return out;
+}
+
+boost::asio::awaitable<std::vector<fiber_info>> runtime::fibers_async() const {
+    co_await boost::asio::post(strand_, boost::asio::use_awaitable);
+    co_return fibers();
+}
+
 void runtime::on_diagnostic(
     std::move_only_function<void(diagnostic const&)> sink) {
     diagnostic_sink_ = std::move(sink);
