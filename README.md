@@ -230,7 +230,7 @@ and doubles as the profiling benchmark.
 ## The console demo
 
 `apps/console` is a small interactive host that ties the plugins into something runnable:
-the `araya_console` binary mounts the three first-party plugins plus four demo components
+the `araya_console` binary mounts the first-party plugins plus the demo components
 (the console, a beacon/watcher availability pair, and failure-injection bombs) and drives
 them through an interactive shell. Every command goes through the public engine surface, so
 every outage a command reports is the availability machinery working, not a special path.
@@ -253,8 +253,13 @@ Things to watch in the scripted tour:
 - `session new/append/show` drives the event log and prints the folded message surface;
   the live feed on the right shows the `session/created`, `session/event`, and
   `session/disposed` firehose.
+- `session save` flushes through the `session/flush` durability barrier (the persistence
+  plugin drains and fsyncs), and `session load`/`load-all` restore sessions from disk
+  through the same `prepare`/`enter` path the engine models. Sessions land as readable
+  JSONL under `./araya-sessions/` - `cat` one while you work.
 
-The demo is registered as the `console_demo` ctest, so it runs with the rest of the suite.
+The demo and the save/restart/load cycle are registered as the `console_demo` and
+`console_restart` ctests, so they run with the rest of the suite.
 
 ## License
 

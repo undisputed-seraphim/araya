@@ -2,6 +2,7 @@
 
 #include "araya/fiber_handle.hpp"
 #include "araya/logger/logger.hpp"
+#include "araya/persistence/persistence.hpp"
 #include "araya/runtime.hpp"
 #include "araya/session/events.hpp"
 #include "araya/session/store.hpp"
@@ -98,6 +99,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::timer::plugin_descriptor();
 	if (name == "session")
 		return &araya::session::plugin_descriptor();
+	if (name == "persistence")
+		return &araya::persistence::plugin_descriptor();
 	if (name == "console")
 		return &araya::console_demo::console_descriptor();
 	if (name == "beacon")
@@ -110,6 +113,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 araya::plugin_config default_config(std::string_view name) {
 	if (name == "logger")
 		return {{"name", "araya"}, {"level", "info"}};
+	if (name == "persistence")
+		return {{"root", "araya-sessions"}};
 	return {};
 }
 
@@ -402,6 +407,88 @@ araya::task<void> cmd_session_close(app& a, std::optional<std::string> id_arg) {
 	}
 }
 
+araya::task<void> cmd_session_save(app& a) {
+	try {
+		std::shared_ptr<araya::session::session> s;
+		co_await a.rt->run_on_strand([&] {
+			if (!a.current) {
+				out("session: no current session");
+				return;
+			}
+			auto root_ctx = a.rt->root_context();
+			auto store = root_ctx.require<session_store>(sessions_key);
+			s = store->get(*a.current);
+			if (!s) {
+				out("session: current session was disposed");
+				a.current.reset();
+			}
+		});
+		if (!s)
+			co_return;
+		// The durability barrier: the persistence plugin's flush listener
+		// drains and fsyncs, and this await completes only after it has.
+		co_await boost::asio::co_spawn(a.rt->bus()->executor(), s->flush(), boost::asio::use_awaitable);
+		out("session: saved " + s->id().value);
+	} catch (std::exception const& e) {
+		out(std::string("session: ") + e.what());
+	}
+}
+
+araya::task<void> cmd_session_load(app& a, std::string_view id, bool all) {
+	try {
+		co_await a.rt->run_on_strand([&] {
+			auto root_ctx = a.rt->root_context();
+			auto store = root_ctx.require<session_store>(sessions_key);
+			auto backend =
+				root_ctx.require<araya::persistence::session_persistence>(araya::persistence::persistence_key);
+
+			std::vector<araya::session::session_id> targets;
+			if (all) {
+				targets = backend->list();
+			} else {
+				targets.push_back(araya::session::session_id{std::string(id)});
+			}
+			if (targets.empty()) {
+				out("session: nothing on disk");
+				return;
+			}
+			for (auto& target : targets) {
+				if (store->get(target)) {
+					out("session: " + target.value + " already live");
+					continue;
+				}
+				auto stored = backend->read(target);
+				if (!stored) {
+					out("session: " + target.value + " not on disk");
+					continue;
+				}
+				auto const event_count = stored->events.size();
+				auto s = store->prepare(
+					target,
+					araya::session::create_session_options{
+						.seed = std::move(stored->events),
+						.inherited_event_count = stored->events.size(),
+						.cwd = stored->header.cwd,
+						.parent_session = stored->header.parent_session,
+						.created_at = stored->header.created_at,
+						.is_seeded = false,
+						.origin = stored->header.origin,
+						.delegation_depth = stored->header.delegation_depth,
+						.agent_preset = stored->header.agent_preset,
+					});
+				store->enter(s);
+				store->announce(*s);
+				a.known.push_back(target);
+				if (!a.current)
+					a.current = target;
+				out("session: restored " + target.value + " (" + std::to_string(event_count) + " events)");
+			}
+		});
+	} catch (std::exception const& e) {
+		out(std::string("session: ") + e.what());
+	}
+}
+
 araya::task<void> cmd_timer_in(app& a, double seconds, std::string_view text) {
 	try {
 		co_await a.rt->run_on_strand([&] {
@@ -503,7 +590,7 @@ araya::task<void> cmd_sleep(app& a, std::int64_t ms) {
 
 constexpr std::string_view g_help = R"(commands:
   ls                      print the fiber tree
-  load <component>        add logger | timer | session | console | beacon | watcher
+  load <component>        add logger | timer | session | persistence | console | beacon | watcher
   unload <component>      retire it (watch the cascade)
   reload <component>      retire and remount it
   fail <component>        swap in a crashing provider (logger | timer | session)
@@ -511,9 +598,12 @@ constexpr std::string_view g_help = R"(commands:
   avail wait | ready      park the watcher on the beacon, then promote it
   session new [id]        create a session (current = it)
   session switch <id>     make another session current
-  session list            the sessions this console created
+  session list            the sessions this console created or restored
   session append <text>   append a user message to the current session
   session show            print the folded message surface
+  session save            flush the current session through the persistence barrier
+  session load <id>       restore a persisted session from disk
+  session load-all        restore every session found on disk
   session close [id]      dispose a session
   timer in <sec> <text>   fire a one-shot reminder
   timer every <sec> <text>  fire a repeating reminder
@@ -603,12 +693,24 @@ araya::task<void> exec_line(app& a, std::string line) {
 			co_await cmd_session_append(a, text);
 		} else if (sub == "show") {
 			co_await cmd_session_show(a);
+		} else if (sub == "save") {
+			co_await cmd_session_save(a);
+		} else if (sub == "load") {
+			std::string id;
+			is >> id;
+			if (id.empty()) {
+				out("session: load needs an id (or use 'session load-all')");
+			} else {
+				co_await cmd_session_load(a, id, false);
+			}
+		} else if (sub == "load-all") {
+			co_await cmd_session_load(a, {}, true);
 		} else if (sub == "close") {
 			std::string id;
 			is >> id;
 			co_await cmd_session_close(a, id.empty() ? std::nullopt : std::optional<std::string>(id));
 		} else {
-			out("session: new | switch | list | append | show | close");
+			out("session: new | switch | list | append | show | save | load | load-all | close");
 		}
 	} else if (cmd == "timer") {
 		std::string sub;
@@ -676,6 +778,7 @@ araya::task<void> boot(app& a) {
 	a.desired["logger"] = desired_entry{&araya::logger::plugin_descriptor(), {{"name", "araya"}, {"level", "info"}}};
 	a.desired["timer"] = desired_entry{&araya::timer::plugin_descriptor(), {}};
 	a.desired["session"] = desired_entry{&araya::session::plugin_descriptor(), {}};
+	a.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", "araya-sessions"}}};
 	a.desired["beacon"] = desired_entry{&araya::console_demo::beacon_descriptor(), {}};
 	a.desired["watcher"] = desired_entry{&araya::console_demo::watcher_descriptor(), {}};
 	a.desired["console"] = desired_entry{&araya::console_demo::console_descriptor(), {}};
@@ -704,7 +807,7 @@ araya::task<void> boot(app& a) {
 			0);
 	});
 
-	out("araya console: 6 components mounted, type help");
+	out("araya console: " + std::to_string(a.desired.size()) + " components mounted, type help");
 }
 
 araya::task<void> run_console(app& a, std::optional<std::string> script_path) {

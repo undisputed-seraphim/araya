@@ -1,0 +1,3 @@
+session load-all
+session show
+quit

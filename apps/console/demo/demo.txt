@@ -17,5 +17,8 @@ ls
 load console
 session append still works after the outage
 session show
+session save
 session close
+session load-all
+session show
 quit
