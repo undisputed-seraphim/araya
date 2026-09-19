@@ -12,7 +12,7 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
 cd "$root"
-"$console" --script "$save_script" > save.log 2>&1
-"$console" --script "$load_script" > load.log 2>&1
+"$console" run "$save_script" > save.log 2>&1
+"$console" run "$load_script" > load.log 2>&1
 
 grep -q "persists across restarts" load.log

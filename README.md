@@ -227,18 +227,24 @@ target_link_libraries(my_app PRIVATE araya::araya)
 The `bench/araya_bench` target is a complete example host exercising every lifecycle above
 and doubles as the profiling benchmark.
 
-## The console demo
+## The applications
 
-`apps/console` is a small interactive host that ties the plugins into something runnable:
-the `araya_console` binary mounts the first-party plugins plus the demo components
-(the console, a beacon/watcher availability pair, and failure-injection bombs) and drives
-them through an interactive shell. Every command goes through the public engine surface, so
-every outage a command reports is the availability machinery working, not a special path.
+The unified `araya` executable (`apps/araya`, everything first-party statically linked)
+ships two surfaces, dispatched on the first argument: the FTXUI terminal UI for
+interactive use, and a headless script runner (the retired interactive console's
+replacement) that the ctests drive.
+
+### Script mode
+
+`araya run <script>` mounts the first-party plugins plus the demo components (the
+console, a beacon/watcher availability pair, and failure-injection bombs) and replays
+a command script line by line. Every command goes through the public engine surface,
+so every outage a command reports is the availability machinery working, not a
+special path.
 
 ```sh
-cmake --build build --target araya_console
-./build/apps/console/araya_console        # interactive (type help)
-./build/apps/console/araya_console --script apps/console/demo/demo.txt   # scripted tour
+cmake --build build --target araya_app
+./build/apps/araya/araya run apps/araya/demo/demo.txt   # scripted tour
 ```
 
 Things to watch in the scripted tour:
@@ -262,18 +268,21 @@ Things to watch in the scripted tour:
   typed per-session projections (see `araya/session/projection.hpp`) on the same event
   stream, so derived state survives restore by replay.
 
-The demo and the save/restart/load cycle are registered as the `console_demo` and
-`console_restart` ctests, so they run with the rest of the suite.
+The demo and the save/restart/load cycle are registered as the `script_demo` and
+`restart_cycle` ctests, so they run with the rest of the suite.
 
 ### The TUI
 
-`apps/tui` (`araya_tui`, FTXUI vendored in `thirdparty/`) is the interactive terminal
-UI and the console's intended successor: the same desired tree boots on a background
-engine thread while the UI renders live component states, a session-event log pane,
-and a command input - the UI only ever reads immutable snapshots, so the engine's
-strand discipline stays entirely on the engine side. Logs go to `araya-tui.log`
-(pre-created file-sink loggers the logger service adopts by name), keeping quill's
-output off the canvas. Requires a terminal; Ctrl+C quits, as does `quit`.
+`araya tui` (FTXUI vendored in `thirdparty/`) is the interactive terminal UI and the
+console's intended successor: the same desired tree boots on a background engine thread
+while the UI renders live component states, a session-event log pane, and a command
+input - the UI only ever reads immutable snapshots, so the engine's strand discipline
+stays entirely on the engine side. Logs go to `araya-tui.log` (pre-created file-sink
+loggers the logger service adopts by name), keeping quill's output off the canvas.
+Requires a terminal; Ctrl+D quits (the `quit` command works too), and Ctrl+C is
+swallowed per TUI convention. Component state uses unicode glyphs (`●` active, `◐`
+transitioning, `✗` failed, `○` retired); `ARAYA_TUI_ASCII=1` switches to the ASCII
+tier (`* ~ x o`) for terminals whose fonts misrender them.
 
 ## License
 

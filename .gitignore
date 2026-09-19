@@ -11,3 +11,7 @@ proof/coq/*.vok
 proof/coq/*.vos
 proof/coq/*.glob
 proof/coq/.*.aux
+
+# Runtime artifacts of the demo apps (console sessions, TUI log)
+araya-sessions/
+araya-tui.log*

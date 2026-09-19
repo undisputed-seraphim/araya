@@ -25,12 +25,8 @@ option(ARAYA_BUILD_BENCH
     "Build the profiling bench application (requires plugins)"
     ON)
 
-option(ARAYA_BUILD_CONSOLE
-    "Build the interactive console application (requires plugins)"
-    ON)
-
-option(ARAYA_BUILD_TUI
-    "Build the FTXUI terminal UI application (requires plugins)"
+option(ARAYA_BUILD_APP
+    "Build the unified araya application (console + TUI; requires plugins)"
     ON)
 
 add_library(araya STATIC
@@ -84,12 +80,9 @@ if(ARAYA_BUILD_PLUGINS)
     if(ARAYA_BUILD_BENCH)
         add_subdirectory(bench)
     endif()
-    if(ARAYA_BUILD_CONSOLE)
-        add_subdirectory(apps)
-    endif()
-    if(ARAYA_BUILD_TUI)
+    if(ARAYA_BUILD_APP)
         include(thirdparty/ftxui.cmake)
-        add_subdirectory(apps/tui)
+        add_subdirectory(apps)
     endif()
 endif()
 
