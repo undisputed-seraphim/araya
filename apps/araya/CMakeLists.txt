@@ -29,6 +29,12 @@ target_link_libraries(araya_app PRIVATE
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(araya_app PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    # GCC 14 false positive (same as the engine library): awaitable
+    # frames are allocated through Boost.Asio's aligned_new
+    # (aligned_alloc) and released through the matching
+    # awaitable_frame_base::operator delete, which the mismatch
+    # detector cannot see across the inlining boundary at -O2.
+    target_compile_options(araya_app PRIVATE -Wno-mismatched-new-delete)
 endif()
 
 install(TARGETS araya_app
