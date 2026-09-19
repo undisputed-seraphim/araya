@@ -40,11 +40,13 @@ struct request {
 };
 
 // A non-2xx response: status/reason plus the (small, bounded) buffered
-// body. Streamed 2xx bodies never appear here.
+// body and the response headers (Retry-After, request ids, ...).
+// Streamed 2xx bodies never appear here.
 struct response {
 	unsigned status = 0;
 	std::string reason;
 	std::string body;
+	std::vector<std::pair<std::string, std::string>> headers;
 };
 
 using body_callback = std::function<araya::task<void>(std::string_view)>;

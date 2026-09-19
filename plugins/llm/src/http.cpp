@@ -99,6 +99,8 @@ araya::task<response> execute(
 		co_await beast::http::async_read_header(stream, buffer, parser, net::use_awaitable);
 		result.status = static_cast<unsigned>(parser.get().result_int());
 		result.reason = std::string(parser.get().reason());
+		for (auto const& header : parser.get())
+			result.headers.emplace_back(header.name_string(), std::string(header.value()));
 	} catch (llm_error const&) {
 		throw;
 	} catch (boost::system::system_error const& e) {
