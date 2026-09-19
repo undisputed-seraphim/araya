@@ -265,6 +265,16 @@ Things to watch in the scripted tour:
 The demo and the save/restart/load cycle are registered as the `console_demo` and
 `console_restart` ctests, so they run with the rest of the suite.
 
+### The TUI
+
+`apps/tui` (`araya_tui`, FTXUI vendored in `thirdparty/`) is the interactive terminal
+UI and the console's intended successor: the same desired tree boots on a background
+engine thread while the UI renders live component states, a session-event log pane,
+and a command input - the UI only ever reads immutable snapshots, so the engine's
+strand discipline stays entirely on the engine side. Logs go to `araya-tui.log`
+(pre-created file-sink loggers the logger service adopts by name), keeping quill's
+output off the canvas. Requires a terminal; Ctrl+C quits, as does `quit`.
+
 ## License
 
 Copyright © 2026 Tan Li Boon. Licensed under the [Apache License, Version 2.0](LICENSE).

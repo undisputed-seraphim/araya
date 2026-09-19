@@ -1,10 +1,10 @@
 add_executable(araya_console
     src/main.cpp
-    src/demo_plugins.cpp
 )
 
 target_link_libraries(araya_console PRIVATE
     araya::araya
+    araya::demo
     araya::logger
     araya::persistence
     araya::session
