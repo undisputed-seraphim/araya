@@ -30,18 +30,18 @@ struct persistence_plugin : araya::plugin {
 		: root_(std::move(root)) {}
 
 	araya::task<void> apply(araya::plugin_context& ctx) override {
-		auto backend = make_jsonl_backend(root_);
+		// The provision returns a live copy for the listeners: capturing
+		// the local that provide() consumed would be the null-shared_ptr
+		// trap the handle exists to remove.
+		auto p = ctx.provide(persistence_key, make_jsonl_backend(root_));
+		auto backend = p.value;
 
-		// The listeners copy the shared_ptr; the provision takes the
-		// local by move only after every capture has its own reference.
 		ctx.on(
 			created_key, [backend](araya::session::session_created_msg const& m) { backend->attach(m.s->header()); });
 		ctx.on(
 			appended_key, [backend](araya::session::session_appended_msg const& m) { backend->append(m.id, m.event); });
 		ctx.on(flush_key, [backend](araya::session::session_flush_msg const& m) { backend->flush(m.id); });
 		ctx.on(disposed_key, [backend](araya::session::session_disposed_msg const& m) { backend->detach(m.id); });
-
-		ctx.provide(persistence_key, std::move(backend));
 		co_return;
 	}
 

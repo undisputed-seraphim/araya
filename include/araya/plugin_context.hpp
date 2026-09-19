@@ -29,6 +29,25 @@ public:
 	std::uint32_t version;
 };
 
+// What provide() returns: the early-release registration plus a live
+// copy of the published value. Deriving from registration keeps every
+// release() call site compiling, and carrying the value makes the
+// publish-then-capture idiom safe by construction: the author captures
+// from the handle, never from a local that provide() consumed (the
+// classic move-then-capture null-shared_ptr trap). Capture p.value, not
+// the temporary passed to provide.
+template <class T>
+class provision_handle : public registration {
+public:
+	provision_handle() = default;
+
+	provision_handle(registration release, std::shared_ptr<T> value)
+		: registration(std::move(release))
+		, value(std::move(value)) {}
+
+	std::shared_ptr<T> value;
+};
+
 // The plugin-facing half of one activation.
 //
 // LIFETIME: this is a *view*, not a handle. It is valid only while the
@@ -168,9 +187,19 @@ public:
 		return registration{act_->effects, index};
 	}
 
+	// The typed provision. Returns a provision_handle carrying a live
+	// copy of the published value: capture that (handle.value) in the
+	// listeners you register afterwards -
+	//   auto p = ctx.provide(key, make_shared<...>());
+	//   ctx.on(event, [svc = p.value](...) { ... });
+	// The handle's release() still unbinds early, and dropping it keeps
+	// the ordinary teardown path.
 	template <class T>
-	registration provide(service_key<T> const& key, std::shared_ptr<T> service, std::function<bool()> check = {}) {
-		return provide_raw(key.id, std::shared_ptr<void>(std::move(service)), std::move(check));
+	provision_handle<T>
+	provide(service_key<T> const& key, std::shared_ptr<T> service, std::function<bool()> check = {}) {
+		auto value = service;
+		auto release = provide_raw(key.id, std::shared_ptr<void>(std::move(service)), std::move(check));
+		return provision_handle<T>{std::move(release), std::move(value)};
 	}
 
 	// Promotes this fiber's provision of key to available and re-evaluates
