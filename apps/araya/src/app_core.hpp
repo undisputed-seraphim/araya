@@ -47,6 +47,9 @@ struct app_context {
 	std::vector<araya::registration> intervals;
 	std::string cwd;
 	std::string cwd_branch;
+	// Path to the llm-openai config JSON (the --llm-config flag or the
+	// ARAYA_LLM_CONFIG environment variable); empty means no adapter.
+	std::string llm_config;
 };
 
 // A no-op-deleter view over a static descriptor: the same pattern the

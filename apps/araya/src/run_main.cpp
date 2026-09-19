@@ -8,6 +8,7 @@
 #include <boost/asio/use_awaitable.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 #include <fstream>
 #include <iostream>
@@ -94,24 +95,38 @@ araya::task<void> run(araya::app::app_context& ctx, std::string script_path) {
 } // namespace
 
 int run_main(int argc, char** argv) {
-	// argv[0] is "run"; the script path follows.
-	if (argc < 2) {
-		std::cerr << "usage: araya run <script>\n";
+	// argv[0] is "run"; the script path follows (--llm-config <path>
+	// selects the llm-openai config; ARAYA_LLM_CONFIG is the fallback).
+	std::string script;
+	std::string llm_config;
+	for (int i = 1; i < argc; ++i) {
+		std::string_view arg = argv[i];
+		if (arg == "--llm-config" && i + 1 < argc) {
+			llm_config = argv[++i];
+		} else if (arg == "--help" || arg == "-h") {
+			std::cout << "usage: araya run <script> [--llm-config <path>]\n\n";
+			std::cout << araya::app::help_text() << '\n';
+			std::cout << "  sleep <ms>              wait (script mode)\n";
+			std::cout << "  quit                    retire everything and exit\n";
+			return 0;
+		} else if (script.empty()) {
+			script = arg;
+		}
+	}
+	if (script.empty()) {
+		std::cerr << "usage: araya run <script> [--llm-config <path>]\n";
 		return 2;
 	}
-	std::string_view arg = argv[1];
-	if (arg == "--help" || arg == "-h") {
-		std::cout << "usage: araya run <script>\n\n";
-		std::cout << araya::app::help_text() << '\n';
-		std::cout << "  sleep <ms>              wait (script mode)\n";
-		std::cout << "  quit                    retire everything and exit\n";
-		return 0;
+	if (llm_config.empty()) {
+		if (auto const* env = std::getenv("ARAYA_LLM_CONFIG"); env && *env)
+			llm_config = env;
 	}
 
 	araya::console_demo::init_demo_state(std::make_shared<araya::console_demo::demo_state>());
 
 	araya::app::app_context ctx;
-	boost::asio::co_spawn(ctx.io, run(ctx, std::string(arg)), boost::asio::detached);
+	ctx.llm_config = std::move(llm_config);
+	boost::asio::co_spawn(ctx.io, run(ctx, std::move(script)), boost::asio::detached);
 	ctx.io.run();
 	return 0;
 }

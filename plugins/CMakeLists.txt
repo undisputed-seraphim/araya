@@ -1,4 +1,5 @@
 add_subdirectory(llm)
+add_subdirectory(llm-mock)
 add_subdirectory(llm-openai)
 add_subdirectory(logger)
 add_subdirectory(persistence)

@@ -230,6 +230,8 @@ std::vector<araya::llm::model_info> openai_adapter::list_models(std::string_view
 }
 
 araya::llm::model_info openai_adapter::resolve_model(std::string_view provider, std::string_view model) {
+	if (model.empty())
+		model = config_.default_model;
 	for (auto const& candidate : config_.models) {
 		if (candidate.id == model) {
 			araya::llm::model_info info;
