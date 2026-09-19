@@ -227,6 +227,35 @@ target_link_libraries(my_app PRIVATE araya::araya)
 The `bench/araya_bench` target is a complete example host exercising every lifecycle above
 and doubles as the profiling benchmark.
 
+## The console demo
+
+`apps/console` is a small interactive host that ties the plugins into something runnable:
+the `araya_console` binary mounts the three first-party plugins plus four demo components
+(the console, a beacon/watcher availability pair, and failure-injection bombs) and drives
+them through an interactive shell. Every command goes through the public engine surface, so
+every outage a command reports is the availability machinery working, not a special path.
+
+```sh
+cmake --build build --target araya_console
+./build/apps/console/araya_console        # interactive (type help)
+./build/apps/console/araya_console --script apps/console/demo/demo.txt   # scripted tour
+```
+
+Things to watch in the scripted tour:
+
+- `fail timer` swaps in a crashing provider: the bomb fails, the console (its dependent)
+  unloads, and `timer in ...` reports the outage. `fail clear` restores everything.
+- `avail wait` retracts the beacon with its readiness flag cleared: the watcher parks
+  ("unresolved service"). `avail ready` promotes the beacon and the watcher activates -
+  the promotion-only gate, no demotion anywhere.
+- `unload console` retires the console plugin (watch its heartbeat die in the logs);
+  `load console` brings it back. Sessions survive because the session plugin is untouched.
+- `session new/append/show` drives the event log and prints the folded message surface;
+  the live feed on the right shows the `session/created`, `session/event`, and
+  `session/disposed` firehose.
+
+The demo is registered as the `console_demo` ctest, so it runs with the rest of the suite.
+
 ## License
 
 Copyright © 2026 Tan Li Boon. Licensed under the [Apache License, Version 2.0](LICENSE).

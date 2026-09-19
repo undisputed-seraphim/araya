@@ -14,6 +14,7 @@ find_program(ARAYA_CLANG_FORMAT NAMES clang-format clang-format-19 clang-format-
 
 if(ARAYA_CLANG_FORMAT)
     set(ARAYA_FORMAT_DIRS
+        apps
         include
         src
         tests

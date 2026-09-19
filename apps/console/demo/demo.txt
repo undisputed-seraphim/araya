@@ -1,0 +1,21 @@
+ls
+log info the console is alive
+session new demo
+session append first entry from the demo
+session show
+timer in 2 a one-shot reminder
+sleep 2500
+fail timer
+ls
+timer in 1 this should report unavailable
+fail clear
+avail wait
+ls
+avail ready
+unload console
+ls
+load console
+session append still works after the outage
+session show
+session close
+quit
