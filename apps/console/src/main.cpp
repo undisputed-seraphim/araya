@@ -76,7 +76,6 @@ struct app {
 
 	std::map<std::string, desired_entry> desired;
 	std::optional<araya::session::session_id> current;
-	std::vector<araya::session::session_id> known;
 	std::vector<araya::registration> intervals;
 	bool quitting = false;
 };
@@ -300,7 +299,6 @@ araya::task<void> cmd_session_new(app& a, std::optional<std::string> id_arg) {
 				id_arg && !id_arg->empty() ? araya::session::session_id{*id_arg} : store->mint_id();
 			(void)store->create(root_ctx, id, {});
 			a.current = id;
-			a.known.push_back(id);
 			out("session: created " + id.value);
 		});
 	} catch (std::exception const& e) {
@@ -326,14 +324,23 @@ araya::task<void> cmd_session_switch(app& a, std::string_view id) {
 	}
 }
 
-void cmd_session_list(app& a) {
-	if (a.known.empty()) {
-		out("session: none known");
-		return;
-	}
-	for (auto const& id : a.known) {
-		bool is_current = a.current && a.current->value == id.value;
-		out(std::string(is_current ? "* " : "  ") + id.value);
+araya::task<void> cmd_session_list(app& a) {
+	try {
+		co_await a.rt->run_on_strand([&] {
+			auto root_ctx = a.rt->root_context();
+			auto store = root_ctx.require<session_store>(sessions_key);
+			auto ids = store->list();
+			if (ids.empty()) {
+				out("session: none live");
+				return;
+			}
+			for (auto const& id : ids) {
+				bool is_current = a.current && a.current->value == id.value;
+				out(std::string(is_current ? "* " : "  ") + id.value);
+			}
+		});
+	} catch (std::exception const& e) {
+		out(std::string("session: ") + e.what());
 	}
 }
 
@@ -478,11 +485,62 @@ araya::task<void> cmd_session_load(app& a, std::string_view id, bool all) {
 					});
 				store->enter(s);
 				store->announce(*s);
-				a.known.push_back(target);
 				if (!a.current)
 					a.current = target;
 				out("session: restored " + target.value + " (" + std::to_string(event_count) + " events)");
 			}
+		});
+	} catch (std::exception const& e) {
+		out(std::string("session: ") + e.what());
+	}
+}
+
+araya::task<void> cmd_session_fork(app& a, std::string_view parent, std::optional<std::string> child) {
+	try {
+		co_await a.rt->run_on_strand([&] {
+			auto root_ctx = a.rt->root_context();
+			auto store = root_ctx.require<session_store>(sessions_key);
+			araya::session::session_id pid{std::string(parent)};
+			araya::session::session_id cid =
+				child && !child->empty() ? araya::session::session_id{*child} : araya::session::session_id{};
+			auto s = store->fork(root_ctx, pid, cid);
+			a.current = s->id();
+			out("session: forked " + s->id().value + " from " + pid.value + " (" +
+				std::to_string(s->inherited_event_count()) + " inherited events)");
+		});
+	} catch (std::exception const& e) {
+		out(std::string("session: ") + e.what());
+	}
+}
+
+araya::task<void> cmd_session_replace(app& a, std::int64_t start, std::int64_t end, std::string_view text) {
+	try {
+		co_await a.rt->run_on_strand([&] {
+			if (!a.current) {
+				out("session: no current session");
+				return;
+			}
+			auto root_ctx = a.rt->root_context();
+			auto store = root_ctx.require<session_store>(sessions_key);
+			auto s = store->get(*a.current);
+			if (!s) {
+				out("session: current session was disposed");
+				a.current.reset();
+				return;
+			}
+			boost::json::value message = {
+				{"id", "r" + std::to_string(s->log().size())},
+				{"role", "user"},
+				{"content", boost::json::array{{{"type", "text"}, {"text", std::string(text)}}}},
+			};
+			boost::json::value replace = {
+				{"start_seq", start},
+				{"end_seq", end},
+				{"message", std::move(message)},
+			};
+			auto seq = s->append("surface/replace", std::move(replace));
+			out("session: replaced [" + std::to_string(start) + ", " + std::to_string(end) + ") at seq " +
+				std::to_string(seq));
 		});
 	} catch (std::exception const& e) {
 		out(std::string("session: ") + e.what());
@@ -598,8 +656,10 @@ constexpr std::string_view g_help = R"(commands:
   avail wait | ready      park the watcher on the beacon, then promote it
   session new [id]        create a session (current = it)
   session switch <id>     make another session current
-  session list            the sessions this console created or restored
+  session list            the sessions live in the store
   session append <text>   append a user message to the current session
+  session replace <s> <e> <text>  splice [s, e) into one message
+  session fork <parent> [child]   fork a session from an earlier cut
   session show            print the folded message surface
   session save            flush the current session through the persistence barrier
   session load <id>       restore a persisted session from disk
@@ -683,7 +743,7 @@ araya::task<void> exec_line(app& a, std::string line) {
 				co_await cmd_session_switch(a, id);
 			}
 		} else if (sub == "list") {
-			cmd_session_list(a);
+			co_await cmd_session_list(a);
 		} else if (sub == "append") {
 			std::string text;
 			std::getline(is, text);
@@ -691,6 +751,29 @@ araya::task<void> exec_line(app& a, std::string line) {
 			if (t != std::string::npos)
 				text = text.substr(t);
 			co_await cmd_session_append(a, text);
+		} else if (sub == "replace") {
+			std::int64_t start = 0;
+			std::int64_t end = 0;
+			std::string text;
+			is >> start >> end;
+			std::getline(is, text);
+			auto t = text.find_first_not_of(' ');
+			if (t != std::string::npos)
+				text = text.substr(t);
+			if (!is || text.empty()) {
+				out("session: usage: session replace <start> <end> <text>");
+			} else {
+				co_await cmd_session_replace(a, start, end, text);
+			}
+		} else if (sub == "fork") {
+			std::string parent;
+			std::string child;
+			is >> parent >> child;
+			if (parent.empty()) {
+				out("session: usage: session fork <parent> [child]");
+			} else {
+				co_await cmd_session_fork(a, parent, child.empty() ? std::nullopt : std::optional<std::string>(child));
+			}
 		} else if (sub == "show") {
 			co_await cmd_session_show(a);
 		} else if (sub == "save") {
@@ -710,7 +793,7 @@ araya::task<void> exec_line(app& a, std::string line) {
 			is >> id;
 			co_await cmd_session_close(a, id.empty() ? std::nullopt : std::optional<std::string>(id));
 		} else {
-			out("session: new | switch | list | append | show | save | load | load-all | close");
+			out("session: new | switch | list | append | replace | fork | show | save | load | load-all | close");
 		}
 	} else if (cmd == "timer") {
 		std::string sub;

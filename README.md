@@ -251,12 +251,16 @@ Things to watch in the scripted tour:
 - `unload console` retires the console plugin (watch its heartbeat die in the logs);
   `load console` brings it back. Sessions survive because the session plugin is untouched.
 - `session new/append/show` drives the event log and prints the folded message surface;
-  the live feed on the right shows the `session/created`, `session/event`, and
-  `session/disposed` firehose.
+  `session replace <s> <e> <text>` splices a span of history into one message (the
+  compaction mechanism), and `session fork <parent> [child]` opens a child with an
+  inherited log prefix. The live feed shows the `session/created`, `session/event`,
+  and `session/disposed` firehose.
 - `session save` flushes through the `session/flush` durability barrier (the persistence
   plugin drains and fsyncs), and `session load`/`load-all` restore sessions from disk
   through the same `prepare`/`enter` path the engine models. Sessions land as readable
-  JSONL under `./araya-sessions/` - `cat` one while you work.
+  JSONL under `./araya-sessions/` - `cat` one while you work. The store also drives
+  typed per-session projections (see `araya/session/projection.hpp`) on the same event
+  stream, so derived state survives restore by replay.
 
 The demo and the save/restart/load cycle are registered as the `console_demo` and
 `console_restart` ctests, so they run with the rest of the suite.

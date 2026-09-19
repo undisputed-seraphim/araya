@@ -348,3 +348,180 @@ TEST_CASE("built-in message shapes are validated on append") {
 		CHECK(s->log().empty());
 	});
 }
+
+boost::json::value
+replace_event(std::int64_t start, std::int64_t end, std::optional<boost::json::value> msg = std::nullopt) {
+	boost::json::object data{{"start_seq", start}, {"end_seq", end}};
+	if (msg)
+		data["message"] = *msg;
+	return data;
+}
+
+TEST_CASE("surface/replace splices a span into a single message") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto store = h.store(root_ctx);
+		auto s = store->create(root_ctx, session_id{"s1"});
+		s->append("user/message", message("m1", "user", boost::json::array{}));
+		s->append("user/message", message("m2", "user", boost::json::array{}));
+
+		auto summary = message("m3", "user", boost::json::array{});
+		s->append("surface/replace", replace_event(0, 2, summary));
+
+		// The log keeps everything; the surface is the splice.
+		CHECK(s->log().size() == 3);
+		REQUIRE(s->surface().messages().size() == 1);
+		CHECK(s->surface().messages()[0].id == "m3");
+
+		// A messageless replace just erases.
+		s->append("surface/replace", replace_event(2, 3));
+		CHECK(s->surface().messages().empty());
+	});
+}
+
+TEST_CASE("surface/replace validates its span and message shape") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto store = h.store(root_ctx);
+		auto s = store->create(root_ctx, session_id{"s1"});
+		s->append("user/message", message("m1", "user", boost::json::array{}));
+
+		CHECK_THROWS(s->append("surface/replace", replace_event(0, 5)));				   // spans into the future
+		CHECK_THROWS(s->append("surface/replace", replace_event(3, 2)));				   // inverted span
+		CHECK_THROWS(s->append("surface/replace", boost::json::object{{"start_seq", 0}})); // missing end
+		CHECK_THROWS(s->append(
+			"surface/replace",
+			boost::json::object{{"start_seq", 0}, {"end_seq", 1}, {"message", boost::json::object{{"id", "x"}}}}));
+		CHECK(s->log().size() == 1);
+	});
+}
+
+TEST_CASE("the store lists entered sessions") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto store = h.store(root_ctx);
+		store->create(root_ctx, session_id{"a"});
+		store->create(root_ctx, session_id{"b"});
+		CHECK(store->list() == std::vector<session_id>{session_id{"a"}, session_id{"b"}});
+
+		store->dispose(session_id{"a"});
+		CHECK(store->list() == std::vector<session_id>{session_id{"b"}});
+	});
+}
+
+TEST_CASE("fork carries the parent prefix, lineage, and resumes after the cut") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto store = h.store(root_ctx);
+		auto parent = store->create(root_ctx, session_id{"parent"});
+		parent->append("user/message", message("m1", "user", boost::json::array{}));
+		parent->append("user/message", message("m2", "user", boost::json::array{}));
+
+		auto child = store->fork(root_ctx, session_id{"parent"}, session_id{"child"}, 1);
+
+		CHECK(child->id().value == "child");
+		CHECK(child->header().parent_session == session_id{"parent"});
+		CHECK(child->header().is_seeded);
+		CHECK(child->inherited_event_count() == 1);
+		// Seed (the cut prefix) plus the end-seed marker.
+		CHECK(child->log().size() == 2);
+		CHECK(child->log()[1].type == "session/end-seed");
+		// The surface folds the inherited prefix only.
+		REQUIRE(child->surface().messages().size() == 1);
+		CHECK(child->surface().messages()[0].id == "m1");
+
+		// Fresh history resumes after seed + marker.
+		auto seq = child->append("user/message", message("m3", "user", boost::json::array{}));
+		CHECK(seq == 2);
+
+		// A full cut (default) forks everything; the parent is untouched.
+		auto full = store->fork(root_ctx, session_id{"parent"});
+		CHECK(full->inherited_event_count() == parent->log().size());
+		CHECK(parent->log().size() == 2);
+
+		CHECK_THROWS(store->fork(root_ctx, session_id{"nope"}));
+		CHECK_THROWS(store->fork(root_ctx, session_id{"parent"}, session_id{"too-far"}, 99));
+	});
+}
+
+namespace {
+
+struct counter_state {
+	std::uint64_t user_messages = 0;
+};
+
+} // namespace
+
+TEST_CASE("projections fold per session, replay on restore, and die with the registering fiber") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto store = h.store(root_ctx);
+
+		araya::session::projection_state<counter_state> tracker;
+		auto reg = store->register_projection(
+			root_ctx,
+			araya::session::event_projection<counter_state>{
+				.name = "counter",
+				.types = {"user/message"},
+				.init = [](session_header const&) { return counter_state{}; },
+				.apply =
+					[](counter_state& st, session_event const& ev) {
+						(void)ev;
+						++st.user_messages;
+					},
+			},
+			tracker);
+
+		// No session yet: no cell.
+		CHECK(tracker.state_of(session_id{"s1"}) == nullptr);
+
+		auto s = store->create(root_ctx, session_id{"s1"});
+		s->append("user/message", message("m1", "user", boost::json::array{}));
+		s->append("custom/other", boost::json::object{{"x", 1}}); // filtered out
+		s->append("user/message", message("m2", "user", boost::json::array{}));
+
+		auto const* st = tracker.state_of(session_id{"s1"});
+		REQUIRE(st != nullptr);
+		CHECK(st->user_messages == 2);
+
+		// Dispose drops the cell; a restore re-seeds it by replay.
+		store->dispose(session_id{"s1"});
+		CHECK(tracker.state_of(session_id{"s1"}) == nullptr);
+
+		auto restored = store->prepare(
+			session_id{"s1"},
+			create_session_options{
+				.seed = {s->log().begin(), s->log().end()},
+				.inherited_event_count = s->log().size(),
+			});
+		store->enter(restored);
+		store->announce(*restored);
+		auto const* restored_state = tracker.state_of(session_id{"s1"});
+		REQUIRE(restored_state != nullptr);
+		CHECK(restored_state->user_messages == 2);
+
+		// Releasing the registration drops the cells with it.
+		reg.release();
+		CHECK(tracker.state_of(session_id{"s1"}) == nullptr);
+	});
+}

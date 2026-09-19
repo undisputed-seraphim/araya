@@ -4,13 +4,16 @@
 #include "araya/plugin_context.hpp"
 #include "araya/service.hpp"
 #include "araya/session/events.hpp"
+#include "araya/session/projection.hpp"
 #include "araya/session/session_types.hpp"
 #include "araya/session/surface.hpp"
 #include "araya/task.hpp"
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace araya::session {
 
@@ -92,12 +95,28 @@ public:
 
 	std::size_t size() const noexcept { return store_.size(); }
 
+	// The ids of every entered session, in insertion order.
+	std::vector<session_id> list() const;
+
 	session_id mint_id();
 
 	// Create a session owned by the calling fiber: prepares, enters,
 	// attaches the caller-owned cleanup, and announces it. Unloading the
 	// caller stops event notification and removes the session.
 	std::shared_ptr<session> create(plugin_context& caller, session_id id = {}, create_session_options options = {});
+
+	// Forks a session: the child opens with the parent's log prefix up to
+	// `cut` (the whole log by default) as its inherited seed, carries the
+	// lineage (parent_session, is_seeded, and the 'session/end-seed'
+	// marker when the cut is non-empty), and continues with fresh history
+	// after it. cwd, origin, delegation depth, and preset inherit from the
+	// parent; an empty child_id mints a fresh one. The child is entered
+	// and announced, owned by the calling fiber like any create().
+	std::shared_ptr<session> fork(
+		plugin_context& caller,
+		session_id const& parent,
+		session_id child_id = {},
+		std::optional<session_log_offset> cut = std::nullopt);
 
 	// Build a session WITHOUT entering it — validates the seed, repairs
 	// interrupted turns, stamps the header. Pairs with enter()/announce()
@@ -123,8 +142,20 @@ public:
 	// Awaits every 'session/flush' listener for an entered session.
 	araya::task<void> flush(session_id id);
 
+	// Registers a typed, store-driven state fold (the projection
+	// companion): the store owns one State cell per entered session and
+	// drives it in seq order - see araya/session/projection.hpp. Owned by
+	// the registering fiber (a tracked effect); the out-parameter tracker
+	// is the read handle.
+	template <class State>
+	araya::registration
+	register_projection(plugin_context& caller, event_projection<State> projection, projection_state<State>& tracker);
+
 private:
 	friend class session;
+
+	template <class State>
+	friend class projection_state;
 
 	bool has_projection(std::string_view type) const noexcept;
 
@@ -135,11 +166,55 @@ private:
 
 	void validate_event(session_event const& ev) const;
 
+	// The projection read path (projection_state::state_of): the cell's
+	// typed state for an entered session, or null.
+	template <class State>
+	State const* projection_state_of(std::uint64_t projection_id, session_id const& sid) const;
+
 	std::shared_ptr<araya::event_bus> bus_;
 	std::map<session_id, std::shared_ptr<session>> store_;
 	std::vector<message_projection> projections_;
+	std::map<std::uint64_t, std::unique_ptr<detail::projection_cell_base>> projection_cells_;
+	std::uint64_t projection_counter_ = 0;
 	std::uint64_t counter_ = 0;
 };
+
+// register_projection's template body lives here (store.hpp is the
+// projection surface users include); the cells and trackers are declared
+// in projection.hpp.
+template <class State>
+araya::registration session_store::register_projection(
+	plugin_context& caller,
+	event_projection<State> projection,
+	projection_state<State>& tracker) {
+	auto id = projection_counter_++;
+	projection_cells_.emplace(id, std::make_unique<detail::projection_cell<State>>(std::move(projection)));
+	tracker.store_ = weak_from_this();
+	tracker.id_ = id;
+	std::weak_ptr<session_store> weak = weak_from_this();
+	return caller.effect([weak, id]() -> araya::cleanup_action {
+		return [weak, id] {
+			if (auto st = weak.lock())
+				st->projection_cells_.erase(id);
+		};
+	});
+}
+
+template <class State>
+State const* session_store::projection_state_of(std::uint64_t projection_id, session_id const& sid) const {
+	auto it = projection_cells_.find(projection_id);
+	if (it == projection_cells_.end())
+		return nullptr;
+	return static_cast<detail::projection_cell<State>*>(it->second.get())->state_of(sid);
+}
+
+template <class State>
+State const* projection_state<State>::state_of(session_id const& id) const {
+	auto st = store_.lock();
+	if (!st)
+		return nullptr;
+	return st->projection_state_of<State>(id_, id);
+}
 
 inline constexpr araya::service_key<session_store> sessions_key{"sessions", 1};
 

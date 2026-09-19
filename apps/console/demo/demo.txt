@@ -16,6 +16,7 @@ unload console
 ls
 load console
 session append still works after the outage
+session replace 0 2 condensed by the demo
 session show
 session save
 session close

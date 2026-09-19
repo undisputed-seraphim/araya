@@ -28,8 +28,17 @@ session::session(
 }
 
 void session::fold(session_event const& ev, std::vector<message_projection> const& projections) {
-	if (auto msg = fold_event(ev, projections))
-		surface_.push(std::move(*msg));
+	auto plan = fold_event(ev, projections);
+	switch (plan.action) {
+	case surface_plan::kind::append:
+		surface_.push(ev.seq, std::move(*plan.message));
+		break;
+	case surface_plan::kind::replace:
+		surface_.replace(plan.start, plan.end, ev.seq, std::move(plan.message));
+		break;
+	case surface_plan::kind::none:
+		break;
+	}
 }
 
 session_seq session::append(std::string type, boost::json::value data) {
@@ -76,6 +85,14 @@ session_store::~session_store() {
 }
 
 session_id session_store::mint_id() { return session_id{"session-" + std::to_string(counter_++)}; }
+
+std::vector<session_id> session_store::list() const {
+	std::vector<session_id> out;
+	out.reserve(store_.size());
+	for (auto const& [id, s] : store_)
+		out.push_back(id);
+	return out;
+}
 
 std::shared_ptr<session> session_store::create(plugin_context& caller, session_id id, create_session_options options) {
 	auto s = prepare(std::move(id), std::move(options));
@@ -153,6 +170,11 @@ void session_store::announce(session const& s) {
 	auto it = store_.find(s.id());
 	if (it == store_.end())
 		throw std::logic_error("announce requires an entered session");
+	// Projection cells seed before anyone observes the session: the
+	// replay covers the whole log (restores and forks included), so a
+	// cell is consistent the moment 'session/created' lands.
+	for (auto const& [pid, cell] : projection_cells_)
+		cell->seed(s.header(), s.log());
 	if (bus_)
 		bus_->dispatch(created_key, session_created_msg{it->second});
 }
@@ -168,6 +190,8 @@ bool session_store::dispose(session_id const& id) {
 		return false;
 	auto s = std::move(it->second);
 	store_.erase(it);
+	for (auto const& [pid, cell] : projection_cells_)
+		cell->drop(id);
 	if (bus_)
 		bus_->dispatch(disposed_key, session_disposed_msg{id});
 	return true;
@@ -188,6 +212,32 @@ araya::registration session_store::register_message_projection(plugin_context& c
 	});
 }
 
+std::shared_ptr<session> session_store::fork(
+	plugin_context& caller,
+	session_id const& parent,
+	session_id child_id,
+	std::optional<session_log_offset> cut) {
+	auto it = store_.find(parent);
+	if (it == store_.end())
+		throw std::logic_error("cannot fork unknown session '" + parent.value + "'");
+	auto const& source = it->second;
+	auto at = cut.value_or(source->log().size());
+	if (at > source->log().size())
+		throw std::invalid_argument(
+			"fork cut " + std::to_string(at) + " beyond log length " + std::to_string(source->log().size()));
+
+	create_session_options options;
+	options.seed = std::vector<session_event>(source->log().begin(), source->log().begin() + at);
+	options.inherited_event_count = at;
+	options.is_seeded = at > 0;
+	options.parent_session = parent;
+	options.cwd = source->header().cwd;
+	options.origin = source->header().origin;
+	options.delegation_depth = source->header().delegation_depth;
+	options.agent_preset = source->header().agent_preset;
+	return create(caller, child_id.value.empty() ? mint_id() : std::move(child_id), std::move(options));
+}
+
 araya::task<void> session_store::flush(session_id id) {
 	if (!bus_ || !store_.contains(id))
 		co_return;
@@ -204,6 +254,8 @@ void session_store::publish(session& s, session_event& ev) {
 	validate_event(ev);
 	ev.ignorable = !is_builtin_surface_type(ev.type) && !has_projection(ev.type);
 	s.fold(ev, projections_);
+	for (auto const& [pid, cell] : projection_cells_)
+		cell->drive(s.id(), ev);
 	if (bus_ && store_.contains(s.id()))
 		bus_->dispatch(appended_key, session_appended_msg{s.id(), ev});
 }
@@ -243,6 +295,40 @@ void session_store::validate_event(session_event const& ev) const {
 	// is admissible: it rides the log verbatim and the surface skips it.
 	if (!is_builtin_surface_type(ev.type))
 		return;
+
+	// surface/replace carries a splice, not a message envelope.
+	if (ev.type == "surface/replace") {
+		auto const* obj = ev.data.if_object();
+		if (!obj)
+			bad("session event 'surface/replace' is not a JSON object");
+		auto sit = obj->find("start_seq");
+		auto eit = obj->find("end_seq");
+		if (sit == obj->end() || !sit->value().is_int64())
+			bad("session event 'surface/replace' lacks an integer start_seq");
+		if (eit == obj->end() || !eit->value().is_int64())
+			bad("session event 'surface/replace' lacks an integer end_seq");
+		auto start = sit->value().as_int64();
+		auto end = eit->value().as_int64();
+		if (start < 0 || end <= start)
+			bad("session event 'surface/replace' span must satisfy 0 <= start_seq < end_seq");
+		if (end > static_cast<std::int64_t>(ev.seq))
+			bad("session event 'surface/replace' spans into the future (end_seq " + std::to_string(end) +
+				" beyond seq " + std::to_string(ev.seq) + ")");
+		if (auto mit = obj->find("message"); mit != obj->end()) {
+			auto const* msg = mit->value().if_object();
+			if (!msg)
+				bad("session event 'surface/replace' message is not an object");
+			require_id(*msg, ev.type);
+			require_content(*msg, ev.type);
+			auto rit = msg->find("role");
+			if (rit == msg->end() || !rit->value().is_string())
+				bad("session event 'surface/replace' message lacks a role");
+			auto role = rit->value().as_string();
+			if (role != "user" && role != "assistant" && role != "system" && role != "tool_result")
+				bad("session event 'surface/replace' message role must be user, assistant, system, or tool_result");
+		}
+		return;
+	}
 
 	auto const& msg = message_object(ev);
 	require_id(msg, ev.type);
