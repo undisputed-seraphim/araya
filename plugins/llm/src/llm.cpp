@@ -47,9 +47,6 @@ char const* llm_failure::code_string() const noexcept {
 	return provider_code.empty() ? llm_error::code_name(code) : provider_code.c_str();
 }
 
-llm_service::llm_service(boost::asio::any_io_executor executor)
-	: executor_(std::move(executor)) {}
-
 araya::registration llm_service::register_adapter(
 	std::vector<std::string> providers,
 	std::shared_ptr<llm_adapter> adapter,

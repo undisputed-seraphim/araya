@@ -4,7 +4,6 @@
 #include "araya/service.hpp"
 #include "araya/task.hpp"
 
-#include <boost/asio/any_io_executor.hpp>
 #include <boost/json/value.hpp>
 
 #include <chrono>
@@ -290,8 +289,6 @@ public:
 // the same strand.
 class llm_service {
 public:
-	explicit llm_service(boost::asio::any_io_executor executor);
-
 	// All-or-nothing: if any provider already has a route, nothing is
 	// registered and llm_error{duplicate_adapter} is thrown. The returned
 	// registration erases the routes early; the registering fiber's
@@ -312,21 +309,18 @@ public:
 
 	std::optional<model_info> resolve_model(std::string_view provider, std::string_view model) const;
 
-	boost::asio::any_io_executor executor() const noexcept { return executor_; }
-
 private:
 	struct route {
 		std::shared_ptr<llm_adapter> adapter;
 	};
 
-	boost::asio::any_io_executor executor_;
 	std::map<std::string, route, std::less<>> routes_;
 };
 
 inline constexpr araya::service_key<llm_service> llm_key{"llm", 1};
 
-// The plugin descriptor: apply() constructs the service on the owning
-// activation's bus executor and provides it under llm_key.
+// The plugin descriptor: apply() constructs the service and provides it
+// under llm_key.
 araya::plugin_descriptor const& plugin_descriptor();
 
 } // namespace araya::llm

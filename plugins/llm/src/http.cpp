@@ -73,68 +73,65 @@ araya::task<response> execute(
 		});
 	}
 
-	beast::http::request<beast::http::string_body> out;
-	out.method(req.method);
-	out.version(11);
-	out.target(req.target.empty() ? "/" : req.target);
-	out.set(beast::http::field::host, host_header(req.server));
-	out.set(beast::http::field::user_agent, "araya-llm/0.1");
-	out.set(beast::http::field::accept, "application/json");
-	out.set(beast::http::field::content_type, "application/json");
-	for (auto const& [name, value] : req.headers)
-		out.set(name, value);
-	out.body() = req.body;
-	out.prepare_payload();
-
-	beast::flat_buffer buffer;
-	beast::http::response_parser<beast::http::buffer_body> parser;
-	parser.body_limit(std::numeric_limits<std::uint64_t>::max());
-
-	response result;
+	// One error-mapping catch for the whole exchange (write, headers,
+	// body reads); llm_errors (the stop-token close and consumer throws)
+	// pass through.
 	try {
+		beast::http::request<beast::http::string_body> out;
+		out.method(req.method);
+		out.version(11);
+		out.target(req.target.empty() ? "/" : req.target);
+		out.set(beast::http::field::host, host_header(req.server));
+		out.set(beast::http::field::user_agent, "araya-llm/0.1");
+		out.set(beast::http::field::accept, "application/json");
+		out.set(beast::http::field::content_type, "application/json");
+		for (auto const& [name, value] : req.headers)
+			out.set(name, value);
+		out.body() = req.body;
+		out.prepare_payload();
+
+		beast::flat_buffer buffer;
+		beast::http::response_parser<beast::http::buffer_body> parser;
+		parser.body_limit(std::numeric_limits<std::uint64_t>::max());
+
 		timed_layer(stream).expires_after(options.idle_timeout);
 		co_await beast::http::async_write(stream, out, net::use_awaitable);
 
 		timed_layer(stream).expires_after(options.idle_timeout);
 		co_await beast::http::async_read_header(stream, buffer, parser, net::use_awaitable);
+
+		response result;
 		result.status = static_cast<unsigned>(parser.get().result_int());
 		result.reason = std::string(parser.get().reason());
 		for (auto const& header : parser.get())
 			result.headers.emplace_back(header.name_string(), std::string(header.value()));
+
+		auto& body = parser.get().body();
+		auto const is_error = result.status < 200 || result.status >= 300;
+		std::string chunk_buffer;
+		chunk_buffer.resize(8192);
+		while (!parser.is_done()) {
+			// buffer_body is caller-buffered: hand the parser a fresh
+			// region per read_some; it returns the bytes stored there.
+			body.data = chunk_buffer.data();
+			body.size = chunk_buffer.size();
+			timed_layer(stream).expires_after(options.idle_timeout);
+			auto const bytes = co_await beast::http::async_read_some(stream, buffer, parser, net::use_awaitable);
+			if (bytes == 0)
+				continue;
+			if (is_error) {
+				if (result.body.size() < k_max_error_body)
+					result.body.append(chunk_buffer.data(), std::min(bytes, k_max_error_body - result.body.size()));
+			} else {
+				co_await on_body(std::string_view(chunk_buffer.data(), bytes));
+			}
+		}
+		co_return result;
 	} catch (llm_error const&) {
 		throw;
 	} catch (boost::system::system_error const& e) {
 		throw_for(e.code(), stop, "request");
 	}
-
-	auto& body = parser.get().body();
-	auto const is_error = result.status < 200 || result.status >= 300;
-	std::string chunk_buffer;
-	chunk_buffer.resize(8192);
-	while (!parser.is_done()) {
-		// buffer_body is caller-buffered: hand the parser a fresh region
-		// per read_some; it returns the bytes stored there.
-		body.data = chunk_buffer.data();
-		body.size = chunk_buffer.size();
-		std::size_t bytes = 0;
-		try {
-			timed_layer(stream).expires_after(options.idle_timeout);
-			bytes = co_await beast::http::async_read_some(stream, buffer, parser, net::use_awaitable);
-		} catch (llm_error const&) {
-			throw;
-		} catch (boost::system::system_error const& e) {
-			throw_for(e.code(), stop, "response body");
-		}
-		if (bytes == 0)
-			continue;
-		if (is_error) {
-			if (result.body.size() < k_max_error_body)
-				result.body.append(chunk_buffer.data(), std::min(bytes, k_max_error_body - result.body.size()));
-		} else {
-			co_await on_body(std::string_view(chunk_buffer.data(), bytes));
-		}
-	}
-	co_return result;
 }
 
 } // namespace
@@ -172,45 +169,39 @@ araya::task<response> stream_request(
 	body_callback const& on_body,
 	request_options const& options,
 	std::stop_token stop) {
-	endpoint ep = req.server;
-	auto const port = ep.port.empty() ? (ep.scheme == "https" ? std::string("443") : std::string("80")) : ep.port;
-
-	tcp::resolver resolver(executor);
-	beast::tcp_stream tcp(executor);
-	tcp.expires_after(options.connect_timeout);
+	// One error-mapping catch for the whole connection: resolve, connect,
+	// and the TLS handshake all report as "connect"; the exchange itself
+	// maps its own errors inside execute().
 	try {
+		endpoint ep = req.server;
+		auto const port = ep.port.empty() ? (ep.scheme == "https" ? std::string("443") : std::string("80")) : ep.port;
+
+		tcp::resolver resolver(executor);
+		beast::tcp_stream tcp(executor);
+		tcp.expires_after(options.connect_timeout);
 		auto const results = co_await resolver.async_resolve(ep.host, port, net::use_awaitable);
 		co_await tcp.async_connect(results, net::use_awaitable);
+
+		if (ep.scheme == "https") {
+			net::ssl::context ssl_ctx(net::ssl::context::tls_client);
+			ssl_ctx.set_verify_mode(options.verify_peer ? net::ssl::verify_peer : net::ssl::verify_none);
+			if (options.verify_peer)
+				ssl_ctx.set_default_verify_paths();
+			beast::ssl_stream<beast::tcp_stream> stream(std::move(tcp), ssl_ctx);
+			if (!SSL_set_tlsext_host_name(stream.native_handle(), ep.host.c_str())) {
+				boost::system::error_code ec{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
+				throw_for(ec, stop, "connect");
+			}
+			timed_layer(stream).expires_after(options.connect_timeout);
+			co_await stream.async_handshake(net::ssl::stream_base::client, net::use_awaitable);
+			co_return co_await execute(stream, req, on_body, options, stop);
+		}
+		co_return co_await execute(tcp, req, on_body, options, stop);
 	} catch (llm_error const&) {
 		throw;
 	} catch (boost::system::system_error const& e) {
 		throw_for(e.code(), stop, "connect");
 	}
-
-	response result;
-	if (ep.scheme == "https") {
-		net::ssl::context ssl_ctx(net::ssl::context::tls_client);
-		ssl_ctx.set_verify_mode(options.verify_peer ? net::ssl::verify_peer : net::ssl::verify_none);
-		if (options.verify_peer)
-			ssl_ctx.set_default_verify_paths();
-		beast::ssl_stream<beast::tcp_stream> stream(std::move(tcp), ssl_ctx);
-		if (!SSL_set_tlsext_host_name(stream.native_handle(), ep.host.c_str())) {
-			boost::system::error_code ec{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
-			throw_for(ec, stop, "handshake");
-		}
-		timed_layer(stream).expires_after(options.connect_timeout);
-		try {
-			co_await stream.async_handshake(net::ssl::stream_base::client, net::use_awaitable);
-		} catch (llm_error const&) {
-			throw;
-		} catch (boost::system::system_error const& e) {
-			throw_for(e.code(), stop, "handshake");
-		}
-		result = co_await execute(stream, req, on_body, options, stop);
-	} else {
-		result = co_await execute(tcp, req, on_body, options, stop);
-	}
-	co_return result;
 }
 
 } // namespace araya::llm::http

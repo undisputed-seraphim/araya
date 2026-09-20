@@ -2,20 +2,16 @@
 
 #include <memory>
 #include <span>
-#include <stdexcept>
 
 namespace araya::llm {
 namespace {
 
-// The llm provider: apply() constructs the service on the owning
-// activation's bus executor and binds it under llm_key. Adapters
-// register routes through the service from their own fibers.
+// The llm provider: apply() constructs the service and binds it under
+// llm_key. Adapters register routes through the service from their own
+// fibers.
 struct llm_plugin : araya::plugin {
 	araya::task<void> apply(araya::plugin_context& ctx) override {
-		if (!ctx.activation_ptr() || !ctx.activation_ptr()->bus)
-			throw std::logic_error("llm requires an activation with an event bus");
-		auto service = std::make_shared<llm_service>(ctx.activation_ptr()->bus->executor());
-		ctx.provide(llm_key, std::move(service));
+		ctx.provide(llm_key, std::make_shared<llm_service>());
 		co_return;
 	}
 };
