@@ -113,9 +113,18 @@ struct llm_failure {
 
 	llm_error_code code = llm_error_code::server;
 	std::string message;
+	// The provider's own machine code, verbatim from the wire (e.g.
+	// "content_filter", "insufficient_quota"); empty when the provider
+	// sent none. Diagnostic only - routing stays on `code`.
+	std::string provider_code;
 	std::optional<int> status;
 	std::optional<std::chrono::milliseconds> provider_retry_after;
 	std::optional<std::string> request_id;
+
+	// The display code: the provider's string when present, the routing
+	// code's name otherwise. Both point at stable storage (this member
+	// or a static literal), so the pointer lives as long as the failure.
+	char const* code_string() const noexcept;
 };
 
 // Thrown for registry and malformed-option errors only; provider and

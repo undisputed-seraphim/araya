@@ -165,6 +165,8 @@ TEST_CASE("finish reasons map: length to max_tokens, unknowns to an error failur
 		CHECK(finish.why == finish_chunk::reason::error);
 		REQUIRE(finish.failure.has_value());
 		CHECK(finish.failure->message.find("content_filter") != std::string::npos);
+		CHECK(finish.failure->provider_code == "content_filter");
+		CHECK(finish.failure->code_string() == std::string("content_filter"));
 	}
 }
 
@@ -189,6 +191,8 @@ TEST_CASE("failure_for maps statuses to stable codes") {
 	CHECK(auth.code == llm_error_code::auth);
 	CHECK(auth.status == 401);
 	CHECK(auth.message == "bad key");
+	CHECK(auth.provider_code.empty());
+	CHECK(auth.code_string() == std::string("auth"));
 
 	auto rate = failure_for(
 		429, R"({"error":{"message":"slow down"}})", std::chrono::milliseconds(42000), std::string("req-1"));
@@ -196,16 +200,22 @@ TEST_CASE("failure_for maps statuses to stable codes") {
 	CHECK(rate.provider_retry_after == std::chrono::milliseconds(42000));
 	CHECK(rate.request_id == "req-1");
 
-	auto quota =
-		failure_for(429, R"({"error":{"message":"insufficient_quota: out of credits"}})", std::nullopt, std::nullopt);
+	auto quota = failure_for(
+		429,
+		R"({"error":{"code":"insufficient_quota","type":"invalid_request_error","message":"out of credits"}})",
+		std::nullopt,
+		std::nullopt);
 	CHECK(quota.code == llm_error_code::quota);
+	CHECK(quota.provider_code == "insufficient_quota");
 
 	auto context = failure_for(
 		400, R"({"error":{"message":"This model's maximum context length is exceeded"}})", std::nullopt, std::nullopt);
 	CHECK(context.code == llm_error_code::context_window_exceeded);
 
-	auto invalid = failure_for(400, R"({"error":{"message":"bad request"}})", std::nullopt, std::nullopt);
+	auto invalid =
+		failure_for(400, R"({"error":{"type":"bad_request","message":"bad request"}})", std::nullopt, std::nullopt);
 	CHECK(invalid.code == llm_error_code::invalid_request);
+	CHECK(invalid.provider_code == "bad_request");
 
 	auto server = failure_for(502, "gateway gone", std::nullopt, std::nullopt);
 	CHECK(server.code == llm_error_code::server);

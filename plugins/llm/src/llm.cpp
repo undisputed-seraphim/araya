@@ -43,6 +43,10 @@ char const* llm_error::code_name(llm_error_code code) noexcept {
 	return "?";
 }
 
+char const* llm_failure::code_string() const noexcept {
+	return provider_code.empty() ? llm_error::code_name(code) : provider_code.c_str();
+}
+
 llm_service::llm_service(boost::asio::any_io_executor executor)
 	: executor_(std::move(executor)) {}
 

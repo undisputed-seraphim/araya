@@ -204,10 +204,20 @@ llm_failure failure_for(
 	std::optional<std::string> request_id) {
 	std::string message;
 	std::string detail;
+	std::string provider_code;
 	try {
 		auto const parsed = boost::json::parse(body);
 		if (auto const* error = parsed.as_object().if_contains("error"); error && error->is_object()) {
 			auto const& object = error->as_object();
+			// The provider's verbatim machine code: error.code wins, then
+			// error.type. Diagnostic only - classification below stays on
+			// the HTTP status and the folded detail text.
+			if (auto const* node = object.if_contains("code"); node && node->is_string() && !node->as_string().empty())
+				provider_code = std::string(node->as_string());
+			if (provider_code.empty()) {
+				if (auto const* node = object.if_contains("type"); node && node->is_string())
+					provider_code = std::string(node->as_string());
+			}
 			for (auto const* field : {"code", "type", "message"}) {
 				if (auto const* node = object.if_contains(field); node && node->is_string()) {
 					if (!detail.empty())
@@ -243,6 +253,7 @@ llm_failure failure_for(
 	failure.status = status;
 	failure.provider_retry_after = retry_after;
 	failure.request_id = request_id;
+	failure.provider_code = std::move(provider_code);
 	return failure;
 }
 
@@ -350,8 +361,13 @@ std::vector<stream_chunk> chunk_translator::feed(boost::json::value const& wire)
 					pending_finish_ = finish_chunk::reason::max_tokens;
 				} else {
 					// content_filter, insufficient_system_resource, ...
+					// The provider's reason rides verbatim in
+					// provider_code; the routing code stays the fixed
+					// malformed_response.
 					pending_finish_ = finish_chunk::reason::error;
-					pending_failure_ = llm_failure{llm_error_code::malformed_response, "model stopped: " + text};
+					auto failure = llm_failure{llm_error_code::malformed_response, "model stopped: " + text};
+					failure.provider_code = text;
+					pending_failure_ = std::move(failure);
 				}
 			}
 		}

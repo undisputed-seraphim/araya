@@ -706,6 +706,9 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 		};
 		co_await service->stream(options, sink);
 
+		// The routing name and the human message. A future surface that
+		// wants the provider's verbatim code (e.g. "content_filter") can
+		// switch the name to failure->code_string() here.
 		if (failure)
 			out("chat: " + std::string(araya::llm::llm_error::code_name(failure->code)) + ": " + failure->message);
 		if (assembled.empty()) {
