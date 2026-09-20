@@ -39,7 +39,7 @@ llm_failure failure_for(
 	unsigned status,
 	std::string_view body,
 	std::optional<std::chrono::milliseconds> retry_after,
-	std::optional<std::string> request_id);
+	std::string request_id);
 
 // Parses a Retry-After header value: integer seconds or an HTTP-date.
 std::optional<std::chrono::milliseconds> parse_retry_after(std::string_view value);
@@ -67,10 +67,18 @@ private:
 		araya::llm::content_block_type kind = araya::llm::content_block_type::text;
 		std::string text;
 		std::string call_id;
-		std::optional<std::string> name;
+		std::string name;
 	};
 
 	open_block& open(araya::llm::content_block_type kind);
+
+	// Opens the block through `slot` (emitting block_start) and returns
+	// it: the shared shape of the text and reasoning delta branches.
+	open_block& ensure(open_block*& slot, araya::llm::content_block_type kind, std::vector<stream_chunk>& chunks);
+
+	// The assembled block for one open block; nullopt when the kind
+	// never streams (tool results).
+	std::optional<araya::llm::content_block> close_block(open_block const& block) const;
 
 	std::vector<open_block> order_;
 	open_block* text_ = nullptr;

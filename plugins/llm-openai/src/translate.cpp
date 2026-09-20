@@ -107,8 +107,8 @@ boost::json::value build_request(generate_options const& options) {
 	root["model"] = options.model;
 
 	boost::json::array messages;
-	if (options.system)
-		messages.emplace_back(boost::json::object{{"role", "system"}, {"content", *options.system}});
+	if (!options.system.empty())
+		messages.emplace_back(boost::json::object{{"role", "system"}, {"content", options.system}});
 	for (auto const& message : options.messages) {
 		switch (message.role) {
 		case araya::llm::message_role::system:
@@ -169,9 +169,9 @@ boost::json::value build_request(generate_options const& options) {
 	root["messages"] = std::move(messages);
 	root["stream"] = true;
 	root["stream_options"] = boost::json::value{{"include_usage", true}};
-	if (options.reasoning_effort && has_reasoning_effort(*options.reasoning_effort)) {
+	if (!options.reasoning_effort.empty() && has_reasoning_effort(options.reasoning_effort)) {
 		root["thinking"] = boost::json::object{{"type", "enabled"}};
-		root["reasoning_effort"] = *options.reasoning_effort;
+		root["reasoning_effort"] = options.reasoning_effort;
 	}
 	if (!options.tools.empty()) {
 		boost::json::array tools;
@@ -201,7 +201,7 @@ llm_failure failure_for(
 	unsigned status,
 	std::string_view body,
 	std::optional<std::chrono::milliseconds> retry_after,
-	std::optional<std::string> request_id) {
+	std::string request_id) {
 	std::string message;
 	std::string detail;
 	std::string provider_code;
@@ -250,9 +250,9 @@ llm_failure failure_for(
 
 	llm_failure failure{
 		code, message.empty() ? "provider error (HTTP " + std::to_string(status) + ")" : std::move(message)};
-	failure.status = status;
+	failure.status = static_cast<int>(status);
 	failure.provider_retry_after = retry_after;
-	failure.request_id = request_id;
+	failure.request_id = std::move(request_id);
 	failure.provider_code = std::move(provider_code);
 	return failure;
 }
@@ -262,6 +262,29 @@ chunk_translator::open_block& chunk_translator::open(araya::llm::content_block_t
 	block.index = next_index_++;
 	block.kind = kind;
 	return block;
+}
+
+chunk_translator::open_block&
+chunk_translator::ensure(open_block*& slot, araya::llm::content_block_type kind, std::vector<stream_chunk>& chunks) {
+	if (!slot) {
+		slot = &open(kind);
+		chunks.emplace_back(araya::llm::block_start_chunk{slot->index, kind});
+	}
+	return *slot;
+}
+
+std::optional<araya::llm::content_block> chunk_translator::close_block(open_block const& block) const {
+	switch (block.kind) {
+	case content_block_type::text:
+		return araya::llm::content_block{araya::llm::text_block{block.text}};
+	case content_block_type::reasoning:
+		return araya::llm::content_block{araya::llm::reasoning_block{block.text}};
+	case content_block_type::tool_call:
+		return araya::llm::content_block{araya::llm::tool_call_block{block.call_id, block.name, block.text}};
+	case content_block_type::tool_result:
+		break; // never opened: tool results never stream
+	}
+	return std::nullopt;
 }
 
 std::vector<stream_chunk> chunk_translator::feed(boost::json::value const& wire) {
@@ -285,24 +308,17 @@ std::vector<stream_chunk> chunk_translator::feed(boost::json::value const& wire)
 				// text; the empty first chunk must not open a block.
 				if (auto const* reasoning = delta.if_contains("reasoning_content");
 					reasoning && reasoning->is_string() && !reasoning->as_string().empty()) {
-					if (!reasoning_) {
-						reasoning_ = &open(content_block_type::reasoning);
-						chunks.emplace_back(
-							araya::llm::block_start_chunk{reasoning_->index, content_block_type::reasoning});
-					}
-					reasoning_->text += reasoning->as_string();
+					auto& block = ensure(reasoning_, content_block_type::reasoning, chunks);
+					block.text += reasoning->as_string();
 					chunks.emplace_back(
-						araya::llm::reasoning_delta_chunk{reasoning_->index, std::string(reasoning->as_string())});
+						araya::llm::reasoning_delta_chunk{block.index, std::string(reasoning->as_string())});
 				}
 
 				if (auto const* content = delta.if_contains("content");
 					content && content->is_string() && !content->as_string().empty()) {
-					if (!text_) {
-						text_ = &open(content_block_type::text);
-						chunks.emplace_back(araya::llm::block_start_chunk{text_->index, content_block_type::text});
-					}
-					text_->text += content->as_string();
-					chunks.emplace_back(araya::llm::text_delta_chunk{text_->index, std::string(content->as_string())});
+					auto& block = ensure(text_, content_block_type::text, chunks);
+					block.text += content->as_string();
+					chunks.emplace_back(araya::llm::text_delta_chunk{block.index, std::string(content->as_string())});
 				}
 
 				if (auto const* calls = delta.if_contains("tool_calls"); calls && calls->is_array()) {
@@ -330,9 +346,7 @@ std::vector<stream_chunk> chunk_translator::feed(boost::json::value const& wire)
 						if (auto const* function = call_object.if_contains("function");
 							function && function->is_object())
 							name_node = function->as_object().if_contains("name");
-						block->name = accept_identity(block->name.value_or(""), name_node);
-						if (block->name->empty())
-							block->name.reset();
+						block->name = accept_identity(block->name, name_node);
 						std::string fragment;
 						if (auto const* function = call_object.if_contains("function");
 							function && function->is_object()) {
@@ -384,24 +398,9 @@ std::vector<stream_chunk> chunk_translator::finish() {
 	done_ = true;
 	std::vector<stream_chunk> chunks;
 	for (auto const& block : order_) {
-		switch (block.kind) {
-		case content_block_type::text:
-			chunks.emplace_back(araya::llm::block_end_chunk{
-				block.index, araya::llm::content_block{araya::llm::text_block{block.text}}});
-			break;
-		case content_block_type::reasoning:
-			chunks.emplace_back(araya::llm::block_end_chunk{
-				block.index, araya::llm::content_block{araya::llm::reasoning_block{block.text}}});
-			break;
-		case content_block_type::tool_call:
-			chunks.emplace_back(araya::llm::block_end_chunk{
-				block.index,
-				araya::llm::content_block{
-					araya::llm::tool_call_block{block.call_id, block.name.value_or(""), block.text}}});
-			break;
-		case content_block_type::tool_result:
-			break;
-		}
+		auto closed = close_block(block);
+		if (closed)
+			chunks.emplace_back(araya::llm::block_end_chunk{block.index, std::move(*closed)});
 	}
 	if (pending_usage_)
 		chunks.emplace_back(araya::llm::usage_chunk{*pending_usage_});

@@ -117,9 +117,9 @@ struct llm_failure {
 	// "content_filter", "insufficient_quota"); empty when the provider
 	// sent none. Diagnostic only - routing stays on `code`.
 	std::string provider_code;
-	std::optional<int> status;
+	int status = 0; // 0 = none (no valid HTTP status is 0)
 	std::optional<std::chrono::milliseconds> provider_retry_after;
-	std::optional<std::string> request_id;
+	std::string request_id; // empty = none
 
 	// The display code: the provider's string when present, the routing
 	// code's name otherwise. Both point at stable storage (this member
@@ -187,15 +187,15 @@ struct tool_schema {
 struct generate_options {
 	std::string provider;
 	std::string model;
-	std::optional<std::string> reasoning_effort;
+	std::string reasoning_effort; // empty = model default
 	std::vector<llm_message> messages;
-	std::optional<std::string> system;
+	std::string system; // empty = no system prompt
 	std::vector<tool_schema> tools;
 	std::optional<double> temperature;
 	std::optional<std::uint64_t> max_tokens;
 	std::vector<std::string> stop;
 	std::stop_token stop_token;
-	std::optional<std::string> session_id;
+	std::string session_id; // empty = none
 };
 
 // -- the chunk stream -------------------------------------------------------
@@ -218,8 +218,8 @@ struct reasoning_delta_chunk {
 struct tool_call_delta_chunk {
 	std::size_t index = 0;
 	std::string id;
-	std::optional<std::string> name; // first fragment only
-	std::string arguments_delta;	 // raw JSON fragment
+	std::string name;			 // empty until the wire carries it (first fragment only)
+	std::string arguments_delta; // raw JSON fragment
 };
 
 struct block_end_chunk {
