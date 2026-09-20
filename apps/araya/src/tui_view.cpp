@@ -33,7 +33,10 @@ ftxui::Component build_ui(
 	InputOption input_options;
 	input_options.placeholder = "command (help)";
 	Component input = Input(&input_buffer, input_options);
-	input |= CatchEvent([&](Event event) {
+	// on_command/on_exit are build_ui parameters: capture them by value -
+	// the component outlives this frame, and a [&] capture of them is a
+	// dangling reference (the freed slots get reused at -O2).
+	input |= CatchEvent([&, on_command = std::move(on_command), on_exit = std::move(on_exit)](Event event) {
 		if (event == Event::CtrlD) {
 			on_exit();
 			return true;
@@ -67,7 +70,7 @@ ftxui::Component build_ui(
 	// the opencode-style dark background.
 	Color const k_prompt_bg = Color::RGB(0x28, 0x28, 0x28);
 
-	auto prompt_box = Renderer(input, [&, input] {
+	auto prompt_box = Renderer(input, [&, input, k_prompt_bg] {
 		return vbox({
 				   input->Render(),
 				   filler(),
@@ -78,7 +81,7 @@ ftxui::Component build_ui(
 	// The hint line under the prompt: the working directory on the
 	// right, and the ctrl+p hint flushed to the far right of the main
 	// column. ctrl+p is a no-op for now.
-	auto hint_view = Renderer([&] {
+	auto hint_view = Renderer([&, k_prompt_bg] {
 		auto snap = sh.snap.load(std::memory_order_acquire);
 		return hbox({
 				   filler(),
@@ -97,7 +100,7 @@ ftxui::Component build_ui(
 	Color const k_sidebar_dim = Color::GrayDark;
 	Color const k_accent = Color::Cyan;
 
-	auto sidebar_view = Renderer([&] {
+	auto sidebar_view = Renderer([&, k_sidebar_bg, k_sidebar_dim, k_accent] {
 		auto snap = sh.snap.load(std::memory_order_acquire);
 		auto section = [&](std::string_view title, std::vector<std::string> const& rows) {
 			Elements out;
