@@ -21,3 +21,13 @@ target_link_libraries(araya_llm_mock PUBLIC
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(araya_llm_mock PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
+
+if(Catch2_FOUND)
+    add_executable(araya_llm_mock_tests tests/mock_test.cpp)
+    target_link_libraries(araya_llm_mock_tests PRIVATE
+        araya::llm-mock
+        Catch2::Catch2WithMain
+    )
+    include(Catch)
+    catch_discover_tests(araya_llm_mock_tests)
+endif()

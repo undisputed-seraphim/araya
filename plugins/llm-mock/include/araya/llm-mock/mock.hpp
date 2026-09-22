@@ -4,9 +4,11 @@
 #include "araya/plugin.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // The mock adapter: deterministic canned chunks for tests and demos,
 // zero network. Configured through the plugin config map (flat keys):
@@ -21,7 +23,20 @@
 //   input_tokens    usage to report (default 1)
 //   output_tokens   usage to report (default 1)
 //   delay_ms        pacing between chunks (default 0)
+//   script          JSON array of steps, one consumed per call:
+//                     [{"text": "..."},
+//                      {"tool_call": {"name": "...", "arguments": "..."}}]
+//                   When the script runs out, the canned `response`
+//                   takes over.
 namespace araya::llm_mock {
+
+struct mock_step {
+	bool is_tool_call = false;
+	// The canned text, or the tool name for a tool-call step.
+	std::string text;
+	// Tool-call arguments, raw JSON exactly as the model would send them.
+	std::string arguments;
+};
 
 struct mock_config {
 	std::string provider = "mock";
@@ -33,6 +48,7 @@ struct mock_config {
 	std::uint64_t input_tokens = 1;
 	std::uint64_t output_tokens = 1;
 	std::chrono::milliseconds delay{0};
+	std::vector<mock_step> script;
 };
 
 // Parses the flat config map. Throws std::invalid_argument on unknown
@@ -51,6 +67,7 @@ public:
 
 private:
 	mock_config config_;
+	mutable std::size_t script_index_ = 0;
 };
 
 // The plugin descriptor: requires `llm`, registers the adapter under

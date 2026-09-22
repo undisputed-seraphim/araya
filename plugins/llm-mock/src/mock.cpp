@@ -3,6 +3,7 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include <boost/json/parse.hpp>
 
 #include <cstdlib>
 #include <stdexcept>
@@ -43,6 +44,38 @@ llm_error_code parse_fail_code(std::string_view name) {
 	throw std::invalid_argument("llm-mock: unknown fail_code '" + std::string(name) + "'");
 }
 
+std::vector<mock_step> parse_script(std::string_view json) {
+	boost::system::error_code ec;
+	auto value = boost::json::parse(json, ec);
+	if (ec || !value.is_array())
+		throw std::invalid_argument("llm-mock: script must be a JSON array");
+	std::vector<mock_step> steps;
+	for (auto const& entry : value.as_array()) {
+		auto const* object = entry.if_object();
+		if (!object)
+			throw std::invalid_argument("llm-mock: script steps must be objects");
+		if (auto const* call = object->if_contains("tool_call")) {
+			auto const* spec = call->if_object();
+			auto const* name = spec ? spec->if_contains("name") : nullptr;
+			auto const* arguments = spec ? spec->if_contains("arguments") : nullptr;
+			if (!name || !name->is_string() || !arguments || !arguments->is_string())
+				throw std::invalid_argument("llm-mock: tool_call steps need string name and arguments");
+			mock_step step;
+			step.is_tool_call = true;
+			step.text = std::string(name->as_string());
+			step.arguments = std::string(arguments->as_string());
+			steps.push_back(std::move(step));
+		} else if (auto const* text = object->if_contains("text"); text && text->is_string()) {
+			mock_step step;
+			step.text = std::string(text->as_string());
+			steps.push_back(std::move(step));
+		} else {
+			throw std::invalid_argument("llm-mock: script steps need \"text\" or \"tool_call\"");
+		}
+	}
+	return steps;
+}
+
 } // namespace
 
 mock_config load_config(araya::plugin_config const& config) {
@@ -67,6 +100,8 @@ mock_config load_config(araya::plugin_config const& config) {
 		result.output_tokens = std::strtoull(found->second.c_str(), nullptr, 10);
 	if (auto const found = config.find("delay_ms"); found != config.end())
 		result.delay = std::chrono::milliseconds(std::strtoll(found->second.c_str(), nullptr, 10));
+	if (auto const found = config.find("script"); found != config.end())
+		result.script = parse_script(found->second);
 	return result;
 }
 
@@ -87,7 +122,32 @@ araya::task<void> mock_adapter::stream(generate_options const& options, chunk_si
 		co_return;
 	}
 
-	auto response = config_.response;
+	// Script steps win while they last; the canned response takes over
+	// afterwards.
+	mock_step step;
+	bool scripted = false;
+	auto const index = script_index_++;
+	if (index < config_.script.size()) {
+		step = config_.script[index];
+		scripted = true;
+	}
+
+	if (scripted && step.is_tool_call) {
+		auto const call_id = "call-" + std::to_string(index);
+		co_await sink(araya::llm::block_start_chunk{0, content_block_type::tool_call});
+		co_await sink(araya::llm::tool_call_delta_chunk{0, call_id, step.text, step.arguments});
+		co_await sink(araya::llm::block_end_chunk{
+			0, araya::llm::content_block{araya::llm::tool_call_block{call_id, step.text, step.arguments}}});
+		araya::llm::token_usage usage;
+		usage.input_tokens = config_.input_tokens;
+		usage.output_tokens = config_.output_tokens;
+		usage.total_tokens = config_.input_tokens + config_.output_tokens;
+		co_await sink(araya::llm::usage_chunk{usage});
+		co_await sink(finish_chunk{finish_chunk::reason::tool_calls, std::nullopt, std::nullopt});
+		co_return;
+	}
+
+	auto response = scripted ? step.text : config_.response;
 	auto const user_text = last_user_text(options);
 	auto const placeholder = response.find("{user}");
 	if (placeholder != std::string::npos)
