@@ -2,6 +2,8 @@
 
 #include "demo_plugins.hpp"
 
+#include "araya/agent-loop/agent.hpp"
+#include "araya/agent-loop/bridge.hpp"
 #include "araya/llm-mock/mock.hpp"
 #include "araya/llm-openai/openai.hpp"
 #include "araya/llm/llm.hpp"
@@ -12,6 +14,7 @@
 #include "araya/timer/timer.hpp"
 
 #include <boost/asio/use_awaitable.hpp>
+#include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
 
@@ -85,60 +88,8 @@ boost::json::value assistant_message(
 	return data;
 }
 
-// The session surface -> llm message bridge. The agent loop will own
-// this once it exists; until then it lives with the chat command. Tool
-// results project onto the user role (the session's own projection),
-// and unknown block types are dropped.
-araya::llm::llm_message to_llm_message(araya::session::session_message const& message) {
-	araya::llm::llm_message result;
-	switch (message.role) {
-	case araya::session::message_role::system:
-		result.role = araya::llm::message_role::system;
-		break;
-	case araya::session::message_role::user:
-		result.role = araya::llm::message_role::user;
-		break;
-	case araya::session::message_role::assistant:
-		result.role = araya::llm::message_role::assistant;
-		break;
-	case araya::session::message_role::tool_result:
-		result.role = araya::llm::message_role::user;
-		break;
-	}
-	if (auto const* array = message.content.if_array()) {
-		for (auto const& block : *array) {
-			auto const* object = block.if_object();
-			if (!object)
-				continue;
-			std::string_view type;
-			if (auto const* node = object->if_contains("type"); node && node->is_string())
-				type = node->as_string();
-			auto take_string = [&](std::string_view key) {
-				std::string text;
-				if (auto const* node = object->if_contains(key); node && node->is_string())
-					text = std::string(node->as_string());
-				return text;
-			};
-			if (type == "text") {
-				result.content.emplace_back(araya::llm::text_block{take_string("text")});
-			} else if (type == "reasoning") {
-				result.content.emplace_back(araya::llm::reasoning_block{take_string("text")});
-			} else if (type == "tool_call") {
-				result.content.emplace_back(
-					araya::llm::tool_call_block{take_string("id"), take_string("name"), take_string("arguments")});
-			} else if (type == "tool_result") {
-				araya::llm::tool_result_block tool;
-				tool.tool_call_id = take_string("tool_call_id");
-				if (auto const* node = object->if_contains("content"))
-					tool.content = *node;
-				if (auto const* node = object->if_contains("is_error"); node && node->is_bool())
-					tool.is_error = node->as_bool();
-				result.content.emplace_back(std::move(tool));
-			}
-		}
-	}
-	return result;
-}
+// The session surface -> llm message bridge lives in the agent-loop
+// plugin (araya::agent::to_llm_message); the chat command uses it too.
 
 template <class... Ts>
 struct overloaded : Ts... {
@@ -146,6 +97,33 @@ struct overloaded : Ts... {
 };
 template <class... Ts>
 overloaded(Ts...) -> overloaded<Ts...>;
+
+char const* run_status_name(araya::agent::run_status status) {
+	switch (status) {
+	case araya::agent::run_status::completed:
+		return "completed";
+	case araya::agent::run_status::max_tokens:
+		return "max_tokens";
+	case araya::agent::run_status::aborted:
+		return "aborted";
+	case araya::agent::run_status::error:
+		return "error";
+	case araya::agent::run_status::blocked:
+		return "blocked";
+	}
+	return "?";
+}
+
+// The app's demo tool: registered at boot so the scripted agent demo has
+// something to call. Real hosts register their own tools from plugins.
+araya::task<araya::agent::tool_result> demo_echo(araya::agent::tool_context const& ctx) {
+	std::string text;
+	if (auto const* object = ctx.arguments.if_object()) {
+		if (auto const* node = object->if_contains("text"); node && node->is_string())
+			text = std::string(node->as_string());
+	}
+	co_return araya::agent::tool_result{boost::json::array{{{"type", "text"}, {"text", "echo tool: " + text}}}, false};
+}
 
 std::optional<std::string> status_of(std::string_view path, std::vector<araya::fiber_info> const& fibers) {
 	for (auto const& f : fibers) {
@@ -212,7 +190,27 @@ araya::task<void> cmd_load(app_context& ctx, line_sink const& out, std::string c
 		out(name + ": already loaded");
 		co_return;
 	}
-	ctx.desired[name] = desired_entry{descriptor, default_config(name)};
+	araya::plugin_config config = default_config(name);
+	// Optional inline JSON config: load <component> {"key": ...}. Values
+	// that are not strings ride along serialized.
+	std::string tail;
+	std::getline(is, tail);
+	tail = trim(tail);
+	if (!tail.empty()) {
+		boost::system::error_code ec;
+		auto value = boost::json::parse(tail, ec);
+		if (ec || !value.is_object()) {
+			out("load: trailing config must be a JSON object");
+			co_return;
+		}
+		for (auto const& [key, entry] : value.as_object()) {
+			if (entry.is_string())
+				config[key] = std::string(entry.as_string());
+			else
+				config[key] = boost::json::serialize(entry);
+		}
+	}
+	ctx.desired[name] = desired_entry{descriptor, std::move(config)};
 	co_await reconcile_print(ctx, out, name);
 }
 
@@ -683,7 +681,7 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 		options.model = model->model;
 		options.session_id = ctx.current->value;
 		for (auto const& message : s->surface().messages())
-			options.messages.push_back(to_llm_message(message));
+			options.messages.push_back(araya::agent::to_llm_message(message));
 
 		std::string assembled;
 		araya::llm::token_usage usage;
@@ -726,6 +724,101 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 	co_return;
 }
 
+araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string const& line) {
+	try {
+		std::istringstream is(line);
+		std::string cmd;
+		is >> cmd;
+		std::string text;
+		std::getline(is, text);
+		text = trim(text);
+		if (text.empty()) {
+			out("ask: usage: ask <text>");
+			co_return;
+		}
+
+		auto root_ctx = ctx.rt->root_context();
+		auto store = root_ctx.require<session_store>(sessions_key).shared();
+		auto service = root_ctx.require<araya::llm::llm_service>(araya::llm::llm_key).shared();
+		auto agent = root_ctx.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
+
+		std::shared_ptr<araya::session::session> s;
+		if (ctx.current)
+			s = store->get(*ctx.current);
+		if (!s) {
+			auto sid = store->mint_id();
+			s = store->create(root_ctx, sid, {});
+			ctx.current = sid;
+			out("session: created " + sid.value);
+		}
+
+		auto providers = service->providers();
+		if (providers.empty()) {
+			out("ask: llm service has no provider routes (load llm-mock or configure llm-openai)");
+			co_return;
+		}
+		auto const& provider = providers.front();
+		auto model = service->resolve_model(provider, "");
+		if (!model || model->model.empty()) {
+			out("ask: provider '" + provider + "' did not resolve a default model");
+			co_return;
+		}
+
+		araya::agent::run_options options;
+		options.provider = provider;
+		options.model = model->model;
+		options.session = s->id();
+		options.input = text;
+
+		std::string assembled;
+		araya::agent::event_sink observer = [&](araya::agent::agent_event const& event) {
+			std::visit(
+				overloaded{
+					[&](araya::llm::stream_chunk const& chunk) {
+						std::visit(
+							overloaded{
+								[&](araya::llm::text_delta_chunk const& delta) { assembled += delta.text; },
+								[](auto const&) {}},
+							chunk);
+					},
+					[&](araya::agent::tool_call_event const& call) { out("tool: " + call.name); },
+					[&](araya::agent::tool_done_event const& done) {
+						out(std::string("tool: ") + done.name + (done.is_error ? " (error)" : " done"));
+					},
+					[](auto const&) {}},
+				event);
+		};
+		auto outcome = co_await agent->run(options, observer);
+
+		if (outcome.failure)
+			out("ask: " + std::string(araya::llm::llm_error::code_name(outcome.failure->code)) + ": " +
+				outcome.failure->message);
+		if (!assembled.empty())
+			out("assistant: " + assembled);
+		out(std::string("ask: ") + run_status_name(outcome.status));
+	} catch (std::exception const& e) {
+		out(std::string("ask: ") + e.what());
+	}
+	co_return;
+}
+
+araya::task<void> cmd_tool(app_context& ctx, line_sink const& out, std::string const&) {
+	try {
+		auto root_ctx = ctx.rt->root_context();
+		auto agent = root_ctx.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
+		auto tools = agent->tools();
+		if (tools.empty()) {
+			out("tool: no tools registered");
+			co_return;
+		}
+		for (auto const& tool : tools)
+			out("tool: " + tool.name + " - " + tool.description);
+	} catch (std::exception const& e) {
+		out(std::string("tool: ") + e.what());
+	}
+	co_return;
+}
+
 using command_fn = araya::task<void> (*)(app_context&, line_sink const&, std::string const&);
 
 struct command_entry {
@@ -738,8 +831,9 @@ struct command_entry {
 constexpr command_entry g_commands[]{
 	{"ls", "ls", "print the fiber tree", &cmd_ls},
 	{"load",
-	 "load <component>",
-	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | console | beacon | watcher",
+	 "load <component> [json config]",
+	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | agent-loop | console | beacon | "
+	 "watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -751,6 +845,8 @@ constexpr command_entry g_commands[]{
 	 &cmd_session},
 	{"timer", "timer ...", "in <sec> <text> | every <sec> <text> | cancel", &cmd_timer},
 	{"log", "log ...", "level <level> | <level> <text>", &cmd_log},
+	{"tool", "tool", "list the agent's registered tools", &cmd_tool},
+	{"ask", "ask <text>", "run the agent loop (tools + system prompt)", &cmd_ask},
 	{"chat", "chat <text>", "one-shot prompt through the llm service", &cmd_chat},
 };
 
@@ -789,6 +885,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::llm_openai::plugin_descriptor();
 	if (name == "llm-mock")
 		return &araya::llm_mock::plugin_descriptor();
+	if (name == "agent-loop")
+		return &araya::agent::plugin_descriptor();
 	if (name == "console")
 		return &araya::console_demo::console_descriptor();
 	if (name == "beacon")
@@ -871,6 +969,9 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	ctx.desired["session"] = desired_entry{&araya::session::plugin_descriptor(), {}};
 	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", "araya-sessions"}}};
 	ctx.desired["llm"] = desired_entry{&araya::llm::plugin_descriptor(), {}};
+	// The agent-loop's system prompt is a config option: nothing is set
+	// by default, and nothing is hardcoded in the plugin.
+	ctx.desired["agent-loop"] = desired_entry{&araya::agent::plugin_descriptor(), {}};
 	if (!ctx.llm_config.empty())
 		ctx.desired["llm-openai"] =
 			desired_entry{&araya::llm_openai::plugin_descriptor(), {{"config_file", ctx.llm_config}}};
@@ -906,6 +1007,24 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 					m.event.type);
 			},
 			0);
+
+		// The app's demo tool, registered on the host fiber so the
+		// scripted agent demo has something to call. Real hosts register
+		// their tools from plugins.
+		auto root = ctx.rt->root_context();
+		auto agent = root.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
+		agent->register_tool(
+			root,
+			araya::agent::tool_spec{
+				"echo",
+				"echoes the text argument",
+				boost::json::value{
+					{"type", "object"},
+					{"properties",
+					 boost::json::object{
+						 {"text", boost::json::object{{"type", "string"}, {"description", "the text to echo"}}}}},
+					{"required", boost::json::array{"text"}}}},
+			&demo_echo);
 	});
 }
 

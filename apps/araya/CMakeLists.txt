@@ -17,6 +17,7 @@ set_target_properties(araya_app PROPERTIES
 
 target_link_libraries(araya_app PRIVATE
     araya::araya
+    araya::agent-loop
     araya::demo
     araya::llm
     araya::llm-mock
@@ -53,6 +54,11 @@ if(CMAKE_TESTING_ENABLED)
         COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/chat.txt)
     set_tests_properties(chat_demo PROPERTIES TIMEOUT 60
         PASS_REGULAR_EXPRESSION "assistant: echo: hello world")
+
+    add_test(NAME agent_demo
+        COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/agent.txt)
+    set_tests_properties(agent_demo PROPERTIES TIMEOUT 60
+        PASS_REGULAR_EXPRESSION "assistant: task done")
 
     add_test(NAME restart_cycle
         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/demo/restart-cycle.sh
