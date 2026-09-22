@@ -200,12 +200,17 @@ ctest --test-dir build/asan
 session plugin builds; it is not needed for normal builds.
 
 ThreadSanitizer, same idea (GCC; `-Wno-tsan` silences GCC's "fences not supported with
-tsan" diagnostic, and Clang cannot link the GCC-LTO `libboost_json` this machine ships):
+tsan" diagnostic, and Clang cannot link the GCC-LTO `libboost_json` this machine ships).
+Two GNU ld workarounds are required: `-fno-gnu-unique` (Boost 1.91's inline variables
+use GNU unique symbols, which TSan builds leave dangling in COMDAT sections) and an
+unclosed `-Wl,--start-group` (one-pass archive extraction under TSan's retained
+instantiations leaves `boost::system` references undefined in binaries that link the
+session and llm plugins together - the agent-loop tests):
 
 ```sh
 cmake -B build/tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-    -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -Wno-tsan -Wno-error=tsan" \
-    -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" \
+    -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -Wno-tsan -Wno-error=tsan -fno-gnu-unique" \
+    -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread -Wl,--start-group" \
     -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread"
 cmake --build build/tsan
 ctest --test-dir build/tsan
