@@ -185,6 +185,7 @@ constexpr command_entry g_commands[]{
 	{"tool", "tool", "list the agent's registered tools", &cmd_tool},
 	{"ask", "ask <text>", "run the agent loop (tools + system prompt)", &cmd_ask},
 	{"chat", "chat <text>", "one-shot prompt through the llm service", &cmd_chat},
+	{"say", "say <text>", "append a message locally (no model)", &cmd_say},
 };
 
 } // namespace
@@ -406,6 +407,22 @@ std::string help_text() {
 	}
 	text += "  help                    this text";
 	return text;
+}
+
+bool is_command(std::string_view line) {
+	auto first = line.find_first_not_of(" \t");
+	if (first == std::string_view::npos)
+		return false;
+	auto last = line.find_last_not_of(" \t");
+	line = line.substr(first, last - first + 1);
+	auto name = line.substr(0, line.find_first_of(" \t"));
+	if (name == "help")
+		return true;
+	for (auto const& entry : g_commands) {
+		if (entry.name == name)
+			return true;
+	}
+	return false;
 }
 
 } // namespace araya::app

@@ -61,6 +61,11 @@ std::vector<araya::desired_component> make_desired(app_context& ctx);
 araya::plugin_descriptor const* real_descriptor(std::string_view name);
 araya::plugin_config default_config(std::string_view name);
 
+// Whether the first token of `line` names a command this surface knows
+// (the command table plus help). Surfaces use it to tell a command from a
+// conversation line before routing.
+bool is_command(std::string_view line);
+
 char const* state_name(araya::fiber_state s);
 std::string error_text(std::exception_ptr ep);
 std::string role_name(araya::session::message_role role);

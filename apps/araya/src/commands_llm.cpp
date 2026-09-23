@@ -211,6 +211,44 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 	co_return;
 }
 
+araya::task<void> cmd_say(app_context& ctx, line_sink const& out, std::string const& line) {
+	try {
+		std::istringstream is(line);
+		std::string cmd;
+		is >> cmd;
+		std::string text;
+		std::getline(is, text);
+		text = trim(text);
+		if (text.empty()) {
+			out("say: usage: say <text>");
+			co_return;
+		}
+
+		auto root_ctx = ctx.rt->root_context();
+		auto store = root_ctx.require<session_store>(sessions_key).shared();
+
+		// Auto-create a session when none is current, the same way chat
+		// and ask do: a typed line always lands somewhere.
+		std::shared_ptr<araya::session::session> s;
+		if (ctx.current)
+			s = store->get(*ctx.current);
+		if (!s) {
+			auto sid = store->mint_id();
+			s = store->create(root_ctx, sid, {});
+			ctx.current = sid;
+			out("session: created " + sid.value);
+		}
+
+		// Local capture only - no llm service, no provider route. The
+		// feed renders this as a user row.
+		(void)s->append(
+			"user/message", araya::llm_bridge::user_message_data("u" + std::to_string(s->log().size()), text));
+	} catch (std::exception const& e) {
+		out(std::string("say: ") + e.what());
+	}
+	co_return;
+}
+
 araya::task<void> cmd_tool(app_context& ctx, line_sink const& out, std::string const&) {
 	try {
 		auto root_ctx = ctx.rt->root_context();

@@ -23,11 +23,23 @@ struct component_row {
 	std::string error;
 };
 
+// One rendered conversation row, folded from the current session's
+// surface on the engine side (the UI never touches the session).
+struct feed_message {
+	std::string role;
+	std::string text;
+};
+
 // An immutable UI snapshot: the engine builds a fresh one and swaps it
 // in atomically; the UI thread copies the shared_ptr and renders.
 struct snapshot {
 	std::vector<component_row> components;
 	std::vector<std::string> log;
+	// The conversation: the current session's folded messages.
+	std::vector<feed_message> messages;
+	// Whether the user has begun (submitted anything): the entry phase
+	// gives way to the session view.
+	bool started = false;
 	// The sidebar: the current session's id (the title placeholder until
 	// titles exist), the collapsed working directory plus git branch,
 	// and the araya version.
@@ -43,6 +55,9 @@ struct shared_state {
 	std::mutex command_mutex;
 	std::deque<std::string> commands;
 	std::atomic<bool> quit{false};
+	// Set by the UI on the first submit so the entry view gives way
+	// immediately, rather than waiting for the engine's next publish.
+	std::atomic<bool> started_ui{false};
 	// Wakes the UI loop after a publish. Set once, before the engine
 	// thread starts; read only from then on.
 	std::function<void()> wake;
@@ -54,6 +69,11 @@ struct engine_state {
 	araya::app::app_context ctx;
 	std::vector<component_row> components;
 	std::deque<std::string> log;
+	// The folded conversation of the current session, rebuilt on the
+	// strand and copied into every snapshot.
+	std::vector<feed_message> messages;
+	// Set on the first submit; mirrored into every snapshot.
+	bool started = false;
 };
 
 // Runs the engine on the calling thread (the engine thread): boots the

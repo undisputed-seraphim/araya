@@ -1,6 +1,10 @@
 #include "tui_state.hpp"
 
+#include "input_route.hpp"
+
 #include "araya/fiber_handle.hpp"
+#include "araya/llm/bridge.hpp"
+#include "araya/session/store.hpp"
 #include "araya/version.hpp"
 
 #include <boost/asio/co_spawn.hpp>
@@ -30,6 +34,8 @@ void publish_snapshot(shared_state& sh, engine_state& e) {
 	auto ns = std::make_shared<snapshot>();
 	ns->components = e.components;
 	ns->log.assign(e.log.begin(), e.log.end());
+	ns->messages = e.messages;
+	ns->started = e.started;
 	ns->session = e.ctx.current ? e.ctx.current->value : "no session";
 	ns->cwd_branch = e.ctx.cwd_branch;
 	ns->cwd = e.ctx.cwd;
@@ -39,8 +45,30 @@ void publish_snapshot(shared_state& sh, engine_state& e) {
 		sh.wake();
 }
 
+// Rebuilds the conversation rows from the current session's folded
+// surface. Must run on the control strand: it touches the session store.
+void fold_messages(engine_state& e) {
+	e.messages.clear();
+	if (!e.ctx.current)
+		return;
+	auto root_ctx = e.ctx.rt->root_context();
+	auto store_lease = root_ctx.find<araya::session::session_store>(araya::session::sessions_key);
+	if (!store_lease)
+		return;
+	auto session = store_lease->shared()->get(*e.ctx.current);
+	if (!session)
+		return;
+	for (auto const& message : session->surface().messages()) {
+		feed_message row;
+		row.role = araya::app::role_name(message.role);
+		row.text = araya::llm_bridge::message_text(message);
+		e.messages.push_back(std::move(row));
+	}
+}
+
 // Commands arrive as strings from the UI and run on the control strand
-// (the shared app layer's contract); output lands in the log.
+// (the shared app layer's contract); output lands in the log. Plain text
+// routes to the local `say` command so it shows up in the conversation.
 araya::task<void> command_loop(shared_state& sh, engine_state& e) {
 	boost::asio::steady_timer timer(e.ctx.rt->bus()->executor());
 	while (!sh.quit.load(std::memory_order_relaxed)) {
@@ -53,12 +81,23 @@ araya::task<void> command_loop(shared_state& sh, engine_state& e) {
 			}
 		}
 		if (!line.empty()) {
+			// Any first submit leaves the entry phase.
+			if (!e.started) {
+				e.started = true;
+				sh.started_ui.store(true, std::memory_order_relaxed);
+			}
+			auto kind =
+				araya::app::classify_input(line, [](std::string_view text) { return araya::app::is_command(text); });
+			if (kind == araya::app::input_kind::message)
+				line = "say " + line;
 			araya::app::line_sink sink = [&e](std::string text) { log_line(e, std::move(text)); };
 			try {
 				co_await araya::app::dispatch(e.ctx, sink, line);
 			} catch (std::exception const& ex) {
 				log_line(e, std::string("error: ") + ex.what());
 			}
+			// The strand is ours here: fold the conversation directly.
+			fold_messages(e);
 			publish_snapshot(sh, e);
 		}
 		timer.expires_after(50ms);
@@ -80,6 +119,7 @@ araya::task<void> refresh_loop(shared_state& sh, engine_state& e) {
 			row.error = f.error ? araya::app::error_text(f.error) : std::string{};
 			e.components.push_back(std::move(row));
 		}
+		co_await e.ctx.rt->run_on_strand([&e] { fold_messages(e); });
 		publish_snapshot(sh, e);
 	}
 }

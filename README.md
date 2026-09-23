@@ -280,14 +280,26 @@ The demo and the save/restart/load cycle are registered as the `script_demo` and
 
 `araya tui` (FTXUI vendored in `thirdparty/`) is the interactive terminal UI and the
 console's intended successor: the same desired tree boots on a background engine thread
-while the UI renders live component states, a session-event log pane, and a command
-input - the UI only ever reads immutable snapshots, so the engine's strand discipline
-stays entirely on the engine side. Logs go to `araya-tui.log` (pre-created file-sink
-loggers the logger service adopts by name), keeping quill's output off the canvas.
-Requires a terminal; Ctrl+D quits (the `quit` command works too), and Ctrl+C is
-swallowed per TUI convention. Component state uses unicode glyphs (`●` active, `◐`
-transitioning, `✗` failed, `○` retired); `ARAYA_TUI_ASCII=1` switches to the ASCII
-tier (`* ~ x o`) for terminals whose fonts misrender them.
+while the UI renders live state, and the UI only ever reads immutable snapshots, so the
+engine's strand discipline stays entirely on the engine side. Logs go to `araya-tui.log`
+(pre-created file-sink loggers the logger service adopts by name), keeping quill's output
+off the canvas.
+
+The UI has two phases. It opens on the entry screen - the `araya` wordmark over a prompt
+box, a tip line, and a status bar - and switches to the session screen on the first
+submitted line. The session screen shows the conversation feed, a command-output strip,
+the prompt box, and a status sidebar (session id, placeholder context metrics, the empty
+MCP/LSP sections, and the live component list). A submitted line is a command when its
+first token names one (the table behind `help`), and free text otherwise; free text is
+captured locally as a user message (`say`) and rendered in the feed, so the prompt works
+like a chat box. There is no live model call yet - connection-derived values (model,
+tokens, context, cost) are placeholders.
+
+Requires a terminal; Ctrl+D quits (the `quit` command works too), and Ctrl+C is swallowed
+per TUI convention. Component state uses unicode glyphs (`●` active, `◐` transitioning,
+`✗` failed, `○` retired); `ARAYA_TUI_ASCII=1` switches the glyphs, markers, and prompt
+accent bar to an ASCII tier (`* ~ x o`, `>`, `|`) for terminals whose fonts misrender
+them.
 
 ## License
 

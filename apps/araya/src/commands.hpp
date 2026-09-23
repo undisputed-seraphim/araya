@@ -23,6 +23,10 @@ araya::task<void> cmd_session(app_context& ctx, line_sink const& out, std::strin
 araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string const& line);
 araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string const& line);
 araya::task<void> cmd_tool(app_context& ctx, line_sink const& out, std::string const& line);
+// A local conversation turn: appends a user message to the current
+// session (auto-created) without touching the llm service. Plain-text
+// prompt input routes here.
+araya::task<void> cmd_say(app_context& ctx, line_sink const& out, std::string const& line);
 
 // Whitespace trimming, shared by the command parsers.
 std::string trim(std::string_view text);

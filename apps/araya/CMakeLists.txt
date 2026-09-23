@@ -10,7 +10,9 @@ add_executable(araya_app
     src/commands_session.cpp
     src/main.cpp
     src/run_main.cpp
+    src/tui_entry.cpp
     src/tui_main.cpp
+    src/tui_session.cpp
     src/tui_state.cpp
     src/tui_view.cpp
 )
@@ -23,6 +25,7 @@ target_link_libraries(araya_app PRIVATE
     araya::agent-loop
     araya::demo
     araya::llm
+    araya::llm-bridge
     araya::llm-mock
     araya::llm-openai
     araya::logger
@@ -52,7 +55,6 @@ if(CMAKE_TESTING_ENABLED)
     add_test(NAME script_demo
         COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/demo.txt)
     set_tests_properties(script_demo PROPERTIES TIMEOUT 60)
-
     add_test(NAME chat_demo
         COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/chat.txt)
     set_tests_properties(chat_demo PROPERTIES TIMEOUT 60
@@ -69,4 +71,14 @@ if(CMAKE_TESTING_ENABLED)
             ${CMAKE_CURRENT_SOURCE_DIR}/demo/save.txt
             ${CMAKE_CURRENT_SOURCE_DIR}/demo/load.txt)
     set_tests_properties(restart_cycle PROPERTIES TIMEOUT 60)
+
+    # The pure input-routing helpers (no plugins, no app library).
+    add_executable(araya_app_tests tests/route_test.cpp)
+    target_include_directories(araya_app_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(araya_app_tests PRIVATE Catch2::Catch2WithMain)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(araya_app_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    include(Catch)
+    catch_discover_tests(araya_app_tests)
 endif()

@@ -10,9 +10,10 @@
 #include <string>
 #include <string_view>
 
-// The TUI's presentation layer: every renderer, the glyph tier, and the
-// layout. Pure view - it reads snapshots and calls the command/exit
-// callbacks, and knows nothing about the engine.
+// The TUI's presentation layer: the shared theme/glyph mapping, the
+// phase root, and the two screen renderers. Pure view - it reads
+// snapshots and calls the command/exit callbacks, and knows nothing
+// about the engine.
 namespace araya::tui {
 
 struct tui_theme {
@@ -30,10 +31,28 @@ struct state_style {
 // surface that renders a component.
 state_style state_style_for(tui_theme const& theme, component_row const& c);
 
-// Builds the full UI (main column: feed, prompt box, hint line; and the
-// sidebar). The input buffer is owned by the caller; a completed line
-// goes to on_command (or on_exit for Ctrl+D and quit), and Ctrl+C is
-// swallowed per TUI convention.
+// The startup screen: the wordmark, the prompt box, the tip line, and
+// the bottom status bar.
+ftxui::Element render_entry_screen(
+	shared_state const& sh,
+	tui_theme const& theme,
+	ftxui::Component const& input,
+	int width,
+	int height);
+
+// The session screen: the conversation feed, the command-output strip,
+// the prompt box, and the status sidebar.
+ftxui::Element render_session_screen(
+	shared_state const& sh,
+	tui_theme const& theme,
+	ftxui::Component const& input,
+	int width,
+	int height);
+
+// Builds the full UI: one input (shared by both phases) plus a root
+// renderer that shows the entry screen until the first submit, then the
+// session screen. A completed line goes to on_command (or on_exit for
+// Ctrl+D and quit), and Ctrl+C is swallowed per TUI convention.
 ftxui::Component build_ui(
 	shared_state& sh,
 	tui_theme const& theme,
