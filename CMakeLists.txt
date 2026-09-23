@@ -8,6 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+include(cmake/Format.cmake)
+include(cmake/Plugin.cmake)
 
 find_package(Boost 1.83 REQUIRED)
 find_package(Threads REQUIRED)
@@ -87,8 +89,6 @@ if(ARAYA_BUILD_PLUGINS)
 endif()
 
 add_subdirectory(proof)
-
-include(cmake/Format.cmake)
 
 install(TARGETS araya
     EXPORT arayaTargets
