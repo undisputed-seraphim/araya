@@ -1,6 +1,8 @@
 #include "araya/llm-openai/openai.hpp"
 #include "araya/llm/http.hpp"
 #include "araya/llm/sse.hpp"
+#include "araya/util/json.hpp"
+#include "araya/util/plugin_config_json.hpp"
 #include "translate.hpp"
 
 #include <boost/asio/this_coro.hpp>
@@ -10,9 +12,6 @@
 
 #include <cstdlib>
 #include <deque>
-#include <fstream>
-#include <sstream>
-#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -46,67 +45,40 @@ araya::llm::model_info to_model_info(openai_model const& model, std::string_view
 
 openai_config load_config(araya::plugin_config const& config) {
 	openai_config result;
-	std::string text;
-	if (auto const found = config.find("config_file"); found != config.end()) {
-		std::ifstream file(found->second);
-		if (!file)
-			throw std::invalid_argument("llm-openai: cannot open config_file '" + found->second + "'");
-		std::ostringstream contents;
-		contents << file.rdbuf();
-		text = contents.str();
-	} else if (auto const found = config.find("config"); found != config.end()) {
-		text = found->second;
-	}
+	auto const text = araya::util::read_config_text(config, "llm-openai");
 	if (text.empty())
 		return result;
 
-	boost::json::value json;
-	try {
-		json = boost::json::parse(text);
-	} catch (std::exception const& e) {
-		throw std::invalid_argument(std::string("llm-openai: malformed config JSON: ") + e.what());
-	}
-	if (!json.is_object())
-		throw std::invalid_argument("llm-openai: config JSON must be an object");
-	auto const& object = json.as_object();
-	auto take_string = [&](std::string_view key, std::string& target) {
-		if (auto const* node = object.if_contains(key); node && node->is_string())
-			target = std::string(node->as_string());
-	};
-	auto take_uint = [&](std::string_view key, std::uint64_t& target) {
-		if (auto const* node = object.if_contains(key); node && node->is_uint64())
-			target = node->as_uint64();
-	};
-	take_string("provider", result.provider);
-	take_string("base_url", result.base_url);
-	take_string("api_key_env", result.api_key_env);
-	take_string("default_model", result.default_model);
-	std::uint64_t idle_ms = 0;
-	take_uint("idle_timeout_ms", idle_ms);
-	if (idle_ms)
-		result.idle_timeout = std::chrono::milliseconds(idle_ms);
-	std::uint64_t connect_ms = 0;
-	take_uint("connect_timeout_ms", connect_ms);
-	if (connect_ms)
-		result.connect_timeout = std::chrono::milliseconds(connect_ms);
-	if (auto const* node = object.if_contains("verify_peer"); node && node->is_bool())
-		result.verify_peer = node->as_bool();
-	if (auto const* models = object.if_contains("models"); models && models->is_object()) {
-		for (auto const& [id, entry] : models->as_object()) {
+	auto const object = araya::util::parse_config_json(text, "llm-openai").as_object();
+	namespace json = araya::util::json;
+	if (auto value = json::opt_string(object, "provider"))
+		result.provider = *value;
+	if (auto value = json::opt_string(object, "base_url"))
+		result.base_url = *value;
+	if (auto value = json::opt_string(object, "api_key_env"))
+		result.api_key_env = *value;
+	if (auto value = json::opt_string(object, "default_model"))
+		result.default_model = *value;
+	if (auto value = json::opt_uint(object, "idle_timeout_ms"))
+		result.idle_timeout = std::chrono::milliseconds(*value);
+	if (auto value = json::opt_uint(object, "connect_timeout_ms"))
+		result.connect_timeout = std::chrono::milliseconds(*value);
+	if (auto value = json::opt_bool(object, "verify_peer"))
+		result.verify_peer = *value;
+	if (auto const* models = json::get_object(object, "models")) {
+		for (auto const& [id, entry] : *models) {
 			openai_model model;
 			model.id = std::string(id);
 			model.name = std::string(id);
-			if (entry.is_object()) {
-				auto const& entry_object = entry.as_object();
-				if (auto const* node = entry_object.if_contains("name"); node && node->is_string())
-					model.name = std::string(node->as_string());
-				if (auto const* node = entry_object.if_contains("context_window"); node && node->is_uint64())
-					model.context_window = node->as_uint64();
-				if (auto const* node = entry_object.if_contains("max_tokens"); node && node->is_uint64())
-					model.default_max_tokens = node->as_uint64();
-				if (auto const* efforts = entry_object.if_contains("reasoning_efforts");
-					efforts && efforts->is_array()) {
-					for (auto const& effort : efforts->as_array()) {
+			if (auto const* entry_object = json::as_object(entry)) {
+				if (auto value = json::opt_string(*entry_object, "name"))
+					model.name = *value;
+				if (auto value = json::opt_uint(*entry_object, "context_window"))
+					model.context_window = *value;
+				if (auto value = json::opt_uint(*entry_object, "max_tokens"))
+					model.default_max_tokens = *value;
+				if (auto const* efforts = json::get_array(*entry_object, "reasoning_efforts")) {
+					for (auto const& effort : *efforts) {
 						if (effort.is_string())
 							model.reasoning_efforts.push_back(std::string(effort.as_string()));
 					}

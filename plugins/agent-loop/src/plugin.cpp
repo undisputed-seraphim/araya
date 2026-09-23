@@ -1,11 +1,15 @@
 #include "araya/agent-loop/agent.hpp"
 
+#include "araya/config.hpp"
+
 #include <memory>
 #include <span>
 #include <utility>
 
 namespace araya::agent {
 namespace {
+
+inline constexpr araya::config_key<std::string> system_prompt_key{"system_prompt"};
 
 // The agent provider: apply() constructs the loop over the llm and
 // session services and binds it under agent_key. The configured system
@@ -19,8 +23,8 @@ struct agent_plugin : araya::plugin {
 		auto llm = ctx.require<araya::llm::llm_service>(araya::llm::llm_key).shared();
 		auto store = ctx.require<araya::session::session_store>(araya::session::sessions_key).shared();
 		auto service = std::make_shared<agent_service>(std::move(llm), std::move(store));
-		if (auto it = config.find("system_prompt"); it != config.end())
-			service->set_system_prompt(it->second);
+		if (auto value = araya::plugin_config_view(config).try_get(system_prompt_key))
+			service->set_system_prompt(*value);
 		ctx.provide(agent_key, std::move(service));
 		co_return;
 	}

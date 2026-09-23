@@ -28,6 +28,9 @@
 //                      {"tool_call": {"name": "...", "arguments": "..."}}]
 //                   When the script runs out, the canned `response`
 //                   takes over.
+//
+// Missing keys fall back to the defaults above; malformed values throw
+// araya::config_error (the typed config accessors are strict).
 namespace araya::llm_mock {
 
 struct mock_step {

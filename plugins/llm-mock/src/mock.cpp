@@ -1,11 +1,12 @@
 #include "araya/llm-mock/mock.hpp"
 
+#include "araya/config.hpp"
+
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/json/parse.hpp>
 
-#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -78,30 +79,42 @@ std::vector<mock_step> parse_script(std::string_view json) {
 
 } // namespace
 
+inline constexpr araya::config_key<std::string> provider_key{"provider"};
+inline constexpr araya::config_key<std::string> model_key{"model"};
+inline constexpr araya::config_key<std::string> response_key{"response"};
+inline constexpr araya::config_key<bool> fail_key{"fail"};
+inline constexpr araya::config_key<std::string> fail_code_key{"fail_code"};
+inline constexpr araya::config_key<std::string> fail_message_key{"fail_message"};
+inline constexpr araya::config_key<std::uint64_t> input_tokens_key{"input_tokens"};
+inline constexpr araya::config_key<std::uint64_t> output_tokens_key{"output_tokens"};
+inline constexpr araya::config_key<std::int64_t> delay_ms_key{"delay_ms"};
+inline constexpr araya::config_key<std::string> script_key{"script"};
+
 mock_config load_config(araya::plugin_config const& config) {
+	// The typed accessors throw config_error on malformed values (a
+	// missing key is still the default).
+	araya::plugin_config_view view(config);
 	mock_config result;
-	if (auto const found = config.find("provider"); found != config.end())
-		result.provider = found->second;
-	if (auto const found = config.find("model"); found != config.end())
-		result.model = found->second;
-	if (auto const found = config.find("response"); found != config.end())
-		result.response = found->second;
-	if (auto const found = config.find("fail"); found != config.end()) {
-		auto const& value = found->second;
-		result.fail = value == "1" || value == "true";
-	}
-	if (auto const found = config.find("fail_code"); found != config.end())
-		result.fail_code = parse_fail_code(found->second);
-	if (auto const found = config.find("fail_message"); found != config.end())
-		result.fail_message = found->second;
-	if (auto const found = config.find("input_tokens"); found != config.end())
-		result.input_tokens = std::strtoull(found->second.c_str(), nullptr, 10);
-	if (auto const found = config.find("output_tokens"); found != config.end())
-		result.output_tokens = std::strtoull(found->second.c_str(), nullptr, 10);
-	if (auto const found = config.find("delay_ms"); found != config.end())
-		result.delay = std::chrono::milliseconds(std::strtoll(found->second.c_str(), nullptr, 10));
-	if (auto const found = config.find("script"); found != config.end())
-		result.script = parse_script(found->second);
+	if (auto value = view.try_get(provider_key))
+		result.provider = *value;
+	if (auto value = view.try_get(model_key))
+		result.model = *value;
+	if (auto value = view.try_get(response_key))
+		result.response = *value;
+	if (auto value = view.try_get(fail_key))
+		result.fail = *value;
+	if (auto value = view.try_get(fail_code_key))
+		result.fail_code = parse_fail_code(*value);
+	if (auto value = view.try_get(fail_message_key))
+		result.fail_message = *value;
+	if (auto value = view.try_get(input_tokens_key))
+		result.input_tokens = *value;
+	if (auto value = view.try_get(output_tokens_key))
+		result.output_tokens = *value;
+	if (auto value = view.try_get(delay_ms_key))
+		result.delay = std::chrono::milliseconds(*value);
+	if (auto value = view.try_get(script_key))
+		result.script = parse_script(*value);
 	return result;
 }
 
