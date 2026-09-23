@@ -4,6 +4,7 @@
 #include "araya/llm/llm.hpp"
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
+#include "support/plugin_harness.hpp"
 
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
@@ -21,30 +22,7 @@ namespace {
 using namespace araya::llm;
 using namespace araya::llm_mock;
 
-struct harness {
-	boost::asio::io_context io;
-	std::shared_ptr<araya::runtime> rt = std::make_shared<araya::runtime>(io.get_executor());
-
-	template <typename Fn>
-	void run(Fn&& fn) {
-		struct driver {
-			std::decay_t<Fn> fn;
-			harness* self;
-			araya::task<void> operator()() { co_await fn(*self->rt); }
-		};
-		boost::asio::co_spawn(io.get_executor(), driver{std::forward<Fn>(fn), this}, boost::asio::detached);
-		io.run();
-		io.restart();
-	}
-
-	araya::component_spec spec(araya::plugin_descriptor const* d, araya::plugin_config cfg = {}) {
-		return araya::component_spec{
-			std::shared_ptr<araya::plugin_descriptor>(const_cast<araya::plugin_descriptor*>(d), [](auto*) {}),
-			std::move(cfg),
-			nullptr,
-			""};
-	}
-};
+using harness = araya_test::plugin_harness;
 
 } // namespace
 

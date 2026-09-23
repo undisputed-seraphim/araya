@@ -41,6 +41,7 @@ function(araya_add_plugin stem)
         target_link_libraries(${target}_tests PRIVATE
             araya::${stem}
             ${PLUGIN_TEST_DEPS}
+            araya::test_support
             Catch2::Catch2WithMain
         )
         include(Catch)

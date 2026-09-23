@@ -72,6 +72,16 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 if(Catch2_FOUND)
+    # Shared test-support headers (the runtime harness, the llm chunk
+    # builders); an INTERFACE target so plugin tests reach them through
+    # one dependency.
+    add_library(araya_test_support INTERFACE)
+    add_library(araya::test_support ALIAS araya_test_support)
+    target_include_directories(araya_test_support INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+    target_link_libraries(araya_test_support INTERFACE Catch2::Catch2WithMain)
+
     enable_testing()
     add_subdirectory(tests)
 endif()

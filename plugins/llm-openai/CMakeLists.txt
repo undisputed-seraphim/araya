@@ -23,6 +23,7 @@ if(Catch2_FOUND)
     add_executable(araya_llm_openai_adapter_tests tests/adapter_test.cpp)
     target_link_libraries(araya_llm_openai_adapter_tests PRIVATE
         araya::llm-openai
+        araya::test_support
         Catch2::Catch2WithMain
     )
     target_include_directories(araya_llm_openai_adapter_tests PRIVATE

@@ -6,6 +6,8 @@
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
 #include "araya/session/store.hpp"
+#include "support/plugin_harness.hpp"
+#include "support/stream_chunks.hpp"
 
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
@@ -28,6 +30,7 @@ namespace {
 using namespace araya::agent;
 using namespace araya::llm;
 using namespace araya::llm_bridge;
+using namespace araya_test::llm;
 using namespace std::chrono_literals;
 
 // -- the scripted adapter ---------------------------------------------------
@@ -81,67 +84,13 @@ static const araya::dependency_spec g_llm_dep[]{{araya::service_id{"llm", 1}, tr
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
 static const araya::plugin_descriptor g_adapter_desc{"adapter", g_llm_dep, g_no_provs, &make_adapter};
 
-// -- chunk scripts ----------------------------------------------------------
-
-std::vector<stream_chunk> text_stream(std::string text) {
-	token_usage usage;
-	usage.input_tokens = 3;
-	usage.output_tokens = 2;
-	return {
-		stream_chunk{block_start_chunk{0, content_block_type::text}},
-		stream_chunk{text_delta_chunk{0, text}},
-		stream_chunk{block_end_chunk{0, content_block{text_block{text}}}},
-		stream_chunk{usage_chunk{usage}},
-		stream_chunk{finish_chunk{finish_chunk::reason::stop, std::nullopt, std::nullopt}},
-	};
-}
-
-std::vector<stream_chunk> tool_stream(std::string name, std::string arguments) {
-	tool_call_block call{"call-1", name, arguments};
-	token_usage usage;
-	usage.input_tokens = 4;
-	usage.output_tokens = 1;
-	return {
-		stream_chunk{block_start_chunk{0, content_block_type::tool_call}},
-		stream_chunk{tool_call_delta_chunk{0, "call-1", name, arguments}},
-		stream_chunk{block_end_chunk{0, content_block{call}}},
-		stream_chunk{usage_chunk{usage}},
-		stream_chunk{finish_chunk{finish_chunk::reason::tool_calls, std::nullopt, std::nullopt}},
-	};
-}
-
-std::vector<stream_chunk> error_stream(std::string message) {
-	llm_failure failure{llm_error_code::server, std::move(message)};
-	return {
-		stream_chunk{finish_chunk{finish_chunk::reason::error, std::move(failure), std::nullopt}},
-	};
-}
-
 // -- the harness ------------------------------------------------------------
 
-struct harness {
-	boost::asio::io_context io;
-	std::shared_ptr<araya::runtime> rt = std::make_shared<araya::runtime>(io.get_executor());
-
+struct harness : araya_test::plugin_harness {
 	template <typename Fn>
 	void run(Fn&& fn) {
 		g_scripted.reset();
-		struct driver {
-			std::decay_t<Fn> fn;
-			harness* self;
-			araya::task<void> operator()() { co_await fn(*self->rt); }
-		};
-		boost::asio::co_spawn(io.get_executor(), driver{std::forward<Fn>(fn), this}, boost::asio::detached);
-		io.run();
-		io.restart();
-	}
-
-	araya::component_spec spec(araya::plugin_descriptor const* d, araya::plugin_config cfg = {}) {
-		return araya::component_spec{
-			std::shared_ptr<araya::plugin_descriptor>(const_cast<araya::plugin_descriptor*>(d), [](auto*) {}),
-			std::move(cfg),
-			nullptr,
-			""};
+		plugin_harness::run(std::forward<Fn>(fn));
 	}
 
 	araya::component_spec session_spec() { return spec(&araya::session::plugin_descriptor()); }

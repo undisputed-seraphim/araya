@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "araya/llm-openai/openai.hpp"
+#include "support/stream_chunks.hpp"
 
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
@@ -26,21 +27,13 @@ namespace {
 
 using namespace araya::llm;
 using namespace araya::llm_openai;
+using namespace araya_test::llm;
 using namespace std::chrono_literals;
 
 namespace beast = boost::beast;
 namespace http = beast::http;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
-
-std::string sse(std::vector<std::string> const& payloads, bool with_done = true) {
-	std::string result;
-	for (auto const& payload : payloads)
-		result += "data: " + payload + "\n\n";
-	if (with_done)
-		result += "data: [DONE]\n\n";
-	return result;
-}
 
 // Serves one request per run: accepts, records the body, and either
 // answers through the handler or (for the stall tests) writes only the

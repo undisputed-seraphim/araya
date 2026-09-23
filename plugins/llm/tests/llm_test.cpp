@@ -5,6 +5,8 @@
 #include "araya/llm/sse.hpp"
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
+#include "support/plugin_harness.hpp"
+#include "support/stream_chunks.hpp"
 
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
@@ -24,6 +26,7 @@
 namespace {
 
 using namespace araya::llm;
+using namespace araya_test::llm;
 using namespace std::chrono_literals;
 
 araya::task<void> delay(boost::asio::any_io_executor ex, std::chrono::milliseconds ms) {
@@ -85,29 +88,11 @@ static const araya::dependency_spec g_llm_dep[]{{araya::service_id{"llm", 1}, tr
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
 static const araya::plugin_descriptor g_adapter_desc{"adapter", g_llm_dep, g_no_provs, &make_adapter};
 
-struct harness {
-	boost::asio::io_context io;
-	std::shared_ptr<araya::runtime> rt = std::make_shared<araya::runtime>(io.get_executor());
-
+struct harness : araya_test::plugin_harness {
 	template <typename Fn>
 	void run(Fn&& fn) {
 		g_adapter.reset();
-		struct driver {
-			std::decay_t<Fn> fn;
-			harness* self;
-			araya::task<void> operator()() { co_await fn(*self->rt); }
-		};
-		boost::asio::co_spawn(io.get_executor(), driver{std::forward<Fn>(fn), this}, boost::asio::detached);
-		io.run();
-		io.restart();
-	}
-
-	araya::component_spec spec(araya::plugin_descriptor const* d, araya::plugin_config cfg = {}) {
-		return araya::component_spec{
-			std::shared_ptr<araya::plugin_descriptor>(const_cast<araya::plugin_descriptor*>(d), [](auto*) {}),
-			std::move(cfg),
-			nullptr,
-			""};
+		plugin_harness::run(std::forward<Fn>(fn));
 	}
 
 	araya::component_spec llm_spec() { return spec(&araya::llm::plugin_descriptor()); }
@@ -116,26 +101,6 @@ struct harness {
 		return root_ctx.require<llm_service>(llm_key).shared();
 	}
 };
-
-stream_chunk text_delta(std::size_t index, std::string text) {
-	text_delta_chunk chunk;
-	chunk.index = index;
-	chunk.text = std::move(text);
-	return chunk;
-}
-
-stream_chunk usage(uint64_t in, uint64_t out) {
-	usage_chunk chunk;
-	chunk.usage.input_tokens = in;
-	chunk.usage.output_tokens = out;
-	return chunk;
-}
-
-stream_chunk finish(finish_chunk::reason why) {
-	finish_chunk chunk;
-	chunk.why = why;
-	return chunk;
-}
 
 } // namespace
 
