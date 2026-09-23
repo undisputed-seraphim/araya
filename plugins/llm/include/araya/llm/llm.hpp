@@ -260,6 +260,24 @@ using stream_chunk = std::variant<
 // the sink so consumers can backpressure from inside it.
 using chunk_sink = std::function<araya::task<void>(stream_chunk const&)>;
 
+// The terminal chunk for a failure: aborted when the code says so,
+// error otherwise (the adapters' shared failure exit).
+inline finish_chunk finish_from(llm_failure failure) {
+	finish_chunk finish;
+	finish.why = failure.code == llm_error_code::aborted ? finish_chunk::reason::aborted : finish_chunk::reason::error;
+	finish.failure = std::move(failure);
+	return finish;
+}
+
+// The durable {code, message} shape sessions log for a failure (the
+// turn/end and assistant/attempt events).
+inline boost::json::value failure_to_json(llm_failure const& failure) {
+	return boost::json::value{
+		{"code", llm_error::code_name(failure.code)},
+		{"message", failure.message},
+	};
+}
+
 // -- the adapter interface --------------------------------------------------
 
 class llm_adapter {

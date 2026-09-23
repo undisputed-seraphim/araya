@@ -58,6 +58,10 @@ struct request_options {
 	bool verify_peer = true;
 };
 
+// Case-insensitive header lookup over a response's headers; empty when
+// the header is absent.
+std::string header_value(std::vector<std::pair<std::string, std::string>> const& headers, std::string_view name);
+
 // Sends the request and streams a 2xx body to on_body in read-sized
 // chunks; on_body may await (the sink push). A non-2xx response is
 // buffered and returned without invoking on_body.

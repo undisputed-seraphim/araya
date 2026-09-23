@@ -14,6 +14,7 @@
 #include <openssl/ssl.h>
 
 #include <algorithm>
+#include <cctype>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -202,6 +203,24 @@ araya::task<response> stream_request(
 	} catch (boost::system::system_error const& e) {
 		throw_for(e.code(), stop, "connect");
 	}
+}
+
+std::string header_value(std::vector<std::pair<std::string, std::string>> const& headers, std::string_view wanted) {
+	for (auto const& [name, value] : headers) {
+		if (name.size() != wanted.size())
+			continue;
+		bool equal = true;
+		for (std::size_t i = 0; i < name.size(); ++i) {
+			if (std::tolower(static_cast<unsigned char>(name[i])) !=
+				std::tolower(static_cast<unsigned char>(wanted[i]))) {
+				equal = false;
+				break;
+			}
+		}
+		if (equal)
+			return value;
+	}
+	return {};
 }
 
 } // namespace araya::llm::http

@@ -136,12 +136,8 @@ boost::json::value attempt_data(std::uint64_t turn, std::uint64_t step, std::opt
 	boost::json::object data;
 	data["turn"] = turn;
 	data["step"] = step;
-	if (failure) {
-		boost::json::object f;
-		f["code"] = llm_error::code_name(failure->code);
-		f["message"] = failure->message;
-		data["failure"] = std::move(f);
-	}
+	if (failure)
+		data["failure"] = araya::llm::failure_to_json(*failure);
 	return data;
 }
 
@@ -149,12 +145,8 @@ boost::json::value turn_end_data(std::uint64_t turn, run_status status, std::opt
 	boost::json::object data;
 	data["turn"] = turn;
 	data["reason"] = turn_end_reason(status);
-	if (failure) {
-		boost::json::object f;
-		f["code"] = llm_error::code_name(failure->code);
-		f["message"] = failure->message;
-		data["failure"] = std::move(f);
-	}
+	if (failure)
+		data["failure"] = araya::llm::failure_to_json(*failure);
 	return data;
 }
 

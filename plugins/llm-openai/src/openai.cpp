@@ -8,8 +8,6 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 
-#include <algorithm>
-#include <cctype>
 #include <cstdlib>
 #include <deque>
 #include <fstream>
@@ -23,22 +21,13 @@ namespace {
 
 using araya::llm::chunk_sink;
 using araya::llm::finish_chunk;
+using araya::llm::finish_from;
 using araya::llm::generate_options;
 using araya::llm::llm_error;
 using araya::llm::llm_error_code;
 using araya::llm::llm_failure;
 using araya::llm::stream_chunk;
-
-std::string header_lookup(std::vector<std::pair<std::string, std::string>> const& headers, std::string_view wanted) {
-	for (auto const& [name, value] : headers) {
-		if (name.size() == wanted.size() && std::equal(name.begin(), name.end(), wanted.begin(), [](char a, char b) {
-				return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
-			})) {
-			return value;
-		}
-	}
-	return {};
-}
+using araya::llm::http::header_value;
 
 // The assembled model_info for one configured model, shared by
 // list_models and resolve_model.
@@ -51,16 +40,6 @@ araya::llm::model_info to_model_info(openai_model const& model, std::string_view
 	info.default_max_tokens = model.default_max_tokens;
 	info.reasoning_efforts = model.reasoning_efforts;
 	return info;
-}
-
-// The terminal chunk for a failure: aborted when the code says so,
-// error otherwise.
-araya::llm::finish_chunk finish_for(araya::llm::llm_failure failure) {
-	araya::llm::finish_chunk finish;
-	finish.why = failure.code == araya::llm::llm_error_code::aborted ? araya::llm::finish_chunk::reason::aborted
-																	 : araya::llm::finish_chunk::reason::error;
-	finish.failure = std::move(failure);
-	return finish;
 }
 
 } // namespace
@@ -202,11 +181,11 @@ araya::task<void> openai_adapter::stream(generate_options const& options, chunk_
 			auto failure = failure_for(
 				response.status,
 				response.body,
-				parse_retry_after(header_lookup(response.headers, "retry-after")),
-				header_lookup(response.headers, "x-request-id"));
-			terminal = finish_for(std::move(failure));
+				parse_retry_after(header_value(response.headers, "retry-after")),
+				header_value(response.headers, "x-request-id"));
+			terminal = finish_from(std::move(failure));
 		} else if (!done) {
-			terminal = finish_for(llm_failure{llm_error_code::stream_closed, "SSE stream ended without [DONE]"});
+			terminal = finish_from(llm_failure{llm_error_code::stream_closed, "SSE stream ended without [DONE]"});
 		} else {
 			while (!pending.empty()) {
 				auto chunk = std::move(pending.front());
@@ -215,11 +194,11 @@ araya::task<void> openai_adapter::stream(generate_options const& options, chunk_
 			}
 		}
 	} catch (llm_error const& e) {
-		terminal = finish_for(e.failure());
+		terminal = finish_from(e.failure());
 	} catch (boost::system::system_error const& e) {
-		terminal = finish_for(llm_failure{llm_error_code::transport, e.what()});
+		terminal = finish_from(llm_failure{llm_error_code::transport, e.what()});
 	} catch (std::exception const& e) {
-		terminal = finish_for(llm_failure{llm_error_code::invalid_request, e.what()});
+		terminal = finish_from(llm_failure{llm_error_code::invalid_request, e.what()});
 	}
 	if (terminal)
 		co_await sink(std::move(*terminal));
