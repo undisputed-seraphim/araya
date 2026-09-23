@@ -288,18 +288,26 @@ off the canvas.
 The UI has two phases. It opens on the entry screen - the `araya` wordmark over a prompt
 box, a tip line, and a status bar - and switches to the session screen on the first
 submitted line. The session screen shows the conversation feed, a command-output strip,
-the prompt box, and a status sidebar (session id, placeholder context metrics, the empty
-MCP/LSP sections, and the live component list). A submitted line is a command when its
-first token names one (the table behind `help`), and free text otherwise; free text is
-captured locally as a user message (`say`) and rendered in the feed, so the prompt works
-like a chat box. There is no live model call yet - connection-derived values (model,
-tokens, context, cost) are placeholders.
+the prompt box, and a status sidebar (the derived session title, placeholder context
+metrics, the empty MCP/LSP sections, and the live component list). A submitted line is a
+command when its first token names one (the table behind `help`), and free text otherwise;
+free text is captured locally as a user message (`say`) and rendered in the feed, so the
+prompt works like a chat box. There is no live model call yet - connection-derived values
+(model, tokens, context, cost) are placeholders.
+
+Typing the first free-text line mints a session id (opaque, run-unique: `ses_…`) and
+starts persisting the conversation: each turn flushes through the session durability
+barrier, so it lands as readable JSONL under `./araya-sessions/` as you go, not only at
+exit. The session title is derived from the first user message. On exit the TUI prints a
+summary - the block wordmark, `Session <title>`, and the resume command
+`araya tui -s <id>`; `araya tui -s <id>` (or `--session <id>`) boots straight into the
+session screen with the restored history. A command-only run creates no session and no
+summary.
 
 Requires a terminal; Ctrl+D quits (the `quit` command works too), and Ctrl+C is swallowed
 per TUI convention. Component state uses unicode glyphs (`●` active, `◐` transitioning,
-`✗` failed, `○` retired); `ARAYA_TUI_ASCII=1` switches the glyphs, markers, and prompt
-accent bar to an ASCII tier (`* ~ x o`, `>`, `|`) for terminals whose fonts misrender
-them.
+`✗` failed, `○` retired); `ARAYA_TUI_ASCII=1` switches the glyphs, markers, prompt accent
+bar, and exit wordmark to an ASCII tier for terminals whose fonts misrender them.
 
 ## License
 

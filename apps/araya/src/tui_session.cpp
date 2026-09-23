@@ -134,7 +134,7 @@ ftxui::Element render_session_screen(
 		component_rows.push_back(text(" (booting...)") | color(dim_text()));
 
 	Element sidebar = vbox({
-						  text(snap->session) | bold | color(accent()),
+						  text(snap->title) | bold | color(accent()),
 						  text("tokens   --"),
 						  text("context  --%"),
 						  text("cost     $0.00"),

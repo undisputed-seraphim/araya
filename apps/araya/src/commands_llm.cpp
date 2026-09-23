@@ -61,7 +61,9 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 			s = store->get(*ctx.current);
 		if (!s) {
 			auto sid = store->mint_id();
-			s = store->create(root_ctx, sid, {});
+			araya::session::create_session_options options;
+			options.cwd = ctx.cwd;
+			s = store->create(root_ctx, sid, std::move(options));
 			ctx.current = sid;
 			out("session: created " + sid.value);
 		}
@@ -69,6 +71,8 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 		auto seq = s->append(
 			"user/message", araya::llm_bridge::user_message_data("u" + std::to_string(s->log().size()), text));
 		out("session: appended user seq " + std::to_string(seq));
+		// The user turn is durable before the model runs.
+		co_await s->flush();
 
 		// The first registered provider route wins (with both mounted,
 		// "mock" sorts before "openai", which is what the tests want).
@@ -124,6 +128,7 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 			"assistant/message",
 			araya::llm_bridge::assistant_message_data(
 				"a" + std::to_string(s->log().size()), {araya::llm::text_block{assembled}}, usage, std::move(replay)));
+		co_await s->flush();
 		out("assistant: " + assembled);
 		out("chat: tokens in " + std::to_string(usage.input_tokens) + " out " + std::to_string(usage.output_tokens) +
 			" (assistant seq " + std::to_string(seq_out) + ")");
@@ -156,7 +161,9 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 			s = store->get(*ctx.current);
 		if (!s) {
 			auto sid = store->mint_id();
-			s = store->create(root_ctx, sid, {});
+			araya::session::create_session_options options;
+			options.cwd = ctx.cwd;
+			s = store->create(root_ctx, sid, std::move(options));
 			ctx.current = sid;
 			out("session: created " + sid.value);
 		}
@@ -198,6 +205,9 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 				event);
 		};
 		auto outcome = co_await agent->run(options, observer);
+		// The agent loop owns its session appends; make the whole turn
+		// durable once it settles.
+		co_await s->flush();
 
 		if (outcome.failure)
 			out("ask: " + std::string(araya::llm::llm_error::code_name(outcome.failure->code)) + ": " +
@@ -228,21 +238,26 @@ araya::task<void> cmd_say(app_context& ctx, line_sink const& out, std::string co
 		auto store = root_ctx.require<session_store>(sessions_key).shared();
 
 		// Auto-create a session when none is current, the same way chat
-		// and ask do: a typed line always lands somewhere.
+		// and ask do: a typed line always lands somewhere. The header
+		// records the working directory.
 		std::shared_ptr<araya::session::session> s;
 		if (ctx.current)
 			s = store->get(*ctx.current);
 		if (!s) {
 			auto sid = store->mint_id();
-			s = store->create(root_ctx, sid, {});
+			araya::session::create_session_options options;
+			options.cwd = ctx.cwd;
+			s = store->create(root_ctx, sid, std::move(options));
 			ctx.current = sid;
 			out("session: created " + sid.value);
 		}
 
 		// Local capture only - no llm service, no provider route. The
-		// feed renders this as a user row.
+		// feed renders this as a user row. The flush makes the turn
+		// durable now (the persistence barrier fsyncs), not just at exit.
 		(void)s->append(
 			"user/message", araya::llm_bridge::user_message_data("u" + std::to_string(s->log().size()), text));
+		co_await s->flush();
 	} catch (std::exception const& e) {
 		out(std::string("say: ") + e.what());
 	}

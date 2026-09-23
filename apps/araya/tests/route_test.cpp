@@ -49,3 +49,27 @@ TEST_CASE("role_marker: unicode and ascii tiers") {
 	// The default (unknown role) renders as a user.
 	CHECK(araya::app::role_marker("", true) == ">");
 }
+
+TEST_CASE("session_title: falls back when there is no user text") {
+	CHECK(araya::app::session_title("", "ses_abc") == "ses_abc");
+	CHECK(araya::app::session_title("   \n\t ", "ses_abc") == "ses_abc");
+}
+
+TEST_CASE("session_title: collapses whitespace runs") {
+	CHECK(araya::app::session_title("  hello   world  ", "id") == "hello world");
+	CHECK(araya::app::session_title("line one\nline two", "id") == "line one line two");
+	CHECK(araya::app::session_title("a\t\tb\r\nc", "id") == "a b c");
+}
+
+TEST_CASE("session_title: truncates long text with an ellipsis") {
+	std::string long_text(80, 'x');
+	auto title = araya::app::session_title(long_text, "id");
+	CHECK(title == std::string(48, 'x') + "\u2026");
+}
+
+TEST_CASE("session_title: truncates on a codepoint boundary") {
+	// 47 ASCII bytes then a two-byte codepoint straddling the cut:
+	// the 48th byte is a continuation byte, so the cut backs off to 47.
+	std::string text = std::string(47, 'a') + "\u00e9" + "zzzz";
+	CHECK(araya::app::session_title(text, "id") == std::string(47, 'a') + "\u2026");
+}

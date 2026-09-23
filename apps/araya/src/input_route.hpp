@@ -44,4 +44,36 @@ inline std::string_view role_marker(std::string_view role, bool ascii) {
 	return ascii ? ">" : "\u276f"; // ❯
 }
 
+// A short display title for a conversation: the first user message with
+// whitespace collapsed and truncated (on a codepoint boundary) to
+// k_title_max bytes, or the fallback (the session id) when there is no
+// user text. Derived, not persisted.
+inline std::string session_title(std::string_view first_user_text, std::string_view fallback) {
+	constexpr std::size_t k_title_max = 48;
+	std::string collapsed;
+	bool pending_space = false;
+	for (unsigned char c : first_user_text) {
+		if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+			pending_space = !collapsed.empty();
+			continue;
+		}
+		if (pending_space) {
+			collapsed.push_back(' ');
+			pending_space = false;
+		}
+		collapsed.push_back(static_cast<char>(c));
+	}
+	if (collapsed.empty())
+		return std::string(fallback);
+	if (collapsed.size() > k_title_max) {
+		std::size_t cut = k_title_max;
+		// Never split a UTF-8 sequence: back off continuation bytes.
+		while (cut > 0 && (static_cast<unsigned char>(collapsed[cut]) & 0xC0) == 0x80)
+			--cut;
+		collapsed.resize(cut);
+		collapsed += "\u2026"; // …
+	}
+	return collapsed;
+}
+
 } // namespace araya::app

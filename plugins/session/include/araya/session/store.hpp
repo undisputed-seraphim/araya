@@ -176,7 +176,6 @@ private:
 	std::vector<message_projection> projections_;
 	std::map<std::uint64_t, std::unique_ptr<detail::projection_cell_base>> projection_cells_;
 	std::uint64_t projection_counter_ = 0;
-	std::uint64_t counter_ = 0;
 };
 
 // register_projection's template body lives here (store.hpp is the

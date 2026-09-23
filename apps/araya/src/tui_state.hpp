@@ -40,9 +40,10 @@ struct snapshot {
 	// Whether the user has begun (submitted anything): the entry phase
 	// gives way to the session view.
 	bool started = false;
-	// The sidebar: the current session's id (the title placeholder until
-	// titles exist), the collapsed working directory plus git branch,
-	// and the araya version.
+	// The sidebar: the current session's derived title (the first user
+	// message, or the id when there is none), the session id, the
+	// collapsed working directory plus git branch, and the araya version.
+	std::string title;
 	std::string session;
 	std::string cwd_branch;
 	std::string version;
@@ -72,13 +73,16 @@ struct engine_state {
 	// The folded conversation of the current session, rebuilt on the
 	// strand and copied into every snapshot.
 	std::vector<feed_message> messages;
+	// The derived session title (first user message, or the id).
+	std::string title = "no session";
 	// Set on the first submit; mirrored into every snapshot.
 	bool started = false;
 };
 
 // Runs the engine on the calling thread (the engine thread): boots the
-// tree, drives commands and refresh, publishes snapshots, and returns
-// once quit is signalled and the whole tree is retired on the strand.
-void run_engine(shared_state& sh);
+// tree, optionally restores `resume_id` from disk, drives commands and
+// refresh, publishes snapshots, and returns once quit is signalled and
+// the whole tree is retired on the strand.
+void run_engine(shared_state& sh, std::string resume_id = {});
 
 } // namespace araya::tui

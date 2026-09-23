@@ -35,6 +35,7 @@ void publish_snapshot(shared_state& sh, engine_state& e) {
 	ns->components = e.components;
 	ns->log.assign(e.log.begin(), e.log.end());
 	ns->messages = e.messages;
+	ns->title = e.title;
 	ns->started = e.started;
 	ns->session = e.ctx.current ? e.ctx.current->value : "no session";
 	ns->cwd_branch = e.ctx.cwd_branch;
@@ -49,21 +50,31 @@ void publish_snapshot(shared_state& sh, engine_state& e) {
 // surface. Must run on the control strand: it touches the session store.
 void fold_messages(engine_state& e) {
 	e.messages.clear();
-	if (!e.ctx.current)
+	if (!e.ctx.current) {
+		e.title = "no session";
 		return;
+	}
 	auto root_ctx = e.ctx.rt->root_context();
 	auto store_lease = root_ctx.find<araya::session::session_store>(araya::session::sessions_key);
-	if (!store_lease)
+	if (!store_lease) {
+		e.title = e.ctx.current->value;
 		return;
+	}
 	auto session = store_lease->shared()->get(*e.ctx.current);
-	if (!session)
+	if (!session) {
+		e.title = e.ctx.current->value;
 		return;
+	}
+	std::string first_user;
 	for (auto const& message : session->surface().messages()) {
 		feed_message row;
 		row.role = araya::app::role_name(message.role);
 		row.text = araya::llm_bridge::message_text(message);
+		if (first_user.empty() && row.role == "user")
+			first_user = row.text;
 		e.messages.push_back(std::move(row));
 	}
+	e.title = araya::app::session_title(first_user, e.ctx.current->value);
 }
 
 // Commands arrive as strings from the UI and run on the control strand
@@ -124,9 +135,23 @@ araya::task<void> refresh_loop(shared_state& sh, engine_state& e) {
 	}
 }
 
-araya::task<void> boot_and_run(shared_state& sh, engine_state& e) {
+araya::task<void> boot_and_run(shared_state& sh, engine_state& e, std::string resume_id) {
 	araya::app::line_sink sink = [&e](std::string text) { log_line(e, std::move(text)); };
 	co_await araya::app::boot(e.ctx, sink);
+
+	// Resume: restore the named session from disk (the same path the
+	// `session load` command uses) and open straight into the session
+	// phase. An unknown id just logs and leaves the entry screen up.
+	if (!resume_id.empty()) {
+		co_await boost::asio::co_spawn(
+			e.ctx.rt->bus()->executor(),
+			araya::app::dispatch(e.ctx, sink, "session load " + resume_id),
+			boost::asio::use_awaitable);
+		if (e.ctx.current && e.ctx.current->value == resume_id)
+			e.started = true;
+		co_await e.ctx.rt->run_on_strand([&e] { fold_messages(e); });
+	}
+
 	log_line(e, "araya tui: components mounted, type help (Ctrl+D quits)");
 	publish_snapshot(sh, e);
 
@@ -147,11 +172,11 @@ araya::task<void> boot_and_run(shared_state& sh, engine_state& e) {
 
 } // namespace
 
-void run_engine(shared_state& sh) {
+void run_engine(shared_state& sh, std::string resume_id) {
 	engine_state e;
 	if (auto const* env = std::getenv("ARAYA_LLM_CONFIG"); env && *env)
 		e.ctx.llm_config = env;
-	boost::asio::co_spawn(e.ctx.io.get_executor(), boot_and_run(sh, e), boost::asio::detached);
+	boost::asio::co_spawn(e.ctx.io.get_executor(), boot_and_run(sh, e, std::move(resume_id)), boost::asio::detached);
 	e.ctx.io.run();
 }
 
