@@ -1,9 +1,9 @@
 # The agent loop: turns and steps over the llm seam with
 # plugin-registered tools. Depends on the session store for durable
-# history and the llm service for streaming; Boost.JSON comes
-# transitively through both.
+# history and the llm service for streaming; the session <-> llm bridge
+# supplies the envelope conversion.
 araya_add_plugin(agent-loop
-    SOURCES src/agent.cpp src/bridge.cpp src/plugin.cpp
-    DEPS araya::session araya::llm
+    SOURCES src/agent.cpp src/plugin.cpp
+    DEPS araya::llm-bridge
     TEST tests/agent_test.cpp
 )

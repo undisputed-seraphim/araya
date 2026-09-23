@@ -3,9 +3,9 @@
 #include "demo_plugins.hpp"
 
 #include "araya/agent-loop/agent.hpp"
-#include "araya/agent-loop/bridge.hpp"
 #include "araya/llm-mock/mock.hpp"
 #include "araya/llm-openai/openai.hpp"
+#include "araya/llm/bridge.hpp"
 #include "araya/llm/llm.hpp"
 #include "araya/logger/logger.hpp"
 #include "araya/persistence/persistence.hpp"
@@ -50,46 +50,9 @@ std::string trim(std::string_view text) {
 	return std::string(text.substr(first, last - first + 1));
 }
 
-boost::json::value user_message(std::string_view id, std::string_view text) {
-	return {
-		{"id", std::string(id)},
-		{"role", "user"},
-		{"content", boost::json::array{{{"type", "text"}, {"text", std::string(text)}}}},
-	};
-}
-
-// assistant/message wraps the message under "message", with usage (and
-// optional replay state) as siblings - the session fold reads only the
-// message; the extras ride along in the log.
-boost::json::value assistant_message(
-	std::string_view id,
-	std::string_view text,
-	araya::llm::token_usage const& usage,
-	std::optional<boost::json::value> replay) {
-	boost::json::object data;
-	data["message"] = boost::json::object{
-		{"id", std::string(id)},
-		{"role", "assistant"},
-		{"content", boost::json::array{{{"type", "text"}, {"text", std::string(text)}}}}};
-	boost::json::object usage_object;
-	usage_object["input_tokens"] = usage.input_tokens;
-	usage_object["output_tokens"] = usage.output_tokens;
-	if (usage.total_tokens)
-		usage_object["total_tokens"] = *usage.total_tokens;
-	if (usage.cache_read_tokens)
-		usage_object["cache_read_tokens"] = *usage.cache_read_tokens;
-	if (usage.cache_write_tokens)
-		usage_object["cache_write_tokens"] = *usage.cache_write_tokens;
-	if (usage.reasoning_tokens)
-		usage_object["reasoning_tokens"] = *usage.reasoning_tokens;
-	data["usage"] = std::move(usage_object);
-	if (replay)
-		data["replay"] = *replay;
-	return data;
-}
-
-// The session surface -> llm message bridge lives in the agent-loop
-// plugin (araya::agent::to_llm_message); the chat command uses it too.
+// The session surface -> llm bridge and the built-in message envelopes
+// live in araya::llm_bridge (plugins/llm/bridge); the commands use them
+// directly.
 
 template <class... Ts>
 struct overloaded : Ts... {
@@ -384,7 +347,9 @@ araya::task<void> cmd_session(app_context& ctx, line_sink const& out, std::strin
 					out("session: current session was disposed");
 					ctx.current.reset();
 				} else {
-					auto seq = s->append("user/message", user_message("u" + std::to_string(s->log().size()), text));
+					auto seq = s->append(
+						"user/message",
+						araya::llm_bridge::user_message_data("u" + std::to_string(s->log().size()), text));
 					out("session: appended seq " + std::to_string(seq));
 				}
 			}
@@ -409,7 +374,7 @@ araya::task<void> cmd_session(app_context& ctx, line_sink const& out, std::strin
 					boost::json::value replace = {
 						{"start_seq", start},
 						{"end_seq", end},
-						{"message", user_message("r" + std::to_string(s->log().size()), text)},
+						{"message", araya::llm_bridge::user_message_data("r" + std::to_string(s->log().size()), text)},
 					};
 					auto seq = s->append("surface/replace", std::move(replace));
 					out("session: replaced [" + std::to_string(start) + ", " + std::to_string(end) + ") at seq " +
@@ -659,7 +624,8 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 			out("session: created " + sid.value);
 		}
 
-		auto seq = s->append("user/message", user_message("u" + std::to_string(s->log().size()), text));
+		auto seq = s->append(
+			"user/message", araya::llm_bridge::user_message_data("u" + std::to_string(s->log().size()), text));
 		out("session: appended user seq " + std::to_string(seq));
 
 		// The first registered provider route wins (with both mounted,
@@ -681,7 +647,7 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 		options.model = model->model;
 		options.session_id = ctx.current->value;
 		for (auto const& message : s->surface().messages())
-			options.messages.push_back(araya::agent::to_llm_message(message));
+			options.messages.push_back(araya::llm_bridge::to_llm_message(message));
 
 		std::string assembled;
 		araya::llm::token_usage usage;
@@ -714,7 +680,8 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 		}
 		auto seq_out = s->append(
 			"assistant/message",
-			assistant_message("a" + std::to_string(s->log().size()), assembled, usage, std::move(replay)));
+			araya::llm_bridge::assistant_message_data(
+				"a" + std::to_string(s->log().size()), {araya::llm::text_block{assembled}}, usage, std::move(replay)));
 		out("assistant: " + assembled);
 		out("chat: tokens in " + std::to_string(usage.input_tokens) + " out " + std::to_string(usage.output_tokens) +
 			" (assistant seq " + std::to_string(seq_out) + ")");

@@ -1,5 +1,6 @@
 add_subdirectory(agent-loop)
 add_subdirectory(llm)
+add_subdirectory(llm/bridge)
 add_subdirectory(llm-mock)
 add_subdirectory(llm-openai)
 add_subdirectory(logger)

@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "araya/agent-loop/agent.hpp"
-#include "araya/agent-loop/bridge.hpp"
+#include "araya/llm/bridge.hpp"
 #include "araya/llm/llm.hpp"
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
@@ -27,6 +27,7 @@ namespace {
 
 using namespace araya::agent;
 using namespace araya::llm;
+using namespace araya::llm_bridge;
 using namespace std::chrono_literals;
 
 // -- the scripted adapter ---------------------------------------------------

@@ -1,5 +1,5 @@
 #include "araya/agent-loop/agent.hpp"
-#include "araya/agent-loop/bridge.hpp"
+#include "araya/llm/bridge.hpp"
 
 #include <boost/json/parse.hpp>
 #include <boost/system/error_code.hpp>
@@ -31,6 +31,12 @@ using araya::llm::token_usage;
 using araya::llm::tool_call_block;
 using araya::llm::tool_call_delta_chunk;
 using araya::llm::usage_chunk;
+using araya::llm_bridge::assistant_message_data;
+using araya::llm_bridge::message_text;
+using araya::llm_bridge::system_message_data;
+using araya::llm_bridge::to_llm_message;
+using araya::llm_bridge::tool_result_data;
+using araya::llm_bridge::user_message_data;
 using araya::session::session;
 
 void emit(event_sink const& sink, agent_event event) {
@@ -148,23 +154,6 @@ boost::json::value turn_end_data(std::uint64_t turn, run_status status, std::opt
 	if (failure)
 		data["failure"] = araya::llm::failure_to_json(*failure);
 	return data;
-}
-
-std::string system_text(araya::session::session_message const& message) {
-	std::string text;
-	if (auto const* array = message.content.if_array()) {
-		for (auto const& block : *array) {
-			auto const* object = block.if_object();
-			if (!object)
-				continue;
-			auto const* type = object->if_contains("type");
-			if (!type || !type->is_string() || type->as_string() != "text")
-				continue;
-			if (auto const* node = object->if_contains("text"); node && node->is_string())
-				text += node->as_string();
-		}
-	}
-	return text;
 }
 
 boost::json::value tool_call_data(std::uint64_t turn, std::uint64_t step, tool_call_block const& call) {
@@ -306,7 +295,7 @@ void agent_service::commit_system_prompt(session& session) {
 		bool present = false;
 		for (auto it = session.surface().messages().rbegin(); it != session.surface().messages().rend(); ++it) {
 			if (it->role == araya::session::message_role::system && it->source_plugin == plugin) {
-				last = system_text(*it);
+				last = message_text(*it);
 				present = true;
 				break;
 			}
