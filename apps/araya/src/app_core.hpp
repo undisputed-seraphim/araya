@@ -5,6 +5,7 @@
 #include "araya/runtime.hpp"
 #include "araya/session/session_types.hpp"
 #include "araya/task.hpp"
+#include "input_route.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/json/value.hpp>
@@ -14,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -61,10 +63,9 @@ std::vector<araya::desired_component> make_desired(app_context& ctx);
 araya::plugin_descriptor const* real_descriptor(std::string_view name);
 araya::plugin_config default_config(std::string_view name);
 
-// Whether the first token of `line` names a command this surface knows
-// (the command table plus help). Surfaces use it to tell a command from a
-// conversation line before routing.
-bool is_command(std::string_view line);
+// The palette-facing command metadata (the command table plus help and
+// quit): name, usage (which marks arg-taking commands), and summary.
+std::span<araya::app::command_info const> command_list();
 
 char const* state_name(araya::fiber_state s);
 std::string error_text(std::exception_ptr ep);

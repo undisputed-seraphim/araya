@@ -2,6 +2,7 @@
 
 #include "input_route.hpp"
 #include "tui_chrome.hpp"
+#include "tui_palette.hpp"
 
 #include <ftxui/dom/elements.hpp>
 
@@ -13,9 +14,10 @@
 #include <vector>
 
 // The session screen: the conversation feed (the folded session
-// messages), the command-output strip, the prompt box, and the status
-// sidebar. Message rendering is role-marker rows for now; tokens,
-// context, and cost stay placeholders.
+// messages), the command-output strip, the prompt box (with the command
+// palette above it when open), and the status sidebar. Message rendering
+// is role-marker rows for now; tokens, context, and cost stay
+// placeholders.
 namespace araya::tui {
 namespace {
 
@@ -42,15 +44,14 @@ ftxui::Color role_color(std::string_view role) {
 
 } // namespace
 
-ftxui::Element render_session_screen(
-	shared_state const& sh,
-	tui_theme const& theme,
-	ftxui::Component const& input,
-	int width,
-	int height) {
+ftxui::Element render_session_screen(render_context const& rc) {
 	using namespace ftxui;
 
-	auto snap = sh.snap.load(std::memory_order_acquire);
+	auto snap = rc.sh.snap.load(std::memory_order_acquire);
+
+	int sidebar_width = std::max(26, rc.width / 6);
+	sidebar_width = std::min(sidebar_width, rc.width / 3);
+	int main_width = std::max(20, rc.width - sidebar_width - 1); // minus the separator
 
 	// The conversation: the tail of the folded messages, one
 	// role-marked paragraph each.
@@ -59,7 +60,7 @@ ftxui::Element render_session_screen(
 	for (std::size_t i = feed_begin; i < snap->messages.size(); ++i) {
 		auto const& message = snap->messages[i];
 		feed.push_back(
-			paragraph(std::string(araya::app::role_marker(message.role, theme.ascii)) + " " + message.text) |
+			paragraph(std::string(araya::app::role_marker(message.role, rc.theme.ascii)) + " " + message.text) |
 			color(role_color(message.role)));
 	}
 	if (feed.empty())
@@ -71,7 +72,7 @@ ftxui::Element render_session_screen(
 	// help text is one entry), so flatten to lines and tail those - a
 	// tall multi-line output shows its end rather than being clipped to
 	// its head. Sized to a fraction of the terminal.
-	int output_height = std::clamp(height / 4, 5, 12);
+	int output_height = std::clamp(rc.height / 4, 5, 12);
 	std::size_t keep = static_cast<std::size_t>(std::max(1, output_height - 2));
 	std::vector<std::string> output_lines;
 	for (auto const& entry : snap->log) {
@@ -100,27 +101,25 @@ ftxui::Element render_session_screen(
 		text("   --%") | color(dim_text()),
 		text("   $--") | color(dim_text()),
 		filler(),
-		text("ctrl+p commands") | color(dim_text()),
+		text("type / for commands") | color(dim_text()),
 	});
-	Element prompt = prompt_box(vbox({input->Render(), std::move(meta)}), theme.ascii);
+	Element prompt = prompt_box(vbox({rc.input->Render(), std::move(meta)}), rc.theme.ascii);
 
-	Element hint = hbox({
-		text(snap->cwd) | color(dim_text()),
-	});
-
-	Element main = vbox({
-					   std::move(feed_view) | flex,
-					   std::move(output_view),
-					   std::move(prompt),
-					   std::move(hint),
-				   }) |
-				   flex;
+	Elements main_elements;
+	main_elements.push_back(std::move(feed_view) | flex);
+	main_elements.push_back(std::move(output_view));
+	if (araya::app::palette_open(rc.input_text))
+		main_elements.push_back(render_palette(
+			rc.commands, araya::app::palette_query(rc.input_text), rc.ui.palette_selected, main_width, rc.theme.ascii));
+	main_elements.push_back(std::move(prompt));
+	main_elements.push_back(hbox({text(snap->cwd) | color(dim_text())}));
+	Element main = vbox(std::move(main_elements)) | flex;
 
 	// The sidebar: session title, placeholder context metrics, the
 	// empty MCP/LSP sections, the component list, then cwd and version.
 	Elements component_rows;
 	for (auto const& c : snap->components) {
-		auto style = state_style_for(theme, c);
+		auto style = state_style_for(rc.theme, c);
 		component_rows.push_back(hbox({
 			text(std::string(style.glyph)) | color(style.color),
 			text(" " + c.name),
@@ -147,14 +146,12 @@ ftxui::Element render_session_screen(
 						  filler(),
 						  text(snap->cwd_branch) | color(dim_text()),
 						  hbox({
-							  text(theme.ascii ? "*" : "\u25cf") | color(Color::Green),
+							  text(rc.theme.ascii ? "*" : "\u25cf") | color(Color::Green),
 							  text(" " + snap->version) | color(dim_text()),
 						  }),
 					  }) |
 					  bgcolor(sidebar_bg());
 
-	int sidebar_width = std::max(26, width / 6);
-	sidebar_width = std::min(sidebar_width, width / 3);
 	return hbox({
 		std::move(main) | flex,
 		separator(),

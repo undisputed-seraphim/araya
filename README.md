@@ -252,26 +252,26 @@ cmake --build build --target araya_app
 ./build/apps/araya/araya run apps/araya/demo/demo.txt   # scripted tour
 ```
 
-Things to watch in the scripted tour:
+Things to watch in the scripted tour (commands are `/`-prefixed):
 
-- `fail timer` swaps in a crashing provider: the bomb fails, the console (its dependent)
-  unloads, and `timer in ...` reports the outage. `fail clear` restores everything.
-- `avail wait` retracts the beacon with its readiness flag cleared: the watcher parks
-  ("unresolved service"). `avail ready` promotes the beacon and the watcher activates -
+- `/fail timer` swaps in a crashing provider: the bomb fails, the console (its dependent)
+  unloads, and `/timer in ...` reports the outage. `/fail clear` restores everything.
+- `/avail wait` retracts the beacon with its readiness flag cleared: the watcher parks
+  ("unresolved service"). `/avail ready` promotes the beacon and the watcher activates -
   the promotion-only gate, no demotion anywhere.
-- `unload console` retires the console plugin (watch its heartbeat die in the logs);
-  `load console` brings it back. Sessions survive because the session plugin is untouched.
-- `session new/append/show` drives the event log and prints the folded message surface;
-  `session replace <s> <e> <text>` splices a span of history into one message (the
-  compaction mechanism), and `session fork <parent> [child]` opens a child with an
+- `/unload console` retires the console plugin (watch its heartbeat die in the logs);
+  `/load console` brings it back. Sessions survive because the session plugin is untouched.
+- `/session new/append/show` drives the event log and prints the folded message surface;
+  `/session replace <s> <e> <text>` splices a span of history into one message (the
+  compaction mechanism), and `/session fork <parent> [child]` opens a child with an
   inherited log prefix. The live feed shows the `session/created`, `session/event`,
   and `session/disposed` firehose.
-- `session save` flushes through the `session/flush` durability barrier (the persistence
-  plugin drains and fsyncs), and `session load`/`load-all` restore sessions from disk
-  through the same `prepare`/`enter` path the engine models. Sessions land as readable
-  JSONL under `./araya-sessions/` - `cat` one while you work. The store also drives
-  typed per-session projections (see `araya/session/projection.hpp`) on the same event
-  stream, so derived state survives restore by replay.
+- `/session save` flushes through the `session/flush` durability barrier (the persistence
+  plugin drains and fsyncs), and `/session load`/`load-all`/`restore` restore sessions
+  from disk through the same `prepare`/`enter` path the engine models. Sessions land as
+  readable JSONL under `./araya-sessions/` - `cat` one while you work. The store also
+  drives typed per-session projections (see `araya/session/projection.hpp`) on the same
+  event stream, so derived state survives restore by replay.
 
 The demo and the save/restart/load cycle are registered as the `script_demo` and
 `restart_cycle` ctests, so they run with the rest of the suite.
@@ -289,11 +289,17 @@ The UI has two phases. It opens on the entry screen - the `araya` wordmark over 
 box, a tip line, and a status bar - and switches to the session screen on the first
 submitted line. The session screen shows the conversation feed, a command-output strip,
 the prompt box, and a status sidebar (the derived session title, placeholder context
-metrics, the empty MCP/LSP sections, and the live component list). A submitted line is a
-command when its first token names one (the table behind `help`), and free text otherwise;
-free text is captured locally as a user message (`say`) and rendered in the feed, so the
-prompt works like a chat box. There is no live model call yet - connection-derived values
-(model, tokens, context, cost) are placeholders.
+metrics, the empty MCP/LSP sections, and the live component list).
+
+Commands are `/`-prefixed. Typing `/` opens a command palette directly above the prompt
+box that filters as you type (`↑`/`↓` to move, `enter` to run an argless command or
+complete an arg-taking one to `/name `, `esc` to close); the same palette works on the
+entry and session screens. `/session` opens the stored-session picker - a centered modal
+with a search line and the sessions on disk (title + date); selecting one restores it
+(`/session restore <id>`) into the session panel. Anything that is not a `/` command is a
+conversation line, captured locally as a user message (`/say`) and rendered in the feed,
+so the prompt works like a chat box. There is no live model call yet - connection-derived
+values (model, tokens, context, cost) are placeholders.
 
 Typing the first free-text line mints a session id (opaque, run-unique: `ses_…`) and
 starts persisting the conversation: each turn flushes through the session durability

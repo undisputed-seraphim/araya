@@ -12,6 +12,8 @@ add_executable(araya_app
     src/run_main.cpp
     src/tui_entry.cpp
     src/tui_main.cpp
+    src/tui_palette.cpp
+    src/tui_picker.cpp
     src/tui_session.cpp
     src/tui_state.cpp
     src/tui_view.cpp
@@ -71,6 +73,13 @@ if(CMAKE_TESTING_ENABLED)
             ${CMAKE_CURRENT_SOURCE_DIR}/demo/save.txt
             ${CMAKE_CURRENT_SOURCE_DIR}/demo/load.txt)
     set_tests_properties(restart_cycle PROPERTIES TIMEOUT 60)
+
+    add_test(NAME restore_cycle
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/demo/restore-cycle.sh
+            $<TARGET_FILE:araya_app>
+            ${CMAKE_CURRENT_SOURCE_DIR}/demo/save.txt
+            ${CMAKE_CURRENT_SOURCE_DIR}/demo/restore.txt)
+    set_tests_properties(restore_cycle PROPERTIES TIMEOUT 60)
 
     # The pure input-routing helpers (no plugins, no app library).
     add_executable(araya_app_tests tests/route_test.cpp)

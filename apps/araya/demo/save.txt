@@ -1,5 +1,5 @@
-session new demo
-session append persists across restarts
-session save
-session close
+/session new demo
+/session append persists across restarts
+/session save
+/session close
 quit

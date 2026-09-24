@@ -1,5 +1,5 @@
-load llm-mock
-session new chat-demo
-chat hello world
-chat what is the answer
-session show
+/load llm-mock
+/session new chat-demo
+/chat hello world
+/chat what is the answer
+/session show

@@ -1,34 +1,120 @@
 #pragma once
 
+#include <cctype>
+#include <cstddef>
 #include <cstdint>
-#include <functional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
-// The pure input routing shared by the TUI surfaces: how one submitted
-// line is classified, and the role markers the feed renders. Header-only
-// and dependency-free so it unit-tests without the app or any plugin.
+// The pure input routing and command-palette helpers shared by the TUI
+// surfaces. Header-only and dependency-free so it unit-tests without the
+// app or any plugin.
 namespace araya::app {
 
 enum class input_kind : std::uint8_t {
 	empty,	 // nothing but whitespace
-	command, // the first token names a command the surface knows
+	command, // the line starts with '/'
 	message, // free text: a conversation line
 };
 
 // Classifies one submitted line: empty for whitespace only, command when
-// the first token satisfies `is_known_command`, message otherwise. Lines
-// are trimmed first, so leading/trailing spaces do not matter.
-inline input_kind classify_input(std::string_view line, std::function<bool(std::string_view)> const& is_known_command) {
+// the trimmed line starts with '/', message otherwise.
+inline input_kind classify_input(std::string_view line) {
 	auto first = line.find_first_not_of(" \t");
 	if (first == std::string_view::npos)
 		return input_kind::empty;
-	auto last = line.find_last_not_of(" \t");
-	line = line.substr(first, last - first + 1);
+	return line[first] == '/' ? input_kind::command : input_kind::message;
+}
 
-	auto end = line.find_first_of(" \t");
-	auto name = line.substr(0, end);
-	return is_known_command(name) ? input_kind::command : input_kind::message;
+// One parsed slash command: the name (without the leading '/') and the
+// raw argument text after the first whitespace run.
+struct parsed_command {
+	std::string_view name;
+	std::string_view args;
+};
+
+inline parsed_command parse_command(std::string_view line) {
+	auto first = line.find_first_not_of(" \t");
+	if (first == std::string_view::npos)
+		return {};
+	line.remove_prefix(first);
+	if (!line.empty() && line.front() == '/')
+		line.remove_prefix(1);
+	auto space = line.find_first_of(" \t");
+	if (space == std::string_view::npos)
+		return {line, {}};
+	auto args = line.substr(space);
+	auto arg_first = args.find_first_not_of(" \t");
+	return {line.substr(0, space), arg_first == std::string_view::npos ? std::string_view{} : args.substr(arg_first)};
+}
+
+// One palette entry. `usage` drives whether the command takes arguments
+// (any usage longer than the bare name does); the palette shows name and
+// summary.
+struct command_info {
+	std::string_view name;
+	std::string_view usage;
+	std::string_view summary;
+};
+
+inline bool takes_args(command_info const& command) { return command.usage != command.name; }
+
+inline bool equals_ci(std::string_view a, std::string_view b) {
+	if (a.size() != b.size())
+		return false;
+	for (std::size_t i = 0; i < a.size(); ++i) {
+		if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+			return false;
+	}
+	return true;
+}
+
+inline bool starts_with_ci(std::string_view hay, std::string_view needle) {
+	return hay.size() >= needle.size() && equals_ci(hay.substr(0, needle.size()), needle);
+}
+
+inline bool contains_ci(std::string_view hay, std::string_view needle) {
+	if (needle.empty())
+		return true;
+	if (needle.size() > hay.size())
+		return false;
+	for (std::size_t i = 0; i + needle.size() <= hay.size(); ++i)
+		if (equals_ci(hay.substr(i, needle.size()), needle))
+			return true;
+	return false;
+}
+
+// The palette's filter: entries whose name starts with `query` first,
+// then entries that merely contain it, both case-insensitive. An empty
+// query matches every entry in order. Returns indices into `commands`.
+inline std::vector<std::size_t> filter_commands(std::span<command_info const> commands, std::string_view query) {
+	std::vector<std::size_t> prefix;
+	std::vector<std::size_t> substring;
+	for (std::size_t i = 0; i < commands.size(); ++i) {
+		if (query.empty()) {
+			prefix.push_back(i);
+			continue;
+		}
+		auto name = commands[i].name;
+		if (starts_with_ci(name, query))
+			prefix.push_back(i);
+		else if (contains_ci(name, query))
+			substring.push_back(i);
+	}
+	prefix.insert(prefix.end(), substring.begin(), substring.end());
+	return prefix;
+}
+
+// The palette's open condition: the input is a command token being typed
+// (starts with '/', no whitespace yet). The query is the text after '/'.
+inline bool palette_open(std::string_view input) {
+	return !input.empty() && input.front() == '/' && input.find_first_of(" \t") == std::string_view::npos;
+}
+
+inline std::string_view palette_query(std::string_view input) {
+	return input.empty() ? std::string_view{} : input.substr(1);
 }
 
 // The feed's per-role prefix. The unicode tier uses the opencode-style

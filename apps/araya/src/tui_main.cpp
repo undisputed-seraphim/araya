@@ -73,10 +73,12 @@ int tui_main(std::string session) {
 	std::thread engine_thread([&sh, &session] { araya::tui::run_engine(sh, session); });
 
 	araya::tui::tui_theme theme{std::getenv("ARAYA_TUI_ASCII") != nullptr};
+	araya::tui::ui_state ui;
 	std::string input_buffer;
 	auto root = araya::tui::build_ui(
 		sh,
 		theme,
+		ui,
 		input_buffer,
 		screen,
 		[&sh, &screen](std::string cmd) {

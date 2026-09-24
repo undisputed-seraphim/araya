@@ -2,38 +2,106 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
-// The pure input routing: how the TUI tells commands from conversation
-// lines, and the feed's role markers. No plugins, no app library.
+// The pure input routing and palette helpers: slash classification,
+// command parsing/filtering, the palette open condition, the feed's role
+// markers, and title derivation. No plugins, no app library.
 namespace {
 
-bool known(std::string_view name) { return name == "ls" || name == "help" || name == "say"; }
+using araya::app::command_info;
 
-araya::app::input_kind classify(std::string_view line) { return araya::app::classify_input(line, known); }
+std::vector<command_info> const k_commands{
+	{"ls", "ls", "list"},
+	{"load", "load <component>", "load a component"},
+	{"session", "session ...", "sessions"},
+	{"say", "say <text>", "say something"},
+};
+
+std::span<command_info const> commands() { return k_commands; }
 
 } // namespace
 
 TEST_CASE("classify_input: empty and whitespace only") {
-	CHECK(classify("") == araya::app::input_kind::empty);
-	CHECK(classify("   ") == araya::app::input_kind::empty);
-	CHECK(classify("\t \t") == araya::app::input_kind::empty);
+	CHECK(araya::app::classify_input("") == araya::app::input_kind::empty);
+	CHECK(araya::app::classify_input("   ") == araya::app::input_kind::empty);
+	CHECK(araya::app::classify_input("\t \t") == araya::app::input_kind::empty);
 }
 
-TEST_CASE("classify_input: known command names") {
-	CHECK(classify("ls") == araya::app::input_kind::command);
-	CHECK(classify("help") == araya::app::input_kind::command);
-	CHECK(classify("say hello") == araya::app::input_kind::command);
-	CHECK(classify("  ls  ") == araya::app::input_kind::command);
-	CHECK(classify("\tls -l") == araya::app::input_kind::command);
+TEST_CASE("classify_input: slash lines are commands") {
+	CHECK(araya::app::classify_input("/ls") == araya::app::input_kind::command);
+	CHECK(araya::app::classify_input("/") == araya::app::input_kind::command);
+	CHECK(araya::app::classify_input("  /help me") == araya::app::input_kind::command);
 }
 
-TEST_CASE("classify_input: free text is a message") {
-	CHECK(classify("hello there") == araya::app::input_kind::message);
-	CHECK(classify("what is the tech stack?") == araya::app::input_kind::message);
-	// A command name must be the first token, not merely a prefix.
-	CHECK(classify("lst") == araya::app::input_kind::message);
-	CHECK(classify("lsfoo bar") == araya::app::input_kind::message);
+TEST_CASE("classify_input: anything else is a message") {
+	CHECK(araya::app::classify_input("hello there") == araya::app::input_kind::message);
+	CHECK(araya::app::classify_input("ls") == araya::app::input_kind::message); // no slash
+	CHECK(araya::app::classify_input("what about /tmp?") == araya::app::input_kind::message);
+}
+
+TEST_CASE("parse_command: name and args") {
+	auto load = araya::app::parse_command("/load logger");
+	CHECK(load.name == "load");
+	CHECK(load.args == "logger");
+
+	auto say = araya::app::parse_command("/say  hello   world");
+	CHECK(say.name == "say");
+	CHECK(say.args == "hello   world");
+
+	auto bare = araya::app::parse_command("/session");
+	CHECK(bare.name == "session");
+	CHECK(bare.args.empty());
+
+	auto none = araya::app::parse_command("/");
+	CHECK(none.name.empty());
+	CHECK(none.args.empty());
+}
+
+TEST_CASE("filter_commands: prefix ranks above substring, case-insensitive") {
+	auto all = araya::app::filter_commands(commands(), "");
+	REQUIRE(all.size() == k_commands.size());
+	CHECK(commands()[all[0]].name == "ls");
+
+	auto matches = araya::app::filter_commands(commands(), "se");
+	REQUIRE(matches.size() == 1);
+	CHECK(commands()[matches[0]].name == "session");
+
+	// "sa" is a prefix of say; "ls" contains no match.
+	auto sa = araya::app::filter_commands(commands(), "SA");
+	REQUIRE(sa.size() == 1);
+	CHECK(commands()[sa[0]].name == "say");
+
+	// Prefix match ("lo") beats an interior match would if present.
+	auto lo = araya::app::filter_commands(commands(), "lo");
+	REQUIRE(lo.size() == 1);
+	CHECK(commands()[lo[0]].name == "load");
+
+	CHECK(araya::app::filter_commands(commands(), "zzz").empty());
+}
+
+TEST_CASE("filter_commands: prefix before substring") {
+	std::vector<command_info> const items{
+		{"asend", "asend", ""},
+		{"session", "session", ""},
+	};
+	auto matches = araya::app::filter_commands(items, "se");
+	REQUIRE(matches.size() == 2);
+	CHECK(items[matches[0]].name == "session"); // prefix
+	CHECK(items[matches[1]].name == "asend");	// substring
+}
+
+TEST_CASE("palette_open: open while typing the command token") {
+	CHECK(araya::app::palette_open("/"));
+	CHECK(araya::app::palette_open("/se"));
+	CHECK(araya::app::palette_open("/say"));
+	CHECK_FALSE(araya::app::palette_open(""));
+	CHECK_FALSE(araya::app::palette_open("hello"));
+	CHECK_FALSE(araya::app::palette_open("/say hello"));
+	CHECK_FALSE(araya::app::palette_open("/session "));
 }
 
 TEST_CASE("role_marker: unicode and ascii tiers") {

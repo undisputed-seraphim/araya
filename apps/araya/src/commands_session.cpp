@@ -214,6 +214,50 @@ araya::task<void> cmd_session(app_context& ctx, line_sink const& out, std::strin
 					}
 				}
 			}
+		} else if (sub == "restore") {
+			// Make a stored session current: switch to it if it is
+			// already live, otherwise load it from disk. This is the
+			// picker's action.
+			std::string id;
+			is >> id;
+			if (id.empty()) {
+				out("session: usage: session restore <id>");
+			} else {
+				auto store = store_of();
+				araya::session::session_id target{id};
+				if (store->get(target)) {
+					ctx.current = target;
+					out("session: switched to " + target.value);
+				} else {
+					auto backend =
+						ctx.rt->root_context()
+							.require<araya::persistence::session_persistence>(araya::persistence::persistence_key)
+							.shared();
+					auto stored = backend->read(target);
+					if (!stored) {
+						out("session: " + target.value + " not on disk");
+					} else {
+						auto const event_count = stored->events.size();
+						auto s = store->prepare(
+							target,
+							araya::session::create_session_options{
+								.seed = std::move(stored->events),
+								.inherited_event_count = stored->events.size(),
+								.cwd = stored->header.cwd,
+								.parent_session = stored->header.parent_session,
+								.created_at = stored->header.created_at,
+								.is_seeded = false,
+								.origin = stored->header.origin,
+								.delegation_depth = stored->header.delegation_depth,
+								.agent_preset = stored->header.agent_preset,
+							});
+						store->enter(s);
+						store->announce(*s);
+						ctx.current = target;
+						out("session: restored " + target.value + " (" + std::to_string(event_count) + " events)");
+					}
+				}
+			}
 		} else if (sub == "close") {
 			std::string id;
 			is >> id;
@@ -227,7 +271,8 @@ araya::task<void> cmd_session(app_context& ctx, line_sink const& out, std::strin
 				out("session: closed " + target.value);
 			}
 		} else {
-			out("session: new | switch | list | append | replace | fork | show | save | load | load-all | close");
+			out("session: new | switch | list | append | replace | fork | show | save | load | load-all | restore | "
+				"close");
 		}
 	} catch (std::exception const& e) {
 		out(std::string("session: ") + e.what());

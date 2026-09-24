@@ -3,6 +3,7 @@
 #include "app_core.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -30,6 +31,16 @@ struct feed_message {
 	std::string text;
 };
 
+// One stored-session row for the picker: the id, its derived title (or
+// the id), and a formatted creation date. The engine enumerates these
+// on demand (when the picker opens).
+struct session_row {
+	std::string id;
+	std::string title;
+	std::string date;
+	std::int64_t created_at = 0;
+};
+
 // An immutable UI snapshot: the engine builds a fresh one and swaps it
 // in atomically; the UI thread copies the shared_ptr and renders.
 struct snapshot {
@@ -37,6 +48,8 @@ struct snapshot {
 	std::vector<std::string> log;
 	// The conversation: the current session's folded messages.
 	std::vector<feed_message> messages;
+	// The stored sessions the picker offers (enumerated on demand).
+	std::vector<session_row> sessions;
 	// Whether the user has begun (submitted anything): the entry phase
 	// gives way to the session view.
 	bool started = false;
@@ -59,6 +72,9 @@ struct shared_state {
 	// Set by the UI on the first submit so the entry view gives way
 	// immediately, rather than waiting for the engine's next publish.
 	std::atomic<bool> started_ui{false};
+	// Set by the UI when the session picker opens; the engine enumerates
+	// the stored sessions once, publishes, and clears it.
+	std::atomic<bool> sessions_request{false};
 	// Wakes the UI loop after a publish. Set once, before the engine
 	// thread starts; read only from then on.
 	std::function<void()> wake;
@@ -75,6 +91,8 @@ struct engine_state {
 	std::vector<feed_message> messages;
 	// The derived session title (first user message, or the id).
 	std::string title = "no session";
+	// The stored sessions the picker offers, refreshed on demand.
+	std::vector<session_row> sessions;
 	// Set on the first submit; mirrored into every snapshot.
 	bool started = false;
 };

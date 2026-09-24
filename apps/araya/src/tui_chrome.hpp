@@ -20,6 +20,12 @@ inline ftxui::Color dim_text() { return ftxui::Color::GrayDark; }
 
 inline ftxui::Color accent() { return ftxui::Color::Cyan; }
 
+// The palette and picker share a slightly darker surface than the prompt
+// box, with an amber selection bar.
+inline ftxui::Color palette_bg() { return ftxui::Color::RGB(0x1c, 0x1c, 0x1c); }
+
+inline ftxui::Color palette_selected_bg() { return ftxui::Color::RGB(0xc8, 0xa2, 0x5a); }
+
 // A prompt box: a two-row accent bar on the left of `content` (the input
 // row plus a meta row), on the prompt background.
 inline ftxui::Element prompt_box(ftxui::Element content, bool ascii) {

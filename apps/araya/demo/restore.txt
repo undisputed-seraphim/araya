@@ -1,0 +1,3 @@
+/session restore demo
+/session show
+quit

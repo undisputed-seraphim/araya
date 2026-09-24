@@ -378,21 +378,32 @@ araya::task<void> dispatch(app_context& ctx, line_sink const& out, std::string_v
 	auto trimmed = trim(line);
 	if (trimmed.empty())
 		co_return;
-	std::istringstream is(trimmed);
-	std::string name;
-	is >> name;
+	if (trimmed.front() != '/') {
+		out("commands start with '/' (try /help)");
+		co_return;
+	}
+	std::string_view body(trimmed);
+	body.remove_prefix(1);
+	auto first = body.find_first_not_of(" \t");
+	if (first == std::string_view::npos) {
+		out("commands start with '/' (try /help)");
+		co_return;
+	}
+	body = body.substr(first);
+	auto name = body.substr(0, body.find_first_of(" \t"));
 
 	if (name == "help") {
 		out(help_text());
 		co_return;
 	}
+	std::string body_str(body);
 	for (auto const& entry : g_commands) {
 		if (entry.name == name) {
-			co_await entry.run(ctx, out, trimmed);
+			co_await entry.run(ctx, out, body_str);
 			co_return;
 		}
 	}
-	out("unknown command '" + name + "' (try help)");
+	out("unknown command '/" + std::string(name) + "' (try /help)");
 }
 
 std::string help_text() {
@@ -401,28 +412,24 @@ std::string help_text() {
 		usage_width = std::max(usage_width, entry.usage.size());
 	std::string text = "commands:\n";
 	for (auto const& entry : g_commands) {
-		text += "  " + std::string(entry.usage);
+		text += "  /" + std::string(entry.usage);
 		text += std::string(usage_width - entry.usage.size() + 2, ' ');
 		text += std::string(entry.summary) + "\n";
 	}
-	text += "  help                    this text";
+	text += "  /help                   this text";
 	return text;
 }
 
-bool is_command(std::string_view line) {
-	auto first = line.find_first_not_of(" \t");
-	if (first == std::string_view::npos)
-		return false;
-	auto last = line.find_last_not_of(" \t");
-	line = line.substr(first, last - first + 1);
-	auto name = line.substr(0, line.find_first_of(" \t"));
-	if (name == "help")
-		return true;
-	for (auto const& entry : g_commands) {
-		if (entry.name == name)
-			return true;
-	}
-	return false;
+std::span<araya::app::command_info const> command_list() {
+	static std::vector<araya::app::command_info> const list = [] {
+		std::vector<araya::app::command_info> out;
+		out.push_back({"help", "help", "this text"});
+		for (auto const& entry : g_commands)
+			out.push_back({entry.name, entry.usage, entry.summary});
+		out.push_back({"quit", "quit", "exit the app"});
+		return out;
+	}();
+	return list;
 }
 
 } // namespace araya::app

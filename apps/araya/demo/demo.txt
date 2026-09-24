@@ -1,25 +1,25 @@
-ls
-log info the console is alive
-session new demo
-session append first entry from the demo
-session show
-timer in 2 a one-shot reminder
+/ls
+/log info the console is alive
+/session new demo
+/session append first entry from the demo
+/session show
+/timer in 2 a one-shot reminder
 sleep 2500
-fail timer
-ls
-timer in 1 this should report unavailable
-fail clear
-avail wait
-ls
-avail ready
-unload console
-ls
-load console
-session append still works after the outage
-session replace 0 2 condensed by the demo
-session show
-session save
-session close
-session load-all
-session show
+/fail timer
+/ls
+/timer in 1 this should report unavailable
+/fail clear
+/avail wait
+/ls
+/avail ready
+/unload console
+/ls
+/load console
+/session append still works after the outage
+/session replace 0 2 condensed by the demo
+/session show
+/session save
+/session close
+/session load-all
+/session show
 quit
