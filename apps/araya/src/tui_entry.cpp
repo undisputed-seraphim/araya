@@ -1,5 +1,6 @@
 #include "tui_view.hpp"
 
+#include "metrics.hpp"
 #include "tui_chrome.hpp"
 #include "tui_palette.hpp"
 
@@ -10,9 +11,9 @@
 #include <utility>
 
 // The startup screen: a wordmark over the prompt box (with the command
-// palette above it when open), a tip line, and a bottom status bar.
-// Shown until the first submit (snapshot.started). Every
-// connection-derived value is a placeholder for now.
+// palette above it when open), a tip line, and a bottom status bar. The
+// box's second row shows the active model route. Shown until the first
+// submit (snapshot.started).
 namespace araya::tui {
 
 ftxui::Element render_entry_screen(render_context const& rc) {
@@ -21,10 +22,12 @@ ftxui::Element render_entry_screen(render_context const& rc) {
 	auto snap = rc.sh.snap.load(std::memory_order_acquire);
 	int box_width = std::clamp(rc.width - 8, 32, 76);
 
+	std::string connection = snap->provider.empty() ? std::string("no provider")
+													: snap->provider + " \u00b7 " + araya::app::elide(snap->model, 40);
 	Element build_row = hbox({
-		text("Build") | color(dim_text()),
+		text("Model") | color(dim_text()),
 		text(" \u00b7 ") | color(accent()),
-		text("-- --") | color(accent()),
+		text(connection) | color(accent()),
 		filler(),
 		text("type / for commands") | color(dim_text()),
 	});

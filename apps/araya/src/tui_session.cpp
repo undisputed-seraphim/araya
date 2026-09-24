@@ -128,6 +128,9 @@ ftxui::Element build_sidebar(snapshot const& snap, tui_theme const& theme, int s
 
 	return vbox({
 			   text(snap.title) | bold | color(accent()),
+			   text("provider " + (snap.provider.empty() ? std::string("--") : snap.provider)) | color(dim_text()),
+			   text("model    " + (snap.model.empty() ? std::string("--") : araya::app::elide(snap.model, 24))) |
+				   color(dim_text()),
 			   text(
 				   "tokens   " + araya::app::token_count_text(
 									 snap.tokens.input_tokens, snap.tokens.output_tokens, snap.tokens.has_usage)),

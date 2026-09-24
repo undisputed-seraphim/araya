@@ -160,3 +160,10 @@ TEST_CASE("context_percent_text: whole percent or a dash placeholder") {
 	CHECK(araya::app::context_percent_text(1, 3, true) == "33%");
 	CHECK(araya::app::context_percent_text(2, 3, true) == "67%");
 }
+
+TEST_CASE("elide: short text is untouched, long text gets an ellipsis") {
+	CHECK(araya::app::elide("gpt-4o", 10) == "gpt-4o");
+	CHECK(araya::app::elide("abcdefghij", 5) == "abcde\u2026");
+	// The cut backs off a split UTF-8 codepoint.
+	CHECK(araya::app::elide(std::string(4, 'a') + "\u00e9" + "z", 5) == "aaaa\u2026");
+}
