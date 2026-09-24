@@ -130,10 +130,21 @@ ftxui::Element build_output(snapshot const& snap, int height) {
 	return vbox(std::move(output)) | border | size(HEIGHT, EQUAL, output_height);
 }
 
-// The prompt box: input plus the latest request's token/context metrics.
+// The prompt box: input plus the latest request's token/context metrics,
+// with a live spinner while a model turn is in flight.
 ftxui::Element build_prompt(render_context const& rc, snapshot const& snap) {
 	using namespace ftxui;
 	auto const& tokens = snap.tokens;
+	bool streaming = false;
+	{
+		std::lock_guard lock(rc.sh.stream_mutex);
+		streaming = rc.sh.stream_active;
+	}
+	Element hint =
+		streaming ? hbox(
+						{text(std::string(araya::app::spinner_glyph(rc.ui.spinner, rc.theme.ascii)) + " streaming") |
+						 color(accent())})
+				  : (text("type / for commands") | color(dim_text()));
 	Element meta = hbox({
 		text("tokens " + araya::app::token_count_text(tokens.input_tokens, tokens.output_tokens, tokens.has_usage)) |
 			color(dim_text()),
@@ -141,7 +152,7 @@ ftxui::Element build_prompt(render_context const& rc, snapshot const& snap) {
 			color(dim_text()),
 		text("   $--") | color(dim_text()),
 		filler(),
-		text("type / for commands") | color(dim_text()),
+		std::move(hint),
 	});
 	return prompt_box(vbox({rc.input->Render(), std::move(meta)}), rc.theme.ascii);
 }
@@ -200,6 +211,7 @@ ftxui::Element render_session_screen(render_context const& rc) {
 	using namespace ftxui;
 
 	auto snap = rc.sh.snap.load(std::memory_order_acquire);
+	++rc.ui.spinner; // advances the streaming indicator each frame
 	// The in-flight model text, if a turn is streaming right now.
 	std::string stream;
 	{
@@ -212,10 +224,22 @@ ftxui::Element render_session_screen(render_context const& rc) {
 	sidebar_width = std::min(sidebar_width, rc.width / 3);
 	int main_width = std::max(20, rc.width - sidebar_width - 1); // minus the separator
 
-	// The feed gets everything the fixed rows do not: the output strip,
-	// the two-row prompt box, and the cwd line.
+	// The feed gets everything the fixed rows do not: the header, the
+	// output strip, the two-row prompt box, and the cwd line.
 	int const output_height = std::clamp(rc.height / 4, 5, 12);
-	int const feed_height = std::max(3, rc.height - output_height - 3);
+	int const feed_height = std::max(3, rc.height - output_height - 4);
+
+	std::string connection =
+		snap->provider.empty()
+			? std::string("no provider")
+			: snap->provider + (snap->model.empty() ? "" : " / " + araya::app::elide(snap->model, 30));
+	Element header = hbox({
+		text(" araya ") | bold | color(accent()),
+		text("\u00b7") | color(dim_text()),
+		text(" " + (snap->title.empty() ? std::string("no session") : snap->title)) | color(dim_text()),
+		filler(),
+		text(connection + " ") | color(dim_text()),
+	});
 
 	Elements main_elements;
 	main_elements.push_back(build_feed(*snap, stream, rc.ui, main_width, feed_height, rc.theme.ascii) | flex);
@@ -226,10 +250,13 @@ ftxui::Element render_session_screen(render_context const& rc) {
 	main_elements.push_back(build_prompt(rc, *snap));
 	main_elements.push_back(hbox({text(snap->cwd) | color(dim_text())}));
 
-	return hbox({
-		vbox(std::move(main_elements)) | flex,
-		separator(),
-		build_sidebar(*snap, rc.theme, sidebar_width),
+	return vbox({
+		std::move(header),
+		hbox({
+			vbox(std::move(main_elements)) | flex,
+			separator(),
+			build_sidebar(*snap, rc.theme, sidebar_width),
+		}) | flex,
 	});
 }
 

@@ -93,4 +93,15 @@ inline std::vector<std::string> wrap_lines(std::string_view text, std::size_t wi
 	return lines;
 }
 
+// One frame of the streaming spinner. The ASCII tier uses the classic
+// four-stroke spinner; the unicode tier uses braille dots.
+inline std::string_view spinner_glyph(int frame, bool ascii) {
+	static constexpr std::string_view k_ascii[] = {"|", "/", "-", "\\"};
+	static constexpr std::string_view k_braille[] = {
+		"\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"};
+	if (ascii)
+		return k_ascii[static_cast<std::size_t>(frame) % 4];
+	return k_braille[static_cast<std::size_t>(frame) % 10];
+}
+
 } // namespace araya::app

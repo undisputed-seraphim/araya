@@ -51,6 +51,8 @@ struct ui_state {
 	int feed_scroll = 0;
 	int feed_total_lines = 0;
 	int feed_view_lines = 1;
+	// Advanced once per frame while a turn streams; drives the spinner.
+	int spinner = 0;
 };
 
 // Everything a screen renderer reads for one frame. `ui` is mutable: the

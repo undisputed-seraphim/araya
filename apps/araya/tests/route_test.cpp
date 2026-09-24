@@ -180,3 +180,11 @@ TEST_CASE("wrap_lines: greedy word wrap") {
 	CHECK(wrap_lines("a\n", 10) == std::vector<std::string>{"a"});
 	CHECK(wrap_lines("a   b", 10) == std::vector<std::string>{"a b"});
 }
+
+TEST_CASE("spinner_glyph: cycles the ascii and braille frames") {
+	CHECK(araya::app::spinner_glyph(0, true) == "|");
+	CHECK(araya::app::spinner_glyph(1, true) == "/");
+	CHECK(araya::app::spinner_glyph(4, true) == "|");
+	CHECK(araya::app::spinner_glyph(0, false) == "\u280b");
+	CHECK(araya::app::spinner_glyph(10, false) == "\u280b");
+}
