@@ -55,12 +55,23 @@ std::optional<active_model> first_route(app_context& ctx, line_sink const& out, 
 
 // Folds one model stream into the assembled text, usage, replay state,
 // and terminal reason/failure - shared by chat's chunk sink and ask's
-// agent-event observer.
+// agent-event observer. Deltas are also forwarded to the surface's
+// stream hook (when set) so text appears before the turn settles.
 struct text_collector {
+	araya::app::stream_callback const* hook = nullptr;
+
 	void feed(araya::llm::stream_chunk const& chunk) {
 		std::visit(
 			overloaded{
-				[&](araya::llm::text_delta_chunk const& delta) { assembled += delta.text; },
+				[&](araya::llm::text_delta_chunk const& delta) {
+					assembled += delta.text;
+					if (hook && *hook)
+						(*hook)(stream_channel::content, delta.text);
+				},
+				[&](araya::llm::reasoning_delta_chunk const& delta) {
+					if (hook && *hook)
+						(*hook)(stream_channel::reasoning, delta.text);
+				},
 				[&](araya::llm::usage_chunk const& u) { usage = u.usage; },
 				[&](araya::llm::finish_chunk const& finish) {
 					why = finish.why;
@@ -117,6 +128,7 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 			options.messages.push_back(araya::llm_bridge::to_llm_message(message));
 
 		text_collector collector;
+		collector.hook = &ctx.stream_hook;
 		araya::llm::chunk_sink sink = [&](araya::llm::stream_chunk const& chunk) -> araya::task<void> {
 			collector.feed(chunk);
 			co_return;
@@ -178,6 +190,7 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 		options.input = text;
 
 		text_collector collector;
+		collector.hook = &ctx.stream_hook;
 		araya::llm::chunk_sink on_chunk = [&](araya::llm::stream_chunk const& chunk) -> araya::task<void> {
 			collector.feed(chunk);
 			co_return;

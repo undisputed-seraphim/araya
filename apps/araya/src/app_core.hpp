@@ -33,6 +33,17 @@ namespace araya::app {
 
 using line_sink = std::function<void(std::string)>;
 
+// The channel a streamed model delta belongs to. Surfaces render content
+// today and can add reasoning without touching the commands.
+enum class stream_channel : std::uint8_t {
+	content,
+	reasoning,
+};
+
+// Receives model deltas as they arrive (the transient-streaming seam).
+// Empty in headless scripts, where nothing renders mid-turn.
+using stream_callback = std::function<void(stream_channel, std::string_view)>;
+
 struct desired_entry {
 	araya::plugin_descriptor const* descriptor = nullptr;
 	araya::plugin_config config;
@@ -53,6 +64,9 @@ struct app_context {
 	// Path to the llm-openai config JSON (the --llm-config flag or the
 	// ARAYA_LLM_CONFIG environment variable); empty means no adapter.
 	std::string llm_config;
+	// The surface's transient-stream sink; the commands forward model
+	// content/reasoning deltas here. Empty disables streaming.
+	stream_callback stream_hook;
 };
 
 // A no-op-deleter view over a static descriptor: the same pattern the

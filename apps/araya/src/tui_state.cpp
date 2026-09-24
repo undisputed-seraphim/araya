@@ -256,10 +256,24 @@ araya::task<void> command_loop(shared_state& sh, engine_state& e) {
 			if (araya::app::classify_input(line) == araya::app::input_kind::message)
 				line = "/say " + line;
 			araya::app::line_sink sink = [&e](std::string text) { log_line(e, std::move(text)); };
+			// Open the stream buffer for the turn: model deltas append here
+			// and the UI renders them until the command settles.
+			{
+				std::lock_guard lock(sh.stream_mutex);
+				sh.stream_content.clear();
+				sh.stream_reasoning.clear();
+				sh.stream_active = true;
+			}
 			try {
 				co_await araya::app::dispatch(e.ctx, sink, line);
 			} catch (std::exception const& ex) {
 				log_line(e, std::string("error: ") + ex.what());
+			}
+			{
+				std::lock_guard lock(sh.stream_mutex);
+				sh.stream_active = false;
+				sh.stream_content.clear();
+				sh.stream_reasoning.clear();
 			}
 			// The strand is ours here: fold the conversation directly.
 			fold_messages(e);
@@ -303,6 +317,21 @@ araya::task<void> boot_and_run(shared_state& sh, engine_state& e, std::string re
 	// Resolve the llm route before the first publish so the entry screen
 	// can show the connection immediately.
 	co_await e.ctx.rt->run_on_strand([&e] { refresh_route(e); });
+
+	// The transient-stream sink: model deltas land in the shared buffer
+	// and wake the UI (throttled) so text appears before the turn settles.
+	e.ctx.stream_hook = [&sh](araya::app::stream_channel channel, std::string_view text) {
+		{
+			std::lock_guard lock(sh.stream_mutex);
+			(channel == araya::app::stream_channel::content ? sh.stream_content : sh.stream_reasoning).append(text);
+		}
+		auto const now =
+			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+				.count();
+		auto last = sh.stream_last_wake_ns.load(std::memory_order_relaxed);
+		if (now - last > 33'000'000 && sh.stream_last_wake_ns.compare_exchange_strong(last, now) && sh.wake)
+			sh.wake();
+	};
 
 	// Resume: restore the named session from disk (the same path the
 	// `/session restore` command uses) and open straight into the session

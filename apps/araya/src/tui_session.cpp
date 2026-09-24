@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -43,8 +44,10 @@ ftxui::Color role_color(std::string_view role) {
 	return ftxui::Color::White;
 }
 
-// The tail of the folded messages, one role-marked paragraph each.
-ftxui::Element build_feed(snapshot const& snap, bool ascii) {
+// The tail of the folded messages, one role-marked paragraph each, with
+// the in-flight model text appended (dim, cursor-marked) while a turn
+// streams before it settles into an assistant/message.
+ftxui::Element build_feed(snapshot const& snap, std::string const& stream, bool ascii) {
 	using namespace ftxui;
 	Elements feed;
 	std::size_t begin = snap.messages.size() > 60 ? snap.messages.size() - 60 : 0;
@@ -53,6 +56,15 @@ ftxui::Element build_feed(snapshot const& snap, bool ascii) {
 		feed.push_back(
 			paragraph(std::string(araya::app::role_marker(message.role, ascii)) + " " + message.text) |
 			color(role_color(message.role)));
+	}
+	if (!stream.empty()) {
+		// A block cursor marks the row as still streaming; the ASCII tier
+		// uses a caret (the prompt bar owns '|' and the accent bar the
+		// half block).
+		auto const cursor = ascii ? "^" : "\u2588";
+		feed.push_back(
+			paragraph(std::string(araya::app::role_marker("assistant", ascii)) + " " + stream + cursor) |
+			color(role_color("assistant")) | dim);
 	}
 	if (feed.empty())
 		feed.push_back(text("(no messages yet)") | color(dim_text()));
@@ -160,13 +172,20 @@ ftxui::Element render_session_screen(render_context const& rc) {
 	using namespace ftxui;
 
 	auto snap = rc.sh.snap.load(std::memory_order_acquire);
+	// The in-flight model text, if a turn is streaming right now.
+	std::string stream;
+	{
+		std::lock_guard lock(rc.sh.stream_mutex);
+		if (rc.sh.stream_active)
+			stream = rc.sh.stream_content;
+	}
 
 	int sidebar_width = std::max(26, rc.width / 6);
 	sidebar_width = std::min(sidebar_width, rc.width / 3);
 	int main_width = std::max(20, rc.width - sidebar_width - 1); // minus the separator
 
 	Elements main_elements;
-	main_elements.push_back(build_feed(*snap, rc.theme.ascii) | flex);
+	main_elements.push_back(build_feed(*snap, stream, rc.theme.ascii) | flex);
 	main_elements.push_back(build_output(*snap, rc.height));
 	if (araya::app::palette_open(rc.input_text))
 		main_elements.push_back(render_palette(

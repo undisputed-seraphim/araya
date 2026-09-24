@@ -96,6 +96,16 @@ struct shared_state {
 	// Set by the UI when the session picker opens; the engine enumerates
 	// the stored sessions once, publishes, and clears it.
 	std::atomic<bool> sessions_request{false};
+	// The in-flight model turn: content (and reasoning, reserved for a
+	// future surface) accumulated as deltas arrive, plus the active flag.
+	// The engine writes on its thread while the UI renders, so the buffer
+	// is mutex-guarded; the snapshot path stays immutable.
+	mutable std::mutex stream_mutex;
+	std::string stream_content;
+	std::string stream_reasoning;
+	bool stream_active = false;
+	// Throttles stream-driven UI wakeups (steady_clock nanoseconds).
+	std::atomic<std::int64_t> stream_last_wake_ns{0};
 	// Wakes the UI loop after a publish. Set once, before the engine
 	// thread starts; read only from then on.
 	std::function<void()> wake;
