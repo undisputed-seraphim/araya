@@ -7,6 +7,7 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 
+#include <cstdint>
 #include <functional>
 #include <span>
 #include <string>
@@ -29,21 +30,35 @@ struct state_style {
 	ftxui::Color color;
 };
 
+// Which pane the keyboard drives: the input line or the conversation
+// feed (Tab cycles).
+enum class pane_focus : std::uint8_t {
+	input,
+	feed,
+};
+
 // The UI thread's transient overlay state, owned by the driver: the
-// command palette's selection and the session picker's open/filter/
-// selection. The palette's open state is derived from the input text.
+// command palette's selection, the session picker's open/filter/
+// selection, the focused pane, and the feed's scroll offset (rows from
+// the bottom; the renderer clamps and records the bounds). The palette's
+// open state is derived from the input text.
 struct ui_state {
 	int palette_selected = 0;
 	bool picker_open = false;
 	std::string picker_filter;
 	int picker_selected = 0;
+	pane_focus focus = pane_focus::input;
+	int feed_scroll = 0;
+	int feed_total_lines = 0;
+	int feed_view_lines = 1;
 };
 
-// Everything a screen renderer reads for one frame.
+// Everything a screen renderer reads for one frame. `ui` is mutable: the
+// feed renderer clamps and records the scroll bounds as it draws.
 struct render_context {
 	shared_state const& sh;
 	tui_theme const& theme;
-	ui_state const& ui;
+	ui_state& ui;
 	std::span<araya::app::command_info const> commands;
 	std::string_view input_text;
 	ftxui::Component const& input;

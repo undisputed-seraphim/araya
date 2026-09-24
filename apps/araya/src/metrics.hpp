@@ -4,10 +4,12 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
-// Pure formatting for the sidebar and prompt metrics: the latest
-// request's token counts and the context-window fill. Header-only and
-// dependency-free so it unit-tests without the app or any plugin.
+// Pure formatting for the TUI surfaces: the latest request's token
+// counts, the context-window fill, and the feed's word wrapping.
+// Header-only and dependency-free so it unit-tests without the app or
+// any plugin.
 namespace araya::app {
 
 // "in/out" for the latest request, or "--" before any usage is folded.
@@ -37,6 +39,58 @@ inline std::string elide(std::string_view text, std::size_t max) {
 	while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
 		--cut;
 	return std::string(text.substr(0, cut)) + "\u2026";
+}
+
+// Greedy word wrap to `width` columns: explicit newlines always break,
+// runs of spaces collapse, and a word wider than the line is hard-split.
+// Always returns at least one (possibly empty) line. Used by the feed so
+// scrolling can address real rows rather than relying on the renderer's
+// wrap.
+inline std::vector<std::string> wrap_lines(std::string_view text, std::size_t width) {
+	if (width == 0)
+		width = 1;
+	std::vector<std::string> lines;
+	std::string current;
+	auto flush = [&] {
+		lines.push_back(current);
+		current.clear();
+	};
+
+	std::size_t pos = 0;
+	while (pos < text.size()) {
+		if (text[pos] == '\n') {
+			flush();
+			++pos;
+			continue;
+		}
+		if (text[pos] == ' ' || text[pos] == '\t') {
+			++pos;
+			continue;
+		}
+		std::size_t end = pos;
+		while (end < text.size() && text[end] != ' ' && text[end] != '\t' && text[end] != '\n')
+			++end;
+		std::string_view word = text.substr(pos, end - pos);
+		pos = end;
+
+		std::size_t const extra = current.empty() ? 0 : 1;
+		if (current.size() + extra + word.size() <= width) {
+			if (!current.empty())
+				current.push_back(' ');
+			current.append(word);
+			continue;
+		}
+		if (!current.empty())
+			flush();
+		while (word.size() > width) {
+			lines.push_back(std::string(word.substr(0, width)));
+			word.remove_prefix(width);
+		}
+		current.assign(word);
+	}
+	if (!current.empty() || lines.empty())
+		flush();
+	return lines;
 }
 
 } // namespace araya::app

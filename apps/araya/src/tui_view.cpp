@@ -170,6 +170,41 @@ bool handle_key(overlay_env& env, ftxui::Event event) {
 		return handle_picker_key(env, event);
 	if (araya::app::palette_open(env.input))
 		return handle_palette_key(env, event);
+
+	// The feed pane: Tab cycles back to the input, the scroll keys walk
+	// the wrapped rows, and typing pulls focus back to the input.
+	if (env.ui.focus == pane_focus::feed) {
+		ui_state& ui = env.ui;
+		int const page = std::max(1, ui.feed_view_lines - 1);
+		if (event == ftxui::Event::Tab)
+			ui.focus = pane_focus::input;
+		else if (event == ftxui::Event::ArrowUp)
+			++ui.feed_scroll;
+		else if (event == ftxui::Event::ArrowDown)
+			ui.feed_scroll = std::max(0, ui.feed_scroll - 1);
+		else if (event == ftxui::Event::PageUp)
+			ui.feed_scroll += page;
+		else if (event == ftxui::Event::PageDown)
+			ui.feed_scroll = std::max(0, ui.feed_scroll - page);
+		else if (event == ftxui::Event::Home)
+			ui.feed_scroll = ui.feed_total_lines; // clamped at render
+		else if (event == ftxui::Event::End)
+			ui.feed_scroll = 0;
+		else if (event.is_character() || event == ftxui::Event::Backspace)
+			ui.focus = pane_focus::input; // let the Input take it
+		else
+			return false;
+		env.wake();
+		return true;
+	}
+
+	// Input focused: Tab moves to the feed; Enter submits; anything else
+	// goes to the Input component.
+	if (event == ftxui::Event::Tab) {
+		env.ui.focus = pane_focus::feed;
+		env.wake();
+		return true;
+	}
 	if (event != ftxui::Event::Return)
 		return false;
 	auto cmd = env.input;

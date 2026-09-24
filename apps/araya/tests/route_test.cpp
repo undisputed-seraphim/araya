@@ -167,3 +167,16 @@ TEST_CASE("elide: short text is untouched, long text gets an ellipsis") {
 	// The cut backs off a split UTF-8 codepoint.
 	CHECK(araya::app::elide(std::string(4, 'a') + "\u00e9" + "z", 5) == "aaaa\u2026");
 }
+
+TEST_CASE("wrap_lines: greedy word wrap") {
+	using araya::app::wrap_lines;
+	CHECK(wrap_lines("", 10) == std::vector<std::string>{""});
+	CHECK(wrap_lines("a b c", 10) == std::vector<std::string>{"a b c"});
+	CHECK(wrap_lines("a b c", 3) == std::vector<std::string>{"a b", "c"});
+	// A word wider than the line is hard-split.
+	CHECK(wrap_lines("abcdef", 4) == std::vector<std::string>{"abcd", "ef"});
+	// Explicit newlines always break; spaces collapse.
+	CHECK(wrap_lines("a\nb", 10) == std::vector<std::string>{"a", "b"});
+	CHECK(wrap_lines("a\n", 10) == std::vector<std::string>{"a"});
+	CHECK(wrap_lines("a   b", 10) == std::vector<std::string>{"a b"});
+}

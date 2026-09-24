@@ -15,11 +15,10 @@
 #include <utility>
 #include <vector>
 
-// The session screen: the conversation feed (the folded session
-// messages), the command-output strip, the prompt box (with the command
-// palette above it when open), and the status sidebar. Message rendering
-// is role-marker rows for now; tokens, context, and cost stay
-// placeholders.
+// The session screen: the conversation feed (folded messages, word
+// wrapped and scrollable), the command-output strip, the prompt box
+// (with the command palette above it when open), and the status sidebar.
+// Cost is a stub until a pricing pass.
 namespace araya::tui {
 namespace {
 
@@ -44,31 +43,60 @@ ftxui::Color role_color(std::string_view role) {
 	return ftxui::Color::White;
 }
 
-// The tail of the folded messages, one role-marked paragraph each, with
-// the in-flight model text appended (dim, cursor-marked) while a turn
-// streams before it settles into an assistant/message.
-ftxui::Element build_feed(snapshot const& snap, std::string const& stream, bool ascii) {
+// One pre-wrapped feed row: its text, role color, and whether it is the
+// dim in-flight (streaming) row.
+struct feed_line {
+	std::string text;
+	ftxui::Color color;
+	bool dim = false;
+};
+
+// The conversation feed: folded messages word-wrapped into rows, plus the
+// in-flight model text (dim, cursor-marked). Rows are wrapped here so the
+// scroll offset counts real lines; the renderer clamps and records the
+// bounds on `ui`. The pane border highlights when the feed has focus.
+ftxui::Element
+build_feed(snapshot const& snap, std::string const& stream, ui_state& ui, int width, int height, bool ascii) {
 	using namespace ftxui;
-	Elements feed;
-	std::size_t begin = snap.messages.size() > 60 ? snap.messages.size() - 60 : 0;
-	for (std::size_t i = begin; i < snap.messages.size(); ++i) {
-		auto const& message = snap.messages[i];
-		feed.push_back(
-			paragraph(std::string(araya::app::role_marker(message.role, ascii)) + " " + message.text) |
-			color(role_color(message.role)));
-	}
+	auto const wrap_width = static_cast<std::size_t>(std::max(4, width - 4));
+	std::vector<feed_line> lines;
+
+	auto append = [&](std::string_view role, std::string_view text, bool dim) {
+		auto wrapped = araya::app::wrap_lines(text, wrap_width);
+		std::string marker(araya::app::role_marker(role, ascii));
+		for (std::size_t i = 0; i < wrapped.size(); ++i)
+			lines.push_back({i == 0 ? marker + " " + wrapped[i] : "  " + wrapped[i], role_color(role), dim});
+	};
+
+	std::size_t const begin = snap.messages.size() > 500 ? snap.messages.size() - 500 : 0;
+	for (std::size_t i = begin; i < snap.messages.size(); ++i)
+		append(snap.messages[i].role, snap.messages[i].text, false);
 	if (!stream.empty()) {
 		// A block cursor marks the row as still streaming; the ASCII tier
 		// uses a caret (the prompt bar owns '|' and the accent bar the
 		// half block).
 		auto const cursor = ascii ? "^" : "\u2588";
-		feed.push_back(
-			paragraph(std::string(araya::app::role_marker("assistant", ascii)) + " " + stream + cursor) |
-			color(role_color("assistant")) | dim);
+		append("assistant", stream + cursor, true);
 	}
-	if (feed.empty())
-		feed.push_back(text("(no messages yet)") | color(dim_text()));
-	return vbox(std::move(feed)) | border;
+	if (lines.empty())
+		lines.push_back({"(no messages yet)", dim_text(), true});
+
+	int const view = std::max(1, height - 2);
+	int const total = static_cast<int>(lines.size());
+	ui.feed_scroll = std::clamp(ui.feed_scroll, 0, std::max(0, total - view));
+	ui.feed_total_lines = total;
+	ui.feed_view_lines = view;
+	int const start = std::max(0, total - view - ui.feed_scroll);
+
+	Elements out;
+	for (int i = start; i < total && i < start + view; ++i) {
+		auto const& line = lines[static_cast<std::size_t>(i)];
+		Element row = text(line.text) | color(line.color);
+		if (line.dim)
+			row = std::move(row) | dim;
+		out.push_back(std::move(row));
+	}
+	return vbox(std::move(out)) | borderStyled(ui.focus == pane_focus::feed ? accent() : dim_text());
 }
 
 // The command-output strip: engine lines (command output, session
@@ -184,8 +212,13 @@ ftxui::Element render_session_screen(render_context const& rc) {
 	sidebar_width = std::min(sidebar_width, rc.width / 3);
 	int main_width = std::max(20, rc.width - sidebar_width - 1); // minus the separator
 
+	// The feed gets everything the fixed rows do not: the output strip,
+	// the two-row prompt box, and the cwd line.
+	int const output_height = std::clamp(rc.height / 4, 5, 12);
+	int const feed_height = std::max(3, rc.height - output_height - 3);
+
 	Elements main_elements;
-	main_elements.push_back(build_feed(*snap, stream, rc.theme.ascii) | flex);
+	main_elements.push_back(build_feed(*snap, stream, rc.ui, main_width, feed_height, rc.theme.ascii) | flex);
 	main_elements.push_back(build_output(*snap, rc.height));
 	if (araya::app::palette_open(rc.input_text))
 		main_elements.push_back(render_palette(
