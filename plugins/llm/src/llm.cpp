@@ -1,46 +1,39 @@
 #include "araya/llm/llm.hpp"
 
+#include <array>
 #include <stdexcept>
 #include <utility>
 
 namespace araya::llm {
+namespace {
+
+// Indexed by llm_error_code; keep in enum order.
+inline constexpr std::array<char const*, 14> k_error_code_names{
+	"no_adapter",
+	"duplicate_adapter",
+	"auth",
+	"rate_limit",
+	"context_window_exceeded",
+	"empty_response",
+	"invalid_request",
+	"quota",
+	"server",
+	"timeout",
+	"transport",
+	"aborted",
+	"stream_closed",
+	"malformed_response",
+};
+
+} // namespace
 
 llm_error::llm_error(llm_failure failure)
 	: std::runtime_error(std::move(failure.message))
 	, failure_(std::move(failure)) {}
 
 char const* llm_error::code_name(llm_error_code code) noexcept {
-	switch (code) {
-	case llm_error_code::no_adapter:
-		return "no_adapter";
-	case llm_error_code::duplicate_adapter:
-		return "duplicate_adapter";
-	case llm_error_code::auth:
-		return "auth";
-	case llm_error_code::rate_limit:
-		return "rate_limit";
-	case llm_error_code::context_window_exceeded:
-		return "context_window_exceeded";
-	case llm_error_code::empty_response:
-		return "empty_response";
-	case llm_error_code::invalid_request:
-		return "invalid_request";
-	case llm_error_code::quota:
-		return "quota";
-	case llm_error_code::server:
-		return "server";
-	case llm_error_code::timeout:
-		return "timeout";
-	case llm_error_code::transport:
-		return "transport";
-	case llm_error_code::aborted:
-		return "aborted";
-	case llm_error_code::stream_closed:
-		return "stream_closed";
-	case llm_error_code::malformed_response:
-		return "malformed_response";
-	}
-	return "?";
+	auto const index = std::to_underlying(code);
+	return index < k_error_code_names.size() ? k_error_code_names[index] : "?";
 }
 
 char const* llm_failure::code_string() const noexcept {

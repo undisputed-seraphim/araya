@@ -73,6 +73,12 @@ private:
 
 	open_block& open(araya::llm::content_block_type kind);
 
+	// The three delta shapes of one choice: reasoning/text content and
+	// tool calls (apply_delta), and the finish reason.
+	void apply_delta(boost::json::object const& delta, std::vector<stream_chunk>& chunks);
+	void apply_tool_calls(boost::json::array const& calls, std::vector<stream_chunk>& chunks);
+	void apply_finish_reason(std::string_view reason);
+
 	// Opens the block through `slot` (emitting block_start) and returns
 	// it: the shared shape of the text and reasoning delta branches.
 	open_block& ensure(open_block*& slot, araya::llm::content_block_type kind, std::vector<stream_chunk>& chunks);

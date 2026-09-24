@@ -85,6 +85,9 @@ enum class run_status : std::uint8_t {
 	blocked,	// the step cap was reached mid-tool-loop
 };
 
+// The stable display name for a run status (also the turn/end reason).
+char const* run_status_name(run_status status) noexcept;
+
 struct run_outcome {
 	run_status status = run_status::completed;
 	// The provider failure, set iff status is error.
@@ -95,7 +98,9 @@ struct run_outcome {
 // -- live notifications ----------------------------------------------------
 
 // The transient-streaming seam: durable history is the session log; these
-// events are for the surface. Model chunks are forwarded verbatim.
+// events are for the surface. Model chunks are forwarded separately, by
+// reference through the run's chunk sink, so they are never copied into
+// this variant.
 struct turn_event {
 	std::uint64_t turn;
 };
@@ -125,8 +130,7 @@ struct run_finish_event {
 	run_status status;
 };
 
-using agent_event =
-	std::variant<turn_event, step_event, tool_call_event, tool_done_event, run_finish_event, araya::llm::stream_chunk>;
+using agent_event = std::variant<turn_event, step_event, tool_call_event, tool_done_event, run_finish_event>;
 
 using event_sink = std::function<void(agent_event const&)>;
 
@@ -155,10 +159,13 @@ public:
 	std::vector<tool_spec> tools() const;
 
 	// Drives one turn of `options.session`: steps until the model stops
-	// calling tools (or the run ends for another reason). Throws only for
-	// program errors (unknown session, missing provider/model); provider
-	// failures return as run_outcome.
-	araya::task<run_outcome> run(run_options const& options, event_sink const& sink = {});
+	// calling tools (or the run ends for another reason). Lifecycle events
+	// go to `sink`; raw model chunks (deltas, block ends, usage) go to
+	// `on_chunk` by reference, uncopied. Throws only for program errors
+	// (unknown session, missing provider/model); provider failures return
+	// as run_outcome.
+	araya::task<run_outcome>
+	run(run_options const& options, event_sink const& sink = {}, araya::llm::chunk_sink const& on_chunk = {});
 
 private:
 	struct tool_entry {
@@ -173,6 +180,15 @@ private:
 
 	boost::json::value build_header(run_options const& options) const;
 	araya::llm::generate_options build_generate(run_options const& options, araya::session::session& session) const;
+	// The pre-stream half of one step: announce it, commit the system
+	// prompt and the run's user input on the first step, and record the
+	// request header/context.
+	void open_step(
+		araya::session::session& session,
+		run_options const& options,
+		std::uint64_t turn,
+		std::uint64_t step,
+		event_sink const& sink);
 	void commit_system_prompt(araya::session::session& session);
 	void append_request_header(araya::session::session& session, boost::json::value const& header);
 	void append_request_context(araya::session::session& session, run_options const& options);

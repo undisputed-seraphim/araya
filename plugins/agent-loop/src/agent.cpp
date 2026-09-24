@@ -5,6 +5,7 @@
 #include <boost/system/error_code.hpp>
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -122,21 +123,9 @@ struct step_accumulator {
 	finish_chunk::reason why = finish_chunk::reason::stop;
 };
 
-char const* turn_end_reason(run_status status) {
-	switch (status) {
-	case run_status::completed:
-		return "completed";
-	case run_status::max_tokens:
-		return "max_tokens";
-	case run_status::aborted:
-		return "aborted";
-	case run_status::error:
-		return "error";
-	case run_status::blocked:
-		return "blocked";
-	}
-	return "error";
-}
+// Indexed by run_status; keep in enum order.
+inline constexpr std::array<char const*, 5>
+	k_run_status_names{"completed", "max_tokens", "aborted", "error", "blocked"};
 
 boost::json::value attempt_data(std::uint64_t turn, std::uint64_t step, std::optional<llm_failure> failure) {
 	boost::json::object data;
@@ -150,7 +139,7 @@ boost::json::value attempt_data(std::uint64_t turn, std::uint64_t step, std::opt
 boost::json::value turn_end_data(std::uint64_t turn, run_status status, std::optional<llm_failure> failure) {
 	boost::json::object data;
 	data["turn"] = turn;
-	data["reason"] = turn_end_reason(status);
+	data["reason"] = run_status_name(status);
 	if (failure)
 		data["failure"] = araya::llm::failure_to_json(*failure);
 	return data;
@@ -179,6 +168,53 @@ std::vector<tool_call_block> tool_calls_of(std::vector<content_block> const& blo
 	return calls;
 }
 
+// Commits the step's model outcome: the assistant message (closed
+// blocks, or the delivered partials when interrupted), or an attempt on
+// failure. `terminal` is set when the step ends here; otherwise the
+// returned blocks are scanned for tool calls.
+struct step_commit {
+	std::optional<run_status> terminal;
+	std::vector<content_block> blocks;
+};
+
+step_commit
+commit_model_outcome(session& session, std::uint64_t turn, std::uint64_t step, step_accumulator& accumulator) {
+	auto const interrupted = accumulator.why == finish_chunk::reason::aborted;
+	step_commit commit;
+	commit.blocks = interrupted ? accumulator.delivered_blocks() : accumulator.closed;
+	if (accumulator.failure && !interrupted) {
+		// A provider failure is an attempt, never a message - even when
+		// blocks were already delivered.
+		session.append("assistant/attempt", attempt_data(turn, step, accumulator.failure));
+		commit.terminal = run_status::error;
+		return commit;
+	}
+	if (!commit.blocks.empty()) {
+		session.append(
+			"assistant/message",
+			assistant_message_data(
+				"a" + std::to_string(session.log().size()),
+				commit.blocks,
+				accumulator.usage.value_or(token_usage{}),
+				accumulator.replay,
+				turn,
+				step,
+				interrupted));
+	} else if (interrupted) {
+		// Aborted with nothing delivered: an attempt, not an empty message.
+		session.append("assistant/attempt", attempt_data(turn, step, accumulator.failure));
+	}
+	if (interrupted) {
+		commit.terminal = run_status::aborted;
+	} else if (accumulator.why == finish_chunk::reason::error) {
+		// An error finish that carried no failure is still an error.
+		commit.terminal = run_status::error;
+	} else if (accumulator.why == finish_chunk::reason::max_tokens) {
+		commit.terminal = run_status::max_tokens;
+	}
+	return commit;
+}
+
 // One past the largest turn/start in the log (0 when the session never
 // ran the loop).
 std::uint64_t next_turn(session const& session) {
@@ -201,6 +237,11 @@ std::uint64_t next_turn(session const& session) {
 }
 
 } // namespace
+
+char const* run_status_name(run_status status) noexcept {
+	auto const index = std::to_underlying(status);
+	return index < k_run_status_names.size() ? k_run_status_names[index] : "error";
+}
 
 agent_service::agent_service(
 	std::shared_ptr<araya::llm::llm_service> llm,
@@ -343,6 +384,29 @@ void agent_service::append_request_context(session& session, run_options const& 
 		session.append("request/context", std::move(context));
 }
 
+void agent_service::open_step(
+	session& session,
+	run_options const& options,
+	std::uint64_t turn,
+	std::uint64_t step,
+	event_sink const& sink) {
+	emit(sink, step_event{turn, step});
+	session.append("step/start", boost::json::value{{"turn", turn}, {"step", step}});
+
+	if (step == 1) {
+		// The first step boundary commits the system prompt and this
+		// run's user input, in that order - the harness's fold order:
+		// the system message precedes the user message it serves.
+		commit_system_prompt(session);
+		if (!options.input.empty())
+			session.append(
+				"user/message", user_message_data("u" + std::to_string(session.log().size()), options.input));
+	}
+
+	append_request_header(session, build_header(options));
+	append_request_context(session, options);
+}
+
 araya::task<bool> agent_service::execute_tools(
 	session& session,
 	run_options const& options,
@@ -385,7 +449,8 @@ araya::task<bool> agent_service::execute_tools(
 	co_return aborted;
 }
 
-araya::task<run_outcome> agent_service::run(run_options const& options, event_sink const& sink) {
+araya::task<run_outcome>
+agent_service::run(run_options const& options, event_sink const& sink, araya::llm::chunk_sink const& on_chunk) {
 	auto session = store_->get(options.session);
 	if (!session)
 		throw std::invalid_argument("agent: no entered session '" + options.session.value + "'");
@@ -403,64 +468,24 @@ araya::task<run_outcome> agent_service::run(run_options const& options, event_si
 	step_accumulator accumulator;
 
 	auto run_step = [&]() -> araya::task<std::optional<run_status>> {
-		emit(sink, step_event{turn, step});
-		session->append("step/start", boost::json::value{{"turn", turn}, {"step", step}});
-
-		if (step == 1) {
-			// The first step boundary commits the system prompt and this
-			// run's user input, in that order - the harness's fold order:
-			// the system message precedes the user message it serves.
-			commit_system_prompt(*session);
-			if (!options.input.empty())
-				session->append(
-					"user/message", user_message_data("u" + std::to_string(session->log().size()), options.input));
-		}
-
-		append_request_header(*session, build_header(options));
-		append_request_context(*session, options);
+		open_step(*session, options, turn, step, sink);
 
 		accumulator.reset();
 		araya::llm::chunk_sink chunk_sink = [&](stream_chunk const& chunk) -> araya::task<void> {
-			emit(sink, chunk);
+			// Forward the raw chunk by reference; the accumulator folds it.
+			// No event-variant wrapper, so no per-delta copy.
+			if (on_chunk)
+				co_await on_chunk(chunk);
 			accumulator.push(chunk);
 			co_return;
 		};
 		co_await llm_->stream(build_generate(options, *session), chunk_sink);
 
-		auto const interrupted = accumulator.why == finish_chunk::reason::aborted;
-		auto const blocks = interrupted ? accumulator.delivered_blocks() : accumulator.closed;
-		if (accumulator.failure && !interrupted) {
-			// A provider failure is an attempt, never a message - even
-			// when blocks were already delivered.
-			session->append("assistant/attempt", attempt_data(turn, step, accumulator.failure));
-			co_return run_status::error;
-		}
-		if (!blocks.empty()) {
-			session->append(
-				"assistant/message",
-				assistant_message_data(
-					"a" + std::to_string(session->log().size()),
-					blocks,
-					accumulator.usage.value_or(token_usage{}),
-					accumulator.replay,
-					turn,
-					step,
-					interrupted));
-		} else if (interrupted) {
-			// Aborted with nothing delivered: an attempt, not an empty
-			// message.
-			session->append("assistant/attempt", attempt_data(turn, step, accumulator.failure));
-		}
-		if (interrupted)
-			co_return run_status::aborted;
-		if (accumulator.why == finish_chunk::reason::error) {
-			// An error finish that carried no failure is still an error.
-			co_return run_status::error;
-		}
-		if (accumulator.why == finish_chunk::reason::max_tokens)
-			co_return run_status::max_tokens;
+		auto commit = commit_model_outcome(*session, turn, step, accumulator);
+		if (commit.terminal)
+			co_return *commit.terminal;
 
-		auto const calls = tool_calls_of(blocks);
+		auto const calls = tool_calls_of(commit.blocks);
 		if (calls.empty())
 			co_return run_status::completed;
 		if (co_await execute_tools(*session, options, turn, step, calls, sink))

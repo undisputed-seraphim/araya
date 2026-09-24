@@ -16,13 +16,16 @@
 #include <boost/json/value.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace araya::app {
@@ -108,6 +111,43 @@ araya::task<void> cmd_timer(app_context& ctx, line_sink const& out, std::string 
 	co_return;
 }
 
+void log_set_level(logger_service& logger, std::istream& is, line_sink const& out) {
+	std::string level;
+	is >> level;
+	if (level.empty()) {
+		out("log: usage: log level <level>");
+		return;
+	}
+	logger.set_level(parse_level(level));
+	out("log: level set");
+}
+
+void log_emit(logger_service& logger, std::string const& level, std::istream& is, line_sink const& out) {
+	std::string text;
+	std::getline(is, text);
+	text = trim(text);
+	if (text.empty()) {
+		out("log: usage: log <level> <text>");
+		return;
+	}
+	auto named = logger.named("main");
+	switch (parse_level(level)) {
+	case araya::logger::log_level::error:
+		named.error("{}", text);
+		break;
+	case araya::logger::log_level::warn:
+		named.warn("{}", text);
+		break;
+	case araya::logger::log_level::info:
+		named.info("{}", text);
+		break;
+	case araya::logger::log_level::debug:
+		named.debug("{}", text);
+		break;
+	}
+	out("log: submitted");
+}
+
 araya::task<void> cmd_log(app_context& ctx, line_sink const& out, std::string const& line) {
 	try {
 		std::istringstream is(line);
@@ -116,40 +156,10 @@ araya::task<void> cmd_log(app_context& ctx, line_sink const& out, std::string co
 		is >> cmd >> sub;
 
 		auto logger = ctx.rt->root_context().require<logger_service>(logger_key).shared();
-		if (sub == "level") {
-			std::string level;
-			is >> level;
-			if (level.empty()) {
-				out("log: usage: log level <level>");
-			} else {
-				logger->set_level(parse_level(level));
-				out("log: level set");
-			}
-		} else {
-			std::string text;
-			std::getline(is, text);
-			text = trim(text);
-			if (text.empty()) {
-				out("log: usage: log <level> <text>");
-			} else {
-				auto nl = logger->named("main");
-				switch (parse_level(sub)) {
-				case araya::logger::log_level::error:
-					nl.error("{}", text);
-					break;
-				case araya::logger::log_level::warn:
-					nl.warn("{}", text);
-					break;
-				case araya::logger::log_level::info:
-					nl.info("{}", text);
-					break;
-				case araya::logger::log_level::debug:
-					nl.debug("{}", text);
-					break;
-				}
-				out("log: submitted");
-			}
-		}
+		if (sub == "level")
+			log_set_level(*logger, is, out);
+		else
+			log_emit(*logger, sub, is, out);
 	} catch (std::exception const& e) {
 		out(std::string("log: ") + e.what());
 	}
@@ -251,17 +261,9 @@ araya::plugin_config default_config(std::string_view name) {
 }
 
 char const* state_name(araya::fiber_state s) {
-	switch (s) {
-	case araya::fiber_state::inactive:
-		return "inactive";
-	case araya::fiber_state::loading:
-		return "loading";
-	case araya::fiber_state::active:
-		return "active";
-	case araya::fiber_state::unloading:
-		return "unloading";
-	}
-	return "?";
+	static constexpr std::array<char const*, 4> names{"inactive", "loading", "active", "unloading"};
+	auto const index = std::to_underlying(s);
+	return index < names.size() ? names[index] : "?";
 }
 
 std::string error_text(std::exception_ptr ep) {
@@ -277,17 +279,9 @@ std::string error_text(std::exception_ptr ep) {
 }
 
 std::string_view role_name(araya::session::message_role role) {
-	switch (role) {
-	case araya::session::message_role::system:
-		return "system";
-	case araya::session::message_role::user:
-		return "user";
-	case araya::session::message_role::assistant:
-		return "assistant";
-	case araya::session::message_role::tool_result:
-		return "tool";
-	}
-	return "?";
+	static constexpr std::array<std::string_view, 4> names{"system", "user", "assistant", "tool"};
+	auto const index = std::to_underlying(role);
+	return index < names.size() ? names[index] : std::string_view("?");
 }
 
 std::string cwd_branch_line(std::string const& cwd) {

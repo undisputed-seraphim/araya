@@ -79,6 +79,90 @@ std::string accept_identity(std::string const& current, boost::json::value const
 
 } // namespace
 
+namespace {
+
+// The joined text of a tool result's content blocks (the session's
+// [{"type":"text","text":...}] shape).
+std::string tool_result_text(boost::json::value const& content) {
+	std::string text;
+	if (content.is_array()) {
+		for (auto const& inner : content.as_array()) {
+			auto const* node = inner.if_object();
+			if (!node)
+				continue;
+			auto const* type = node->if_contains("type");
+			if (type && type->is_string() && type->as_string() == "text") {
+				if (auto const* value = node->if_contains("text"); value && value->is_string())
+					text += value->as_string();
+			}
+		}
+	}
+	return text;
+}
+
+void append_user_message(boost::json::array& messages, araya::llm::llm_message const& message) {
+	// Tool results serialize as role "tool" messages first; the remaining
+	// text becomes the user message.
+	for (auto const& block : message.content) {
+		if (auto const* tool = std::get_if<araya::llm::tool_result_block>(&block)) {
+			messages.emplace_back(boost::json::object{
+				{"role", "tool"}, {"tool_call_id", tool->tool_call_id}, {"content", tool_result_text(tool->content)}});
+		}
+	}
+	if (auto text = join_text(message); !text.empty())
+		messages.emplace_back(boost::json::object{{"role", "user"}, {"content", std::move(text)}});
+}
+
+void append_assistant_message(boost::json::array& messages, araya::llm::llm_message const& message) {
+	boost::json::object entry;
+	entry["role"] = "assistant";
+	boost::json::array tool_calls;
+	for (auto const& block : message.content) {
+		if (auto const* call = std::get_if<araya::llm::tool_call_block>(&block)) {
+			tool_calls.emplace_back(boost::json::object{
+				{"id", call->id},
+				{"type", "function"},
+				{"function", boost::json::object{{"name", call->name}, {"arguments", call->arguments}}}});
+		}
+	}
+	if (!tool_calls.empty())
+		entry["tool_calls"] = std::move(tool_calls);
+	if (auto text = join_text(message); !text.empty())
+		entry["content"] = std::move(text);
+	if (entry.contains("tool_calls") || entry.contains("content"))
+		messages.emplace_back(std::move(entry));
+}
+
+void append_message(boost::json::array& messages, araya::llm::llm_message const& message) {
+	switch (message.role) {
+	case araya::llm::message_role::system:
+		messages.emplace_back(boost::json::object{{"role", "system"}, {"content", join_text(message)}});
+		break;
+	case araya::llm::message_role::user:
+		append_user_message(messages, message);
+		break;
+	case araya::llm::message_role::assistant:
+		append_assistant_message(messages, message);
+		break;
+	}
+}
+
+void append_tools(boost::json::object& root, std::vector<araya::llm::tool_schema> const& tools) {
+	if (tools.empty())
+		return;
+	boost::json::array array;
+	for (auto const& tool : tools) {
+		array.emplace_back(boost::json::object{
+			{"type", "function"},
+			{"function",
+			 boost::json::object{
+				 {"name", tool.name}, {"description", tool.description}, {"parameters", tool.parameters}}}});
+	}
+	root["tools"] = std::move(array);
+}
+
+} // namespace
+
 std::optional<std::chrono::milliseconds> parse_retry_after(std::string_view value) {
 	if (value.empty())
 		return std::nullopt;
@@ -109,63 +193,8 @@ boost::json::value build_request(generate_options const& options) {
 	boost::json::array messages;
 	if (!options.system.empty())
 		messages.emplace_back(boost::json::object{{"role", "system"}, {"content", options.system}});
-	for (auto const& message : options.messages) {
-		switch (message.role) {
-		case araya::llm::message_role::system:
-			messages.emplace_back(boost::json::object{{"role", "system"}, {"content", join_text(message)}});
-			break;
-		case araya::llm::message_role::user: {
-			// Tool results serialize as role "tool" messages first; the
-			// remaining text becomes the user message.
-			for (auto const& block : message.content) {
-				if (auto const* tool = std::get_if<araya::llm::tool_result_block>(&block)) {
-					boost::json::object entry;
-					entry["role"] = "tool";
-					entry["tool_call_id"] = tool->tool_call_id;
-					std::string text;
-					if (tool->content.is_array()) {
-						for (auto const& inner : tool->content.as_array()) {
-							if (auto const* text_node = inner.if_object()) {
-								if (auto const* type = text_node->if_contains("type");
-									type && type->is_string() && type->as_string() == "text") {
-									if (auto const* node = text_node->if_contains("text"); node && node->is_string())
-										text += node->as_string();
-								}
-							}
-						}
-					}
-					entry["content"] = text;
-					messages.emplace_back(std::move(entry));
-				}
-			}
-			auto text = join_text(message);
-			if (!text.empty())
-				messages.emplace_back(boost::json::object{{"role", "user"}, {"content", std::move(text)}});
-			break;
-		}
-		case araya::llm::message_role::assistant: {
-			boost::json::object entry;
-			entry["role"] = "assistant";
-			boost::json::array tool_calls;
-			for (auto const& block : message.content) {
-				if (auto const* call = std::get_if<araya::llm::tool_call_block>(&block)) {
-					tool_calls.emplace_back(boost::json::object{
-						{"id", call->id},
-						{"type", "function"},
-						{"function", boost::json::object{{"name", call->name}, {"arguments", call->arguments}}}});
-				}
-			}
-			if (!tool_calls.empty())
-				entry["tool_calls"] = std::move(tool_calls);
-			auto text = join_text(message);
-			if (!text.empty())
-				entry["content"] = std::move(text);
-			if (entry.contains("tool_calls") || entry.contains("content"))
-				messages.emplace_back(std::move(entry));
-			break;
-		}
-		}
-	}
+	for (auto const& message : options.messages)
+		append_message(messages, message);
 	root["messages"] = std::move(messages);
 	root["stream"] = true;
 	root["stream_options"] = boost::json::value{{"include_usage", true}};
@@ -173,17 +202,7 @@ boost::json::value build_request(generate_options const& options) {
 		root["thinking"] = boost::json::object{{"type", "enabled"}};
 		root["reasoning_effort"] = options.reasoning_effort;
 	}
-	if (!options.tools.empty()) {
-		boost::json::array tools;
-		for (auto const& tool : options.tools) {
-			tools.emplace_back(boost::json::object{
-				{"type", "function"},
-				{"function",
-				 boost::json::object{
-					 {"name", tool.name}, {"description", tool.description}, {"parameters", tool.parameters}}}});
-		}
-		root["tools"] = std::move(tools);
-	}
+	append_tools(root, options.tools);
 	if (options.temperature)
 		root["temperature"] = *options.temperature;
 	if (options.max_tokens)
@@ -287,6 +306,84 @@ std::optional<araya::llm::content_block> chunk_translator::close_block(open_bloc
 	return std::nullopt;
 }
 
+void chunk_translator::apply_delta(boost::json::object const& delta, std::vector<stream_chunk>& chunks) {
+	// Reasoning first: thinking mode interleaves it before text; the
+	// empty first chunk must not open a block.
+	if (auto const* reasoning = delta.if_contains("reasoning_content");
+		reasoning && reasoning->is_string() && !reasoning->as_string().empty()) {
+		auto& block = ensure(reasoning_, content_block_type::reasoning, chunks);
+		block.text += reasoning->as_string();
+		chunks.emplace_back(araya::llm::reasoning_delta_chunk{block.index, std::string(reasoning->as_string())});
+	}
+
+	if (auto const* content = delta.if_contains("content");
+		content && content->is_string() && !content->as_string().empty()) {
+		auto& block = ensure(text_, content_block_type::text, chunks);
+		block.text += content->as_string();
+		chunks.emplace_back(araya::llm::text_delta_chunk{block.index, std::string(content->as_string())});
+	}
+
+	if (auto const* calls = delta.if_contains("tool_calls"); calls && calls->is_array())
+		apply_tool_calls(calls->as_array(), chunks);
+}
+
+void chunk_translator::apply_tool_calls(boost::json::array const& calls, std::vector<stream_chunk>& chunks) {
+	for (auto const& call : calls) {
+		if (!call.is_object())
+			continue;
+		auto const& call_object = call.as_object();
+		auto const wire_index = call_object.contains("index")
+									? static_cast<std::size_t>(call_object.at("index").to_number<std::int64_t>())
+									: 0;
+		auto const found = tool_position_.find(wire_index);
+		open_block* block = nullptr;
+		if (found == tool_position_.end()) {
+			block = &open(content_block_type::tool_call);
+			tool_position_[wire_index] = order_.size() - 1;
+			chunks.emplace_back(araya::llm::block_start_chunk{block->index, content_block_type::tool_call});
+		} else {
+			block = &order_[found->second];
+		}
+		auto const* id_node = call_object.if_contains("id");
+		block->call_id = accept_identity(block->call_id, id_node);
+		boost::json::value const* name_node = nullptr;
+		if (auto const* function = call_object.if_contains("function"); function && function->is_object())
+			name_node = function->as_object().if_contains("name");
+		block->name = accept_identity(block->name, name_node);
+		std::string fragment;
+		if (auto const* function = call_object.if_contains("function"); function && function->is_object()) {
+			if (auto const* arguments = function->as_object().if_contains("arguments");
+				arguments && arguments->is_string())
+				fragment = std::string(arguments->as_string());
+		}
+		block->text += fragment;
+		araya::llm::tool_call_delta_chunk delta_chunk;
+		delta_chunk.index = block->index;
+		delta_chunk.id = block->call_id;
+		delta_chunk.name = block->name;
+		delta_chunk.arguments_delta = fragment;
+		chunks.emplace_back(std::move(delta_chunk));
+	}
+}
+
+void chunk_translator::apply_finish_reason(std::string_view reason) {
+	if (reason == "stop") {
+		pending_finish_ = finish_chunk::reason::stop;
+	} else if (reason == "tool_calls") {
+		pending_finish_ = finish_chunk::reason::tool_calls;
+	} else if (reason == "length") {
+		pending_finish_ = finish_chunk::reason::max_tokens;
+	} else {
+		// content_filter, insufficient_system_resource, ... The provider's
+		// reason rides verbatim in provider_code; the routing code stays
+		// the fixed malformed_response.
+		pending_finish_ = finish_chunk::reason::error;
+		auto failure = llm_failure{llm_error_code::malformed_response, "model stopped: " + std::string(reason)};
+		failure.provider_code = std::string(reason);
+		pending_failure_ = std::move(failure);
+	}
+}
+
 std::vector<stream_chunk> chunk_translator::feed(boost::json::value const& wire) {
 	if (done_)
 		throw llm_error(llm_failure{llm_error_code::malformed_response, "chunk arrived after [DONE]"});
@@ -300,89 +397,11 @@ std::vector<stream_chunk> chunk_translator::feed(boost::json::value const& wire)
 			if (!choice.is_object())
 				continue;
 			auto const& choice_object = choice.as_object();
-			auto const* delta_node = choice_object.if_contains("delta");
-			if (delta_node && delta_node->is_object()) {
-				auto const& delta = delta_node->as_object();
-
-				// Reasoning first: thinking mode interleaves it before
-				// text; the empty first chunk must not open a block.
-				if (auto const* reasoning = delta.if_contains("reasoning_content");
-					reasoning && reasoning->is_string() && !reasoning->as_string().empty()) {
-					auto& block = ensure(reasoning_, content_block_type::reasoning, chunks);
-					block.text += reasoning->as_string();
-					chunks.emplace_back(
-						araya::llm::reasoning_delta_chunk{block.index, std::string(reasoning->as_string())});
-				}
-
-				if (auto const* content = delta.if_contains("content");
-					content && content->is_string() && !content->as_string().empty()) {
-					auto& block = ensure(text_, content_block_type::text, chunks);
-					block.text += content->as_string();
-					chunks.emplace_back(araya::llm::text_delta_chunk{block.index, std::string(content->as_string())});
-				}
-
-				if (auto const* calls = delta.if_contains("tool_calls"); calls && calls->is_array()) {
-					for (auto const& call : calls->as_array()) {
-						if (!call.is_object())
-							continue;
-						auto const& call_object = call.as_object();
-						auto const wire_index =
-							call_object.contains("index")
-								? static_cast<std::size_t>(call_object.at("index").to_number<std::int64_t>())
-								: 0;
-						auto const found = tool_position_.find(wire_index);
-						open_block* block = nullptr;
-						if (found == tool_position_.end()) {
-							block = &open(content_block_type::tool_call);
-							tool_position_[wire_index] = order_.size() - 1;
-							chunks.emplace_back(
-								araya::llm::block_start_chunk{block->index, content_block_type::tool_call});
-						} else {
-							block = &order_[found->second];
-						}
-						auto const* id_node = call_object.if_contains("id");
-						block->call_id = accept_identity(block->call_id, id_node);
-						boost::json::value const* name_node = nullptr;
-						if (auto const* function = call_object.if_contains("function");
-							function && function->is_object())
-							name_node = function->as_object().if_contains("name");
-						block->name = accept_identity(block->name, name_node);
-						std::string fragment;
-						if (auto const* function = call_object.if_contains("function");
-							function && function->is_object()) {
-							if (auto const* arguments = function->as_object().if_contains("arguments");
-								arguments && arguments->is_string())
-								fragment = std::string(arguments->as_string());
-						}
-						block->text += fragment;
-						araya::llm::tool_call_delta_chunk delta_chunk;
-						delta_chunk.index = block->index;
-						delta_chunk.id = block->call_id;
-						delta_chunk.name = block->name;
-						delta_chunk.arguments_delta = fragment;
-						chunks.emplace_back(std::move(delta_chunk));
-					}
-				}
-			}
-
+			if (auto const* delta = choice_object.if_contains("delta"); delta && delta->is_object())
+				apply_delta(delta->as_object(), chunks);
 			if (auto const* reason = choice_object.if_contains("finish_reason"); reason && reason->is_string()) {
-				auto const text = std::string(reason->as_string());
-				if (text == "stop") {
-					pending_finish_ = finish_chunk::reason::stop;
-				} else if (text == "tool_calls") {
-					pending_finish_ = finish_chunk::reason::tool_calls;
-				} else if (text == "length") {
-					pending_finish_ = finish_chunk::reason::max_tokens;
-				} else {
-					// content_filter, insufficient_system_resource, ...
-					// The provider's reason rides verbatim in
-					// provider_code; the routing code stays the fixed
-					// malformed_response.
-					pending_finish_ = finish_chunk::reason::error;
-					auto failure = llm_failure{llm_error_code::malformed_response, "model stopped: " + text};
-					failure.provider_code = text;
-					pending_failure_ = std::move(failure);
-				}
+				auto const& text = reason->as_string();
+				apply_finish_reason(std::string_view(text.data(), text.size()));
 			}
 		}
 	}

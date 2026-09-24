@@ -150,6 +150,30 @@ TEST_CASE("tool-call deltas keep identity and accumulate raw argument fragments"
 	CHECK(std::get<finish_chunk>(tail[1]).why == finish_chunk::reason::tool_calls);
 }
 
+TEST_CASE("reasoning accumulates across interleaved tool-call blocks") {
+	// The reasoning block opens first, then many tool-call blocks grow the
+	// open-block list, then reasoning resumes: the open-block storage must
+	// keep the reasoning reference valid across that growth.
+	chunk_translator translator;
+	(void)translator.feed(parse(R"({"choices":[{"delta":{"reasoning_content":"part-one "}}]})"));
+	for (int i = 0; i < 8; ++i) {
+		auto json = std::string{R"({"choices":[{"delta":{"tool_calls":[{"index":)"} + std::to_string(i) +
+					R"(,"id":"call-)" + std::to_string(i) + R"(","function":{"name":"t","arguments":"{}"}}]}}]})";
+		(void)translator.feed(parse(json));
+	}
+	(void)translator.feed(parse(R"({"choices":[{"delta":{"reasoning_content":"part-two"}}]})"));
+	(void)translator.feed(parse(R"({"choices":[{"finish_reason":"stop"}]})"));
+
+	std::string reasoning_text;
+	for (auto const& chunk : translator.finish()) {
+		if (auto const* end = std::get_if<block_end_chunk>(&chunk)) {
+			if (auto const* block = std::get_if<reasoning_block>(&end->block))
+				reasoning_text = block->text;
+		}
+	}
+	CHECK(reasoning_text == "part-one part-two");
+}
+
 TEST_CASE("finish reasons map: length to max_tokens, unknowns to an error failure") {
 	{
 		chunk_translator translator;
