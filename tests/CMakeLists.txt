@@ -14,6 +14,7 @@ add_executable(araya_tests
     events_test.cpp
     invariants_test.cpp
     introspection_test.cpp
+    json_test.cpp
     manager_test.cpp
     model_test.cpp
     module_loader_test.cpp
@@ -27,8 +28,14 @@ add_executable(araya_tests
     version_test.cpp
 )
 
+# The util json accessors are tested here; Boost.JSON is a compiled
+# component (separate compilation), so the test binary links it.
+set(Boost_NO_BOOST_CMAKE ON)
+find_package(Boost 1.83 REQUIRED COMPONENTS json)
+
 target_link_libraries(araya_tests PRIVATE
     araya::araya
+    Boost::json
     Catch2::Catch2WithMain
     ${CMAKE_DL_LIBS}
 )
