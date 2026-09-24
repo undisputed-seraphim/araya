@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,18 @@ struct session_row {
 	std::int64_t created_at = 0;
 };
 
+// The latest folded model metrics: the most recent assistant/message's
+// usage and the active model's advertised context window. `has_usage`
+// is false until a settled assistant turn carries usage.
+struct token_metrics {
+	std::uint64_t input_tokens = 0;
+	std::uint64_t output_tokens = 0;
+	std::uint64_t context_window = 0;
+	bool has_usage = false;
+
+	friend bool operator==(token_metrics const&, token_metrics const&) = default;
+};
+
 // An immutable UI snapshot: the engine builds a fresh one and swaps it
 // in atomically; the UI thread copies the shared_ptr and renders.
 struct snapshot {
@@ -65,6 +78,11 @@ struct snapshot {
 	std::string version;
 	// The working directory for the prompt hint line, unabridged.
 	std::string cwd;
+	// The active llm route (empty provider when none is configured).
+	std::string provider;
+	std::string model;
+	// The latest request's folded usage and the model's context window.
+	token_metrics tokens;
 };
 
 struct shared_state {
@@ -96,6 +114,10 @@ struct engine_state {
 	std::string title = "no session";
 	// The stored sessions the picker offers, refreshed on demand.
 	std::vector<session_row> sessions;
+	// The active llm route (resolved on the strand) and the latest folded
+	// model metrics.
+	std::optional<araya::app::active_model> route;
+	token_metrics tokens;
 	// Set on the first submit; mirrored into every snapshot.
 	bool started = false;
 	// A monotonic counter bumped by every UI-visible mutation; the

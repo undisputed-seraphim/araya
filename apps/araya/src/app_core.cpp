@@ -426,4 +426,27 @@ std::span<araya::app::command_info const> command_list() {
 	return list;
 }
 
+std::optional<active_model> active_route(app_context& ctx, std::string* why) {
+	auto lease = ctx.rt->root_context().find<araya::llm::llm_service>(araya::llm::llm_key);
+	if (!lease) {
+		if (why)
+			*why = "llm service is not mounted";
+		return std::nullopt;
+	}
+	auto service = lease->shared();
+	auto provider = service->first_provider();
+	if (!provider) {
+		if (why)
+			*why = "llm service has no provider routes (load llm-mock or configure llm-openai)";
+		return std::nullopt;
+	}
+	auto model = service->resolve_model(*provider, "");
+	if (!model || model->model.empty()) {
+		if (why)
+			*why = "provider '" + std::string(*provider) + "' did not resolve a default model";
+		return std::nullopt;
+	}
+	return active_model{std::string(*provider), model->model, model->name, model->context_window};
+}
+
 } // namespace araya::app

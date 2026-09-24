@@ -10,6 +10,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/json/value.hpp>
 
+#include <cstdint>
 #include <exception>
 #include <functional>
 #include <map>
@@ -66,6 +67,19 @@ araya::plugin_config default_config(std::string_view name);
 // The palette-facing command metadata (the command table plus help and
 // quit): name, usage (which marks arg-taking commands), and summary.
 std::span<araya::app::command_info const> command_list();
+
+// The active llm route: the first registered provider and its resolved
+// default model, plus the model's advertised context window. When `why`
+// is given it receives a human-readable reason on failure. Shared by the
+// llm commands and the TUI's connection/metrics surfaces.
+struct active_model {
+	std::string provider;
+	std::string model;
+	std::string name;
+	std::uint64_t context_window = 0;
+};
+
+std::optional<active_model> active_route(app_context& ctx, std::string* why = nullptr);
 
 char const* state_name(araya::fiber_state s);
 std::string error_text(std::exception_ptr ep);

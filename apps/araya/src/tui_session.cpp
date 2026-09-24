@@ -1,6 +1,7 @@
 #include "tui_view.hpp"
 
 #include "input_route.hpp"
+#include "metrics.hpp"
 #include "tui_chrome.hpp"
 #include "tui_palette.hpp"
 
@@ -89,12 +90,15 @@ ftxui::Element build_output(snapshot const& snap, int height) {
 	return vbox(std::move(output)) | border | size(HEIGHT, EQUAL, output_height);
 }
 
-// The prompt box: input plus a placeholder metrics row.
-ftxui::Element build_prompt(render_context const& rc) {
+// The prompt box: input plus the latest request's token/context metrics.
+ftxui::Element build_prompt(render_context const& rc, snapshot const& snap) {
 	using namespace ftxui;
+	auto const& tokens = snap.tokens;
 	Element meta = hbox({
-		text("tokens --") | color(dim_text()),
-		text("   --%") | color(dim_text()),
+		text("tokens " + araya::app::token_count_text(tokens.input_tokens, tokens.output_tokens, tokens.has_usage)) |
+			color(dim_text()),
+		text("   " + araya::app::context_percent_text(tokens.input_tokens, tokens.context_window, tokens.has_usage)) |
+			color(dim_text()),
 		text("   $--") | color(dim_text()),
 		filler(),
 		text("type / for commands") | color(dim_text()),
@@ -102,8 +106,9 @@ ftxui::Element build_prompt(render_context const& rc) {
 	return prompt_box(vbox({rc.input->Render(), std::move(meta)}), rc.theme.ascii);
 }
 
-// The sidebar: session title, placeholder context metrics, the empty
-// MCP/LSP sections, the component list, then cwd and version.
+// The sidebar: session title, the token/context metrics (cost is a stub
+// until a pricing pass), the empty MCP/LSP sections, the component list,
+// then cwd and version.
 ftxui::Element build_sidebar(snapshot const& snap, tui_theme const& theme, int sidebar_width) {
 	using namespace ftxui;
 	Elements component_rows;
@@ -123,8 +128,12 @@ ftxui::Element build_sidebar(snapshot const& snap, tui_theme const& theme, int s
 
 	return vbox({
 			   text(snap.title) | bold | color(accent()),
-			   text("tokens   --"),
-			   text("context  --%"),
+			   text(
+				   "tokens   " + araya::app::token_count_text(
+									 snap.tokens.input_tokens, snap.tokens.output_tokens, snap.tokens.has_usage)),
+			   text(
+				   "context  " + araya::app::context_percent_text(
+									 snap.tokens.input_tokens, snap.tokens.context_window, snap.tokens.has_usage)),
 			   text("cost     $0.00"),
 			   separatorEmpty(),
 			   section("MCP", {}),
@@ -159,7 +168,7 @@ ftxui::Element render_session_screen(render_context const& rc) {
 	if (araya::app::palette_open(rc.input_text))
 		main_elements.push_back(render_palette(
 			rc.commands, araya::app::palette_query(rc.input_text), rc.ui.palette_selected, main_width, rc.theme.ascii));
-	main_elements.push_back(build_prompt(rc));
+	main_elements.push_back(build_prompt(rc, *snap));
 	main_elements.push_back(hbox({text(snap->cwd) | color(dim_text())}));
 
 	return hbox({

@@ -45,23 +45,12 @@ std::shared_ptr<araya::session::session> ensure_session(app_context& ctx, sessio
 // The first registered provider route and its default model; `label`
 // prefixes the failure messages (chat:/ask:). The first route wins (with
 // both mounted, "mock" sorts before "openai").
-struct route {
-	std::string provider;
-	araya::llm::model_info model;
-};
-
-std::optional<route> first_route(araya::llm::llm_service& service, line_sink const& out, std::string_view label) {
-	auto provider = service.first_provider();
-	if (!provider) {
-		out(std::string(label) + ": llm service has no provider routes (load llm-mock or configure llm-openai)");
-		return std::nullopt;
-	}
-	auto model = service.resolve_model(*provider, "");
-	if (!model || model->model.empty()) {
-		out(std::string(label) + ": provider '" + std::string(*provider) + "' did not resolve a default model");
-		return std::nullopt;
-	}
-	return route{std::string(*provider), *model};
+std::optional<active_model> first_route(app_context& ctx, line_sink const& out, std::string_view label) {
+	std::string why;
+	auto route = active_route(ctx, &why);
+	if (!route)
+		out(std::string(label) + ": " + why);
+	return route;
 }
 
 // Folds one model stream into the assembled text, usage, replay state,
@@ -115,14 +104,14 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 		// The user turn is durable before the model runs.
 		co_await s->flush();
 
-		auto resolved = first_route(*service, out, "chat");
+		auto resolved = first_route(ctx, out, "chat");
 		if (!resolved) {
 			co_return;
 		}
 
 		araya::llm::generate_options options;
 		options.provider = resolved->provider;
-		options.model = resolved->model.model;
+		options.model = resolved->model;
 		options.session_id = ctx.current->value;
 		for (auto const& message : s->surface().messages())
 			options.messages.push_back(araya::llm_bridge::to_llm_message(message));
@@ -174,18 +163,17 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 
 		auto root_ctx = ctx.rt->root_context();
 		auto store = root_ctx.require<session_store>(sessions_key).shared();
-		auto service = root_ctx.require<araya::llm::llm_service>(araya::llm::llm_key).shared();
 		auto agent = root_ctx.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
 		auto s = ensure_session(ctx, *store, out);
 
-		auto resolved = first_route(*service, out, "ask");
+		auto resolved = first_route(ctx, out, "ask");
 		if (!resolved) {
 			co_return;
 		}
 
 		araya::agent::run_options options;
 		options.provider = resolved->provider;
-		options.model = resolved->model.model;
+		options.model = resolved->model;
 		options.session = s->id();
 		options.input = text;
 

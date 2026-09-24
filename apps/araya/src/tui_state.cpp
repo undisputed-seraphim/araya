@@ -55,6 +55,9 @@ void publish_snapshot(shared_state& sh, engine_state& e) {
 	ns->cwd_branch = e.ctx.cwd_branch;
 	ns->cwd = e.ctx.cwd;
 	ns->version = araya::version_string();
+	ns->provider = e.route ? e.route->provider : std::string{};
+	ns->model = e.route ? e.route->model : std::string{};
+	ns->tokens = e.tokens;
 	e.published_revision = e.revision;
 	e.published_components = e.components;
 	sh.snap.store(std::move(ns), std::memory_order_release);
@@ -62,11 +65,30 @@ void publish_snapshot(shared_state& sh, engine_state& e) {
 		sh.wake();
 }
 
+// Resolves the active llm route into the engine state (strand only). The
+// route changes only when components are loaded or unloaded, but
+// resolving it each fold keeps it correct for the next publish.
+void refresh_route(engine_state& e) {
+	auto next = araya::app::active_route(e.ctx);
+	bool same = false;
+	if (next && e.route)
+		same = next->provider == e.route->provider && next->model == e.route->model &&
+			   next->context_window == e.route->context_window;
+	else
+		same = !next && !e.route;
+	if (same)
+		return;
+	e.route = std::move(next);
+	e.tokens.context_window = e.route ? e.route->context_window : 0;
+	++e.revision;
+}
+
 // Rebuilds the conversation rows from the current session's folded
 // surface. Must run on the control strand: it touches the session store.
 // Skips rebuilding when the current session and its log size are
 // unchanged (the common case on the 400ms refresh).
 void fold_messages(engine_state& e) {
+	refresh_route(e);
 	if (!e.ctx.current) {
 		if (!e.messages.empty() || e.title != "no session") {
 			e.messages.clear();
@@ -103,6 +125,32 @@ void fold_messages(engine_state& e) {
 			first_user = row.text;
 		e.messages.push_back(std::move(row));
 	}
+
+	// The token meter: the most recent settled assistant turn's usage
+	// (the surface drops the sibling, so read it from the raw log).
+	token_metrics metrics;
+	metrics.context_window = e.tokens.context_window;
+	using araya::util::json::as_object;
+	using araya::util::json::get_object;
+	using araya::util::json::get_uint;
+	for (auto const& event : session->log()) {
+		if (event.type != "assistant/message")
+			continue;
+		auto const* data = as_object(event.data);
+		if (!data)
+			continue;
+		auto const* usage = get_object(*data, "usage");
+		if (!usage)
+			continue;
+		metrics.input_tokens = get_uint(*usage, "input_tokens");
+		metrics.output_tokens = get_uint(*usage, "output_tokens");
+		metrics.has_usage = true;
+	}
+	if (metrics != e.tokens) {
+		e.tokens = metrics;
+		++e.revision;
+	}
+
 	e.title = araya::app::session_title(first_user, e.ctx.current->value);
 	e.folded_session = e.ctx.current->value;
 	e.folded_log_size = session->log().size();
@@ -252,6 +300,9 @@ araya::task<void> refresh_loop(shared_state& sh, engine_state& e) {
 araya::task<void> boot_and_run(shared_state& sh, engine_state& e, std::string resume_id) {
 	araya::app::line_sink sink = [&e](std::string text) { log_line(e, std::move(text)); };
 	co_await araya::app::boot(e.ctx, sink);
+	// Resolve the llm route before the first publish so the entry screen
+	// can show the connection immediately.
+	co_await e.ctx.rt->run_on_strand([&e] { refresh_route(e); });
 
 	// Resume: restore the named session from disk (the same path the
 	// `/session restore` command uses) and open straight into the session

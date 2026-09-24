@@ -1,4 +1,5 @@
 #include "input_route.hpp"
+#include "metrics.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -140,4 +141,22 @@ TEST_CASE("session_title: truncates on a codepoint boundary") {
 	// the 48th byte is a continuation byte, so the cut backs off to 47.
 	std::string text = std::string(47, 'a') + "\u00e9" + "zzzz";
 	CHECK(araya::app::session_title(text, "id") == std::string(47, 'a') + "\u2026");
+}
+
+TEST_CASE("token_count_text: in/out or a dash placeholder") {
+	CHECK(araya::app::token_count_text(0, 0, false) == "--");
+	CHECK(araya::app::token_count_text(4, 30, true) == "4/30");
+	CHECK(araya::app::token_count_text(0, 0, true) == "0/0");
+}
+
+TEST_CASE("context_percent_text: whole percent or a dash placeholder") {
+	CHECK(araya::app::context_percent_text(100, 1000, false) == "--%");
+	CHECK(araya::app::context_percent_text(100, 0, true) == "--%");
+	// A tiny prompt on a huge window rounds to 0%.
+	CHECK(araya::app::context_percent_text(4, 524288, true) == "0%");
+	CHECK(araya::app::context_percent_text(5000, 10000, true) == "50%");
+	CHECK(araya::app::context_percent_text(10000, 10000, true) == "100%");
+	// Nearest-percent rounding.
+	CHECK(araya::app::context_percent_text(1, 3, true) == "33%");
+	CHECK(araya::app::context_percent_text(2, 3, true) == "67%");
 }
