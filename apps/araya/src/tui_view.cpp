@@ -91,7 +91,7 @@ ftxui::Component build_ui(
 					if (!matches.empty()) {
 						int sel = std::clamp(ui.picker_selected, 0, static_cast<int>(matches.size()) - 1);
 						sh.started_ui.store(true, std::memory_order_relaxed);
-						on_command("/session restore " + matches[static_cast<std::size_t>(sel)].id);
+						on_command("/session restore " + matches[static_cast<std::size_t>(sel)]->id);
 					}
 					ui.picker_open = false;
 					screen.PostEvent(Event::Custom);

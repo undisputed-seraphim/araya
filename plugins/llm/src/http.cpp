@@ -174,8 +174,10 @@ araya::task<response> stream_request(
 	// and the TLS handshake all report as "connect"; the exchange itself
 	// maps its own errors inside execute().
 	try {
-		endpoint ep = req.server;
-		auto const port = ep.port.empty() ? (ep.scheme == "https" ? std::string("443") : std::string("80")) : ep.port;
+		endpoint const& ep = req.server;
+		std::string_view const port = ep.port.empty()
+										  ? (ep.scheme == "https" ? std::string_view("443") : std::string_view("80"))
+										  : std::string_view(ep.port);
 
 		tcp::resolver resolver(executor);
 		beast::tcp_stream tcp(executor);

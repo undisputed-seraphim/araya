@@ -24,12 +24,12 @@ std::string clip(std::string_view text, std::size_t max) {
 
 } // namespace
 
-std::vector<session_row> filter_sessions(std::vector<session_row> const& sessions, std::string_view filter) {
-	std::vector<session_row> out;
+std::vector<session_row const*> filter_sessions(std::vector<session_row> const& sessions, std::string_view filter) {
+	std::vector<session_row const*> out;
 	for (auto const& session : sessions) {
 		if (filter.empty() || araya::app::contains_ci(session.title, filter) ||
 			araya::app::contains_ci(session.id, filter))
-			out.push_back(session);
+			out.push_back(&session);
 	}
 	return out;
 }
@@ -53,8 +53,8 @@ render_picker(snapshot const& snap, std::string_view filter, int selected, int w
 	} else {
 		std::size_t inner = static_cast<std::size_t>(std::max(8, panel_width - 4));
 		for (std::size_t i = first; i < sessions.size() && i < first + k_max_rows; ++i) {
-			rows.push_back(text(sessions[i].date) | color(dim_text()));
-			Element title = hbox({text(" " + clip(sessions[i].title, inner - 1)), filler()});
+			rows.push_back(text(sessions[i]->date) | color(dim_text()));
+			Element title = hbox({text(" " + clip(sessions[i]->title, inner - 1)), filler()});
 			if (static_cast<int>(i) == sel)
 				title = title | bgcolor(palette_selected_bg()) | color(Color::Black);
 			rows.push_back(std::move(title));

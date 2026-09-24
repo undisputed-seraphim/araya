@@ -276,7 +276,7 @@ std::string error_text(std::exception_ptr ep) {
 	}
 }
 
-std::string role_name(araya::session::message_role role) {
+std::string_view role_name(araya::session::message_role role) {
 	switch (role) {
 	case araya::session::message_role::system:
 		return "system";

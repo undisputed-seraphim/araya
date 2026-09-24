@@ -13,7 +13,8 @@
 namespace araya::tui {
 
 // The sessions whose title or id contains the filter (case-insensitive).
-std::vector<session_row> filter_sessions(std::vector<session_row> const& sessions, std::string_view filter);
+// Pointers into `sessions`; the caller keeps the snapshot alive.
+std::vector<session_row const*> filter_sessions(std::vector<session_row> const& sessions, std::string_view filter);
 
 ftxui::Element
 render_picker(snapshot const& snap, std::string_view filter, int selected, int width, int height, bool ascii);

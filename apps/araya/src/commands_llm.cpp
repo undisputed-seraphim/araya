@@ -76,20 +76,19 @@ araya::task<void> cmd_chat(app_context& ctx, line_sink const& out, std::string c
 
 		// The first registered provider route wins (with both mounted,
 		// "mock" sorts before "openai", which is what the tests want).
-		auto providers = service->providers();
-		if (providers.empty()) {
+		auto provider = service->first_provider();
+		if (!provider) {
 			out("chat: llm service has no provider routes (load llm-mock or configure llm-openai)");
 			co_return;
 		}
-		auto const& provider = providers.front();
-		auto model = service->resolve_model(provider, "");
+		auto model = service->resolve_model(*provider, "");
 		if (!model || model->model.empty()) {
-			out("chat: provider '" + provider + "' did not resolve a default model");
+			out("chat: provider '" + std::string(*provider) + "' did not resolve a default model");
 			co_return;
 		}
 
 		araya::llm::generate_options options;
-		options.provider = provider;
+		options.provider = *provider;
 		options.model = model->model;
 		options.session_id = ctx.current->value;
 		for (auto const& message : s->surface().messages())
@@ -168,20 +167,19 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 			out("session: created " + sid.value);
 		}
 
-		auto providers = service->providers();
-		if (providers.empty()) {
+		auto provider = service->first_provider();
+		if (!provider) {
 			out("ask: llm service has no provider routes (load llm-mock or configure llm-openai)");
 			co_return;
 		}
-		auto const& provider = providers.front();
-		auto model = service->resolve_model(provider, "");
+		auto model = service->resolve_model(*provider, "");
 		if (!model || model->model.empty()) {
-			out("ask: provider '" + provider + "' did not resolve a default model");
+			out("ask: provider '" + std::string(*provider) + "' did not resolve a default model");
 			co_return;
 		}
 
 		araya::agent::run_options options;
-		options.provider = provider;
+		options.provider = *provider;
 		options.model = model->model;
 		options.session = s->id();
 		options.input = text;

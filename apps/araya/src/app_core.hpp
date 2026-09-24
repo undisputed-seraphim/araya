@@ -69,7 +69,7 @@ std::span<araya::app::command_info const> command_list();
 
 char const* state_name(araya::fiber_state s);
 std::string error_text(std::exception_ptr ep);
-std::string role_name(araya::session::message_role role);
+std::string_view role_name(araya::session::message_role role);
 
 // The working directory with $HOME collapsed to ~, plus the short git
 // branch when the directory is a repository (one subprocess at boot).

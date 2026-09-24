@@ -43,32 +43,35 @@ inline void sse_parser::feed(std::string_view bytes) {
 		auto pos = buffer_.find('\n');
 		if (pos == std::string::npos)
 			break;
-		std::string line = buffer_.substr(0, pos);
-		buffer_.erase(0, pos + 1);
+		// Read the line as a view into the buffer and consume it before
+		// erasing: no per-line allocation.
+		std::string_view line(buffer_.data(), pos);
 		if (!line.empty() && line.back() == '\r')
-			line.pop_back();
-		if (line.empty()) {
+			line.remove_suffix(1);
+		const bool blank = line.empty();
+		if (!blank) {
+			if (on_activity)
+				on_activity();
+			if (line.front() != ':') {
+				auto colon = line.find(':');
+				auto field = colon == std::string_view::npos ? line : line.substr(0, colon);
+				auto value = colon == std::string_view::npos ? std::string_view{} : line.substr(colon + 1);
+				if (!value.empty() && value.front() == ' ')
+					value.remove_prefix(1);
+				if (field == "data") {
+					if (has_data_)
+						data_ += '\n';
+					data_ += value;
+					has_data_ = true;
+				} else if (field == "event") {
+					event_.assign(value);
+				}
+				// Other fields (id, retry) are ignored.
+			}
+		}
+		buffer_.erase(0, pos + 1);
+		if (blank)
 			dispatch();
-			continue;
-		}
-		if (on_activity)
-			on_activity();
-		if (line[0] == ':')
-			continue;
-		auto colon = line.find(':');
-		auto field = colon == std::string::npos ? line : line.substr(0, colon);
-		auto value = colon == std::string::npos ? std::string{} : line.substr(colon + 1);
-		if (!value.empty() && value.front() == ' ')
-			value.erase(0, 1);
-		if (field == "data") {
-			if (has_data_)
-				data_ += '\n';
-			data_ += value;
-			has_data_ = true;
-		} else if (field == "event") {
-			event_ = value;
-		}
-		// Other fields (id, retry) are ignored.
 	}
 }
 

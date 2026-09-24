@@ -88,6 +88,12 @@ std::vector<std::string> llm_service::providers() const {
 	return result;
 }
 
+std::optional<std::string_view> llm_service::first_provider() const {
+	if (routes_.empty())
+		return std::nullopt;
+	return std::string_view(routes_.begin()->first);
+}
+
 std::optional<model_info> llm_service::resolve_model(std::string_view provider, std::string_view model) const {
 	auto const found = routes_.find(provider);
 	if (found == routes_.end())

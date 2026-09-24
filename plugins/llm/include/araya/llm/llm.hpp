@@ -325,6 +325,11 @@ public:
 
 	std::vector<std::string> providers() const;
 
+	// The first provider route's id (map order, matching providers().front()),
+	// or nullopt when no route is registered. Avoids materializing the list
+	// for the common single-provider call.
+	std::optional<std::string_view> first_provider() const;
+
 	std::optional<model_info> resolve_model(std::string_view provider, std::string_view model) const;
 
 private:

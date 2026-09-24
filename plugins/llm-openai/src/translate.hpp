@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <deque>
 #include <map>
 #include <optional>
 #include <string>
@@ -80,7 +81,10 @@ private:
 	// never streams (tool results).
 	std::optional<araya::llm::content_block> close_block(open_block const& block) const;
 
-	std::vector<open_block> order_;
+	// A deque, not a vector: open() returns references (and the text_ and
+	// reasoning_ members hold pointers into it) that must survive later
+	// blocks opening.
+	std::deque<open_block> order_;
 	open_block* text_ = nullptr;
 	open_block* reasoning_ = nullptr;
 	std::map<std::size_t, std::size_t> tool_position_; // wire index -> position in order_

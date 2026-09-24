@@ -142,7 +142,7 @@ araya::task<void> cmd_session(app_context& ctx, line_sink const& out, std::strin
 					ctx.current.reset();
 				} else {
 					for (auto const& m : s->surface().messages())
-						out("  " + role_name(m.role) + ": " + boost::json::serialize(m.content));
+						out("  " + std::string(role_name(m.role)) + ": " + boost::json::serialize(m.content));
 				}
 			}
 		} else if (sub == "save") {
