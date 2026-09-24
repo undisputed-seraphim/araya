@@ -31,17 +31,22 @@ namespace {
 using namespace std::chrono_literals;
 
 constexpr std::size_t k_max_log = 1000;
+// The UI only ever renders the tail of the output strip; the snapshot
+// carries this much of the log so an idle publish copies little.
+constexpr std::size_t k_snapshot_log = 64;
 
 void log_line(engine_state& e, std::string text) {
 	e.log.push_back(std::move(text));
 	while (e.log.size() > k_max_log)
 		e.log.pop_front();
+	++e.revision;
 }
 
 void publish_snapshot(shared_state& sh, engine_state& e) {
 	auto ns = std::make_shared<snapshot>();
 	ns->components = e.components;
-	ns->log.assign(e.log.begin(), e.log.end());
+	std::size_t log_begin = e.log.size() > k_snapshot_log ? e.log.size() - k_snapshot_log : 0;
+	ns->log.assign(e.log.begin() + static_cast<std::ptrdiff_t>(log_begin), e.log.end());
 	ns->messages = e.messages;
 	ns->sessions = e.sessions;
 	ns->title = e.title;
@@ -50,6 +55,8 @@ void publish_snapshot(shared_state& sh, engine_state& e) {
 	ns->cwd_branch = e.ctx.cwd_branch;
 	ns->cwd = e.ctx.cwd;
 	ns->version = araya::version_string();
+	e.published_revision = e.revision;
+	e.published_components = e.components;
 	sh.snap.store(std::move(ns), std::memory_order_release);
 	if (sh.wake)
 		sh.wake();
@@ -57,23 +64,36 @@ void publish_snapshot(shared_state& sh, engine_state& e) {
 
 // Rebuilds the conversation rows from the current session's folded
 // surface. Must run on the control strand: it touches the session store.
+// Skips rebuilding when the current session and its log size are
+// unchanged (the common case on the 400ms refresh).
 void fold_messages(engine_state& e) {
-	e.messages.clear();
 	if (!e.ctx.current) {
-		e.title = "no session";
+		if (!e.messages.empty() || e.title != "no session") {
+			e.messages.clear();
+			e.title = "no session";
+			++e.revision;
+		}
+		e.folded_session.clear();
+		e.folded_log_size = 0;
 		return;
 	}
 	auto root_ctx = e.ctx.rt->root_context();
 	auto store_lease = root_ctx.find<araya::session::session_store>(araya::session::sessions_key);
-	if (!store_lease) {
-		e.title = e.ctx.current->value;
-		return;
-	}
-	auto session = store_lease->shared()->get(*e.ctx.current);
+	auto session = store_lease ? store_lease->shared()->get(*e.ctx.current) : nullptr;
 	if (!session) {
-		e.title = e.ctx.current->value;
+		if (!e.messages.empty() || e.title != e.ctx.current->value) {
+			e.messages.clear();
+			e.title = e.ctx.current->value;
+			++e.revision;
+		}
+		e.folded_session.clear();
+		e.folded_log_size = 0;
 		return;
 	}
+	if (e.folded_session == e.ctx.current->value && e.folded_log_size == session->log().size())
+		return;
+
+	e.messages.clear();
 	std::string first_user;
 	for (auto const& message : session->surface().messages()) {
 		feed_message row;
@@ -84,6 +104,9 @@ void fold_messages(engine_state& e) {
 		e.messages.push_back(std::move(row));
 	}
 	e.title = araya::app::session_title(first_user, e.ctx.current->value);
+	e.folded_session = e.ctx.current->value;
+	e.folded_log_size = session->log().size();
+	++e.revision;
 }
 
 // The first user message's text in a stored log (the picker's title
@@ -126,6 +149,7 @@ std::string format_date(std::int64_t epoch_ms) {
 // most recent first; a malformed stored session is skipped, not fatal.
 void enumerate_sessions(engine_state& e) {
 	e.sessions.clear();
+	++e.revision; // the list is delivered on demand; always publish it
 	auto lease =
 		e.ctx.rt->root_context().find<araya::persistence::session_persistence>(araya::persistence::persistence_key);
 	if (!lease)
@@ -176,6 +200,7 @@ araya::task<void> command_loop(shared_state& sh, engine_state& e) {
 			// Any first submit leaves the entry phase.
 			if (!e.started) {
 				e.started = true;
+				++e.revision;
 				sh.started_ui.store(true, std::memory_order_relaxed);
 			}
 			// Free text becomes a local conversation turn; a '/'-prefixed
@@ -203,16 +228,24 @@ araya::task<void> refresh_loop(shared_state& sh, engine_state& e) {
 		timer.expires_after(400ms);
 		co_await timer.async_wait(boost::asio::use_awaitable);
 		auto fibers = co_await e.ctx.rt->fibers_async();
-		e.components.clear();
+		std::vector<component_row> next;
+		next.reserve(fibers.size());
 		for (auto const& f : fibers) {
 			component_row row;
 			row.name = f.name;
 			row.state = araya::app::state_name(f.state);
 			row.error = f.error ? araya::app::error_text(f.error) : std::string{};
-			e.components.push_back(std::move(row));
+			next.push_back(std::move(row));
+		}
+		if (next != e.components) {
+			e.components = std::move(next);
+			++e.revision;
 		}
 		co_await e.ctx.rt->run_on_strand([&e] { fold_messages(e); });
-		publish_snapshot(sh, e);
+		// Publish only when something the UI can see changed: an idle
+		// refresh copies nothing.
+		if (e.revision != e.published_revision)
+			publish_snapshot(sh, e);
 	}
 }
 
@@ -228,8 +261,10 @@ araya::task<void> boot_and_run(shared_state& sh, engine_state& e, std::string re
 			e.ctx.rt->bus()->executor(),
 			araya::app::dispatch(e.ctx, sink, "/session restore " + resume_id),
 			boost::asio::use_awaitable);
-		if (e.ctx.current && e.ctx.current->value == resume_id)
+		if (e.ctx.current && e.ctx.current->value == resume_id) {
 			e.started = true;
+			++e.revision;
+		}
 		co_await e.ctx.rt->run_on_strand([&e] { fold_messages(e); });
 	}
 

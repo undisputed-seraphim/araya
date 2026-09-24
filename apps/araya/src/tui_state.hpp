@@ -3,6 +3,7 @@
 #include "app_core.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -22,6 +23,8 @@ struct component_row {
 	std::string name;
 	std::string state;
 	std::string error;
+
+	friend bool operator==(component_row const&, component_row const&) = default;
 };
 
 // One rendered conversation row, folded from the current session's
@@ -95,6 +98,16 @@ struct engine_state {
 	std::vector<session_row> sessions;
 	// Set on the first submit; mirrored into every snapshot.
 	bool started = false;
+	// A monotonic counter bumped by every UI-visible mutation; the
+	// refresh loop publishes only when it advanced (or the component
+	// list changed), so an idle UI copies nothing.
+	std::uint64_t revision = 0;
+	std::uint64_t published_revision = 0;
+	std::vector<component_row> published_components;
+	// Fold tracking: the session and log size the messages were built
+	// from, so an unchanged conversation is not rebuilt every refresh.
+	std::string folded_session;
+	std::size_t folded_log_size = 0;
 };
 
 // Runs the engine on the calling thread (the engine thread): boots the
