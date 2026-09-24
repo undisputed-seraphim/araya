@@ -113,11 +113,17 @@ araya::task<response> execute(
 		chunk_buffer.resize(8192);
 		while (!parser.is_done()) {
 			// buffer_body is caller-buffered: hand the parser a fresh
-			// region per read_some; it returns the bytes stored there.
+			// region per read_some; it consumes the region it filled.
 			body.data = chunk_buffer.data();
 			body.size = chunk_buffer.size();
 			timed_layer(stream).expires_after(options.idle_timeout);
-			auto const bytes = co_await beast::http::async_read_some(stream, buffer, parser, net::use_awaitable);
+			co_await beast::http::async_read_some(stream, buffer, parser, net::use_awaitable);
+			// The payload stored is the space the parser consumed. The
+			// read_some return value counts bytes pulled off the stream
+			// (chunk-size lines and CRLFs included), so it is not the
+			// payload length - using it feeds framing bytes into the
+			// consumer.
+			auto const bytes = chunk_buffer.size() - body.size;
 			if (bytes == 0)
 				continue;
 			if (is_error) {

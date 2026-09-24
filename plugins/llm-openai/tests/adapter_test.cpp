@@ -47,6 +47,10 @@ struct test_server {
 	using handler_type = std::function<http::response<http::string_body>(http::request<http::string_body> const&)>;
 	handler_type on_request;
 	bool stall = false;
+	// Serve the response with chunked transfer encoding: the wire carries
+	// chunk-size lines and CRLFs around the body, so the framing must be
+	// stripped before the consumer sees it.
+	bool chunked = false;
 	std::chrono::milliseconds stall_delay{1000};
 	std::string request_body;
 
@@ -68,6 +72,8 @@ struct test_server {
 		}
 		auto response = on_request(request);
 		response.set(http::field::content_type, "text/event-stream");
+		if (chunked)
+			response.chunked(true);
 		co_await http::async_write(socket, response, net::use_awaitable);
 	}
 
@@ -162,6 +168,43 @@ TEST_CASE("a canned SSE stream assembles text, usage, and finish") {
 		CHECK(server.request_body.find("gpt-4o-mini") != std::string::npos);
 		CHECK(server.request_body.find("stream") != std::string::npos);
 		CHECK(server.request_body.find("\"hi\"") != std::string::npos);
+	});
+}
+
+TEST_CASE("chunked transfer encoding is de-framed before the translator") {
+	// Real SSE servers stream with chunked transfer encoding: the body
+	// arrives wrapped in chunk-size lines and CRLFs. The read loop must
+	// hand the consumer the payload, not the framing, or the first bytes
+	// of the stream are corrupted (size lines, NULs) and every event
+	// after the first framing boundary is misparsed.
+	harness h;
+	h.run([&]() -> araya::task<void> {
+		test_server server(h.io.get_executor());
+		server.chunked = true;
+		server.on_request = [](http::request<http::string_body> const&) {
+			http::response<http::string_body> response{http::status::ok, 11};
+			response.body() = sse({
+				R"({"choices":[{"delta":{"content":"Hello"}}]})",
+				R"({"choices":[{"delta":{"content":" there"}}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}})",
+			});
+			response.chunked(true);
+			return response;
+		};
+		h.serve(server);
+
+		openai_adapter adapter(config_for(server));
+		auto got = co_await run_stream(adapter, chat());
+
+		REQUIRE(got.size() == 6);
+		CHECK(std::holds_alternative<block_start_chunk>(got[0]));
+		CHECK(std::get<text_delta_chunk>(got[1]).text == "Hello");
+		CHECK(std::get<text_delta_chunk>(got[2]).text == " there");
+		CHECK(std::get<text_block>(std::get<block_end_chunk>(got[3]).block).text == "Hello there");
+		CHECK(std::get<usage_chunk>(got[4]).usage.input_tokens == 7);
+		CHECK(std::get<usage_chunk>(got[4]).usage.output_tokens == 2);
+		auto const finish = last_finish(got);
+		REQUIRE(finish.has_value());
+		CHECK(finish->why == finish_chunk::reason::stop);
 	});
 }
 
