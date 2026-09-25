@@ -27,6 +27,7 @@ target_link_libraries(araya_app PRIVATE
     araya::agent-loop
     araya::coreutil
     araya::demo
+    araya::fs-observation-policy
     araya::llm
     araya::llm-bridge
     araya::llm-mock

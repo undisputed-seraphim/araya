@@ -1,5 +1,7 @@
 add_subdirectory(agent-loop)
 add_subdirectory(coreutil)
+add_subdirectory(fs)
+add_subdirectory(fs-observation-policy)
 add_subdirectory(llm)
 add_subdirectory(llm/bridge)
 add_subdirectory(llm-mock)

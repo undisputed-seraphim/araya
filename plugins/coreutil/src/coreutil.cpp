@@ -1,6 +1,7 @@
 #include "araya/coreutil/coreutil.hpp"
 
 #include "araya/config.hpp"
+#include "araya/fs/events.hpp"
 #include "araya/session/store.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/tools/tools.hpp"
@@ -100,6 +101,22 @@ fs::path resolve_path(araya::session::session_store& store, std::string const& s
 	if (auto s = store.get(araya::session::session_id{session}); s && s->header().cwd)
 		base = *s->header().cwd;
 	return base / path;
+}
+
+araya::fs::fs_target make_target(std::string const& session, fs::path const& path, std::string const& display) {
+	return araya::fs::fs_target{
+		.owner = session, .path_key = path.lexically_normal().generic_string(), .display_path = display};
+}
+
+// Publish one presence/absence observation on the fs firehose. A no-op when
+// no bus is bound (the tool then behaves unconstrained, as if no policy).
+void emit_observed(
+	std::shared_ptr<araya::event_bus> const& bus,
+	araya::fs::fs_target target,
+	araya::fs::fs_observation observation) {
+	if (!bus)
+		return;
+	bus->dispatch(araya::fs::observed_key, araya::fs::fs_observed_msg{std::move(target), std::move(observation)});
 }
 
 std::vector<std::string> split_lines(std::string const& data) {
@@ -306,8 +323,11 @@ std::string relative_display(fs::path const& root, fs::path const& file) {
 
 // -- tools -----------------------------------------------------------------
 
-araya::task<tool_result>
-handle_read(std::shared_ptr<araya::session::session_store> store, coreutil_config config, tool_context const& ctx) {
+araya::task<tool_result> handle_read(
+	std::shared_ptr<araya::session::session_store> store,
+	std::shared_ptr<araya::event_bus> bus,
+	coreutil_config config,
+	tool_context const& ctx) {
 	auto const* args = ctx.arguments.if_object();
 	auto file_path = args ? araya::util::json::get_string(*args, "file_path") : std::string{};
 	if (file_path.empty())
@@ -324,10 +344,18 @@ handle_read(std::shared_ptr<araya::session::session_store> store, coreutil_confi
 		co_return error_result("Error: 'limit' must be at most " + std::to_string(config.read_limit));
 
 	auto const path = resolve_path(*store, ctx.session, file_path);
+	auto const target = make_target(ctx.session, path, file_path);
+	// A miss records confirmed absence before reporting the error; a hit
+	// records presence with its version (the policy's freshness basis).
+	std::error_code rec;
+	if (!fs::exists(path, rec) || rec)
+		emit_observed(bus, target, araya::fs::fs_observation{false, {}});
+
 	std::string data;
 	std::string error;
 	if (!read_file(file_path, path, data, error))
 		co_return error_result(std::move(error));
+	emit_observed(bus, target, araya::fs::fs_observation{true, araya::fs::read_version(path).value_or("")});
 
 	auto lines = split_lines(data);
 	auto const total = lines.size();
@@ -360,7 +388,10 @@ handle_read(std::shared_ptr<araya::session::session_store> store, coreutil_confi
 	co_return text_result(std::move(content));
 }
 
-araya::task<tool_result> handle_write(std::shared_ptr<araya::session::session_store> store, tool_context const& ctx) {
+araya::task<tool_result> handle_write(
+	std::shared_ptr<araya::session::session_store> store,
+	std::shared_ptr<araya::event_bus> bus,
+	tool_context const& ctx) {
 	auto const* args = ctx.arguments.if_object();
 	auto file_path = args ? araya::util::json::get_string(*args, "file_path") : std::string{};
 	auto content = args ? araya::util::json::get_string(*args, "content") : std::string{};
@@ -368,8 +399,27 @@ araya::task<tool_result> handle_write(std::shared_ptr<araya::session::session_st
 		co_return error_result("Error: write requires a non-empty 'file_path'");
 
 	auto const path = resolve_path(*store, ctx.session, file_path);
+	auto const target = make_target(ctx.session, path, file_path);
 	std::error_code ec;
-	bool existed = fs::is_regular_file(path, ec);
+	bool const existed = fs::is_regular_file(path, ec);
+
+	// The policy's write guard: create-only for an unseen/absent target,
+	// version-guarded replacement for an observed one. No listener leaves
+	// the intent unconstrained - the bare create-or-overwrite.
+	araya::fs::fs_write_intent intent;
+	intent.target = target;
+	if (bus)
+		intent = co_await bus->dispatch(araya::fs::write_intent_key, intent);
+	if (intent.decision == araya::fs::fs_write_decision::create_if_absent && existed)
+		co_return error_result(
+			"cannot modify \"" + file_path + "\": file has not been read — read the file, then retry");
+	if (intent.decision == araya::fs::fs_write_decision::replace_if_version) {
+		auto const current = araya::fs::read_version(path);
+		if (!current || *current != intent.version)
+			co_return error_result(
+				"cannot write \"" + file_path + "\": the file changed on disk — re-read the file, then retry");
+	}
+
 	if (auto const parent = path.parent_path(); !parent.empty()) {
 		fs::create_directories(parent, ec);
 		if (ec)
@@ -382,13 +432,17 @@ araya::task<tool_result> handle_write(std::shared_ptr<araya::session::session_st
 	stream.close();
 	if (!stream)
 		co_return error_result("Error: write failed: " + file_path);
+	emit_observed(bus, target, araya::fs::fs_observation{true, araya::fs::read_version(path).value_or("")});
 
 	co_return text_result(
 		"<path>" + file_path + "</path>\n<type>file</type>\n<content>\n" + (existed ? "Updated file" : "Created file") +
 		"\n</content>");
 }
 
-araya::task<tool_result> handle_edit(std::shared_ptr<araya::session::session_store> store, tool_context const& ctx) {
+araya::task<tool_result> handle_edit(
+	std::shared_ptr<araya::session::session_store> store,
+	std::shared_ptr<araya::event_bus> bus,
+	tool_context const& ctx) {
 	auto const* args = ctx.arguments.if_object();
 	auto file_path = args ? araya::util::json::get_string(*args, "file_path") : std::string{};
 	auto old_string = args ? araya::util::json::get_string(*args, "old_string") : std::string{};
@@ -402,6 +456,23 @@ araya::task<tool_result> handle_edit(std::shared_ptr<araya::session::session_sto
 		co_return error_result("Error: 'old_string' and 'new_string' must differ");
 
 	auto const path = resolve_path(*store, ctx.session, file_path);
+	auto const target = make_target(ctx.session, path, file_path);
+
+	// The policy's edit guard: an unseen or absent target is rejected; a
+	// present one carries the observed version for a guarded replacement.
+	araya::fs::fs_edit_intent intent;
+	intent.target = target;
+	if (bus)
+		intent = co_await bus->dispatch(araya::fs::edit_intent_key, intent);
+	if (!intent.error.empty())
+		co_return error_result(intent.error);
+	if (intent.decision == araya::fs::fs_edit_decision::replace_if_version) {
+		auto const current = araya::fs::read_version(path);
+		if (!current || *current != intent.version)
+			co_return error_result(
+				"cannot edit \"" + file_path + "\": the file changed on disk — re-read the file, then retry");
+	}
+
 	std::string data;
 	std::string error;
 	if (!read_file(file_path, path, data, error))
@@ -437,6 +508,7 @@ araya::task<tool_result> handle_edit(std::shared_ptr<araya::session::session_sto
 	stream.close();
 	if (!stream)
 		co_return error_result("Error: edit failed: " + file_path);
+	emit_observed(bus, target, araya::fs::fs_observation{true, araya::fs::read_version(path).value_or("")});
 
 	co_return text_result(
 		replace_all ? "The file " + file_path + " has been updated. All occurrences were successfully replaced."
@@ -610,6 +682,10 @@ struct coreutil_plugin : araya::plugin {
 		auto prompts =
 			ctx.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key).shared();
 		auto store = ctx.require<araya::session::session_store>(araya::session::sessions_key).shared();
+		// The fs event gate the observation policy listens on. Absent a
+		// mounted policy the dispatches have no listeners, so every guard
+		// stays unconstrained - the bare create-or-overwrite.
+		auto bus = ctx.activation_ptr()->bus;
 		auto const& config = config_;
 
 		if (is_enabled(config, "read")) {
@@ -618,7 +694,7 @@ struct coreutil_plugin : araya::plugin {
 				guidance(
 					"tool:read",
 					araya::system_prompt::section_order("TOOL_READ"),
-					"Use the read tool - not shell commands like cat - to inspect text files. Results include line "
+					"Use the read tool — not shell commands like cat — to inspect text files. Results include line "
 					"numbers. Use offset and limit to continue reading large files."));
 			tools->register_tool(
 				ctx,
@@ -634,17 +710,18 @@ struct coreutil_plugin : araya::plugin {
 						  boost::json::object{
 							  {"type", "number"}, {"description", "Maximum number of lines to return."}}}},
 						{"file_path"})},
-				[store, config](tool_context const& call) { return handle_read(store, config, call); });
+				[store, bus, config](tool_context const& call) { return handle_read(store, bus, config, call); });
 		}
 
 		if (is_enabled(config, "write")) {
+			std::string write_text =
+				"Use the write tool to create files or completely replace file contents. Existing files are "
+				"overwritten, so read an existing file first (the default fs-observation-policy requires it)";
+			if (is_enabled(config, "edit"))
+				write_text += " and prefer edit for targeted changes";
+			write_text += ".";
 			prompts->section(
-				ctx,
-				guidance(
-					"tool:write",
-					araya::system_prompt::section_order("TOOL_WRITE"),
-					"Use the write tool to create files or completely replace file contents. Existing files are "
-					"overwritten, so prefer edit for targeted changes."));
+				ctx, guidance("tool:write", araya::system_prompt::section_order("TOOL_WRITE"), std::move(write_text)));
 			tools->register_tool(
 				ctx,
 				tool_definition{
@@ -653,7 +730,7 @@ struct coreutil_plugin : araya::plugin {
 					schema(
 						{{"file_path", str("Path to write.")}, {"content", str("Full UTF-8 text content to write.")}},
 						{"file_path", "content"})},
-				[store](tool_context const& call) { return handle_write(store, call); });
+				[store, bus](tool_context const& call) { return handle_write(store, bus, call); });
 		}
 
 		if (is_enabled(config, "edit")) {
@@ -664,7 +741,9 @@ struct coreutil_plugin : araya::plugin {
 					araya::system_prompt::section_order("TOOL_EDIT"),
 					"Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal "
 					"old_string with new_string; by default old_string must appear exactly once. If old_string "
-					"appears multiple times, provide a more specific old_string or set replace_all to true."));
+					"appears multiple times, provide a more specific old_string or set replace_all to true. Read the "
+					"file first (the default fs-observation-policy requires it), unless you just created or edited it "
+					"in this session."));
 			tools->register_tool(
 				ctx,
 				tool_definition{
@@ -678,7 +757,7 @@ struct coreutil_plugin : araya::plugin {
 						  boost::json::object{
 							  {"type", "boolean"}, {"description", "Replace all matches. Defaults to false."}}}},
 						{"file_path", "old_string", "new_string"})},
-				[store](tool_context const& call) { return handle_edit(store, call); });
+				[store, bus](tool_context const& call) { return handle_edit(store, bus, call); });
 		}
 
 		if (is_enabled(config, "glob")) {
@@ -687,8 +766,13 @@ struct coreutil_plugin : araya::plugin {
 				guidance(
 					"tool:glob",
 					araya::system_prompt::section_order("TOOL_GLOB"),
-					"Use the glob tool to find files by path pattern (for example \"**/*.ts\"); results are ordered by "
-					"modification time."));
+					"Use the glob tool — not shell find — to discover files by path pattern. A pattern with no \"/\" "
+					"matches basenames at any depth, so \"*\" matches every file in the tree rather than its top "
+					"level. "
+					"Results are files only, never directories, and include hidden and ignored files: a result that "
+					"fits comes back in modification-time order, while a larger one keeps the "
+					"modification-time-ordered "
+					"head."));
 			tools->register_tool(
 				ctx,
 				tool_definition{
@@ -703,13 +787,11 @@ struct coreutil_plugin : araya::plugin {
 		}
 
 		if (is_enabled(config, "grep")) {
+			std::string grep_text = "Use the grep tool — not shell grep or rg — to search file contents.";
+			if (is_enabled(config, "read"))
+				grep_text += " Use read on a matched file when you need surrounding context.";
 			prompts->section(
-				ctx,
-				guidance(
-					"tool:grep",
-					araya::system_prompt::section_order("TOOL_GREP"),
-					"Use the grep tool - not shell grep or rg - to search file contents. Use read on a matched file "
-					"when you need surrounding context."));
+				ctx, guidance("tool:grep", araya::system_prompt::section_order("TOOL_GREP"), std::move(grep_text)));
 			tools->register_tool(
 				ctx,
 				tool_definition{

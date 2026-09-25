@@ -4,6 +4,7 @@
 # session's cwd.
 araya_add_plugin(coreutil
     SOURCES src/coreutil.cpp
-    DEPS araya::session araya::tools
+    DEPS araya::fs araya::session araya::tools
     TEST tests/coreutil_test.cpp
+    TEST_DEPS araya::fs-observation-policy
 )

@@ -5,6 +5,7 @@
 
 #include "araya/agent-loop/agent.hpp"
 #include "araya/coreutil/coreutil.hpp"
+#include "araya/fs-observation-policy/fs_observation_policy.hpp"
 #include "araya/llm-mock/mock.hpp"
 #include "araya/llm-openai/openai.hpp"
 #include "araya/llm/llm.hpp"
@@ -231,7 +232,8 @@ constexpr command_entry g_commands[]{
 	{"load",
 	 "load <component> [json config]",
 	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | tools | "
-	 "agent-loop | coreutil | shell | subagents | tool-subagent | console | beacon | watcher",
+	 "agent-loop | coreutil | fs-observation-policy | shell | subagents | tool-subagent | console | beacon | "
+	 "watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -301,6 +303,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::agent::plugin_descriptor();
 	if (name == "coreutil")
 		return &araya::coreutil::plugin_descriptor();
+	if (name == "fs-observation-policy")
+		return &araya::fs_observation_policy::plugin_descriptor();
 	if (name == "shell")
 		return &araya::shell::plugin_descriptor();
 	if (name == "subagents")
@@ -377,8 +381,14 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// system prompt's persona is config-only - nothing is hardcoded; the
 	// ARAYA_SYSTEM_PROMPT environment variable seeds the prefix.
 	araya::plugin_config prompt_config;
-	if (auto const* env = std::getenv("ARAYA_SYSTEM_PROMPT"); env && *env)
+	if (auto const* env = std::getenv("ARAYA_SYSTEM_PROMPT"); env && *env) {
 		prompt_config["persona_prefix"] = env;
+	} else {
+		// The standard coding-agent persona (the harness's `standard`
+		// preset). The environment variable still wins when set.
+		prompt_config["persona_prefix"] = "You are a coding agent powered by the {{model}} model.";
+		prompt_config["persona_suffix"] = "Your working directory is {{cwd}}.";
+	}
 	ctx.desired["system-prompt"] = desired_entry{&araya::system_prompt::plugin_descriptor(), std::move(prompt_config)};
 	ctx.desired["tools"] = desired_entry{&araya::tools::plugin_descriptor(), {}};
 	ctx.desired["agent-loop"] = desired_entry{&araya::agent::plugin_descriptor(), {}};
@@ -386,6 +396,9 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// shell resolves relative workdirs against the session cwd.
 	ctx.desired["coreutil"] = desired_entry{&araya::coreutil::plugin_descriptor(), {}};
 	ctx.desired["shell"] = desired_entry{&araya::shell::plugin_descriptor(), {}};
+	// The read-before-write/edit policy: an event-only gate the coreutil
+	// executor consults. Without it the fs tools are unconstrained.
+	ctx.desired["fs-observation-policy"] = desired_entry{&araya::fs_observation_policy::plugin_descriptor(), {}};
 	// Delegation: the subagent seam (spawn provider + continuable
 	// children) and the model-facing tools. The child route is inherited
 	// from the parent's latest request header unless configured here.

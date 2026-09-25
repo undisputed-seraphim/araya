@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "araya/coreutil/coreutil.hpp"
+#include "araya/fs-observation-policy/fs_observation_policy.hpp"
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
 #include "araya/session/store.hpp"
@@ -35,6 +36,7 @@ struct harness : araya_test::plugin_harness {
 	araya::component_spec coreutil_spec(araya::plugin_config cfg = {}) {
 		return spec(&araya::coreutil::plugin_descriptor(), std::move(cfg));
 	}
+	araya::component_spec policy_spec() { return spec(&araya::fs_observation_policy::plugin_descriptor()); }
 };
 
 // A scratch directory that removes itself.
@@ -58,10 +60,12 @@ struct rig {
 	std::shared_ptr<tools_service> tools;
 	std::string session = "s1";
 
-	araya::task<void> mount(araya::runtime& rt, harness& h, fs::path const& cwd) {
+	araya::task<void> mount(araya::runtime& rt, harness& h, fs::path const& cwd, bool with_policy = false) {
 		co_await rt.mount(h.session_spec());
 		co_await rt.mount(h.prompt_spec());
 		co_await rt.mount(h.tools_spec());
+		if (with_policy)
+			co_await rt.mount(h.policy_spec());
 		co_await rt.mount(h.coreutil_spec());
 		co_await rt.wait_idle();
 		auto root = rt.root_context();
@@ -226,5 +230,93 @@ TEST_CASE("disabled config leaves tools unregistered") {
 		CHECK_FALSE(tools->find("glob").has_value());
 		CHECK_FALSE(tools->find("grep").has_value());
 		CHECK(tools->find("read").has_value());
+	});
+}
+
+TEST_CASE("with the policy, overwriting an unobserved file is denied until read") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		scratch s;
+		rig r;
+		co_await r.mount(rt, h, s.dir, true);
+
+		// A file that appeared outside the session is unseen: create-only.
+		std::ofstream(s.dir / "external.txt", std::ios::binary | std::ios::trunc) << "preexisting\n";
+		auto denied = co_await r.call("write", {{"file_path", "external.txt"}, {"content", "x\n"}});
+		REQUIRE(denied.has_value());
+		CHECK(denied->is_error);
+		CHECK(text_of(*denied).find("has not been read") != std::string::npos);
+
+		// Reading it observes presence; the guarded replacement then lands.
+		co_await r.call("read", {{"file_path", "external.txt"}});
+		auto ok = co_await r.call("write", {{"file_path", "external.txt"}, {"content", "x\n"}});
+		REQUIRE(ok.has_value());
+		CHECK_FALSE(ok->is_error);
+	});
+}
+
+TEST_CASE("with the policy, edit requires an observation") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		scratch s;
+		rig r;
+		co_await r.mount(rt, h, s.dir, true);
+
+		std::ofstream(s.dir / "e.txt", std::ios::binary | std::ios::trunc) << "alpha\n";
+		auto denied =
+			co_await r.call("edit", {{"file_path", "e.txt"}, {"old_string", "alpha"}, {"new_string", "beta"}});
+		REQUIRE(denied.has_value());
+		CHECK(denied->is_error);
+		CHECK(text_of(*denied).find("has not been read") != std::string::npos);
+
+		co_await r.call("read", {{"file_path", "e.txt"}});
+		auto ok = co_await r.call("edit", {{"file_path", "e.txt"}, {"old_string", "alpha"}, {"new_string", "beta"}});
+		REQUIRE(ok.has_value());
+		CHECK_FALSE(ok->is_error);
+
+		// A write also observes, so an edit straight after a create is legal.
+		auto created = co_await r.call("write", {{"file_path", "w.txt"}, {"content", "gamma\n"}});
+		REQUIRE(created.has_value());
+		CHECK_FALSE(created->is_error);
+		auto after_create =
+			co_await r.call("edit", {{"file_path", "w.txt"}, {"old_string", "gamma"}, {"new_string", "delta"}});
+		REQUIRE(after_create.has_value());
+		CHECK_FALSE(after_create->is_error);
+	});
+}
+
+TEST_CASE("with the policy, a read of a missing file reports not-found on edit") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		scratch s;
+		rig r;
+		co_await r.mount(rt, h, s.dir, true);
+
+		co_await r.call("read", {{"file_path", "nope.txt"}}); // records absence
+		auto edit = co_await r.call("edit", {{"file_path", "nope.txt"}, {"old_string", "a"}, {"new_string", "b"}});
+		REQUIRE(edit.has_value());
+		CHECK(edit->is_error);
+		CHECK(text_of(*edit).find("not found") != std::string::npos);
+	});
+}
+
+TEST_CASE("with the policy, an external change between observations is stale") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		scratch s;
+		rig r;
+		co_await r.mount(rt, h, s.dir, true);
+
+		auto created = co_await r.call("write", {{"file_path", "s.txt"}, {"content", "one\n"}});
+		REQUIRE(created.has_value());
+		CHECK_FALSE(created->is_error);
+
+		// Change the file behind the session's back (different size ensures a
+		// different freshness token).
+		std::ofstream(s.dir / "s.txt", std::ios::binary | std::ios::trunc) << "much longer content\n";
+		auto stale = co_await r.call("write", {{"file_path", "s.txt"}, {"content", "two\n"}});
+		REQUIRE(stale.has_value());
+		CHECK(stale->is_error);
+		CHECK(text_of(*stale).find("changed on disk") != std::string::npos);
 	});
 }

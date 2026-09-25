@@ -3,7 +3,7 @@
 # The tests drive the whole stack plus the mock adapter.
 araya_add_plugin(tool-subagent
     SOURCES src/tool_subagent.cpp
-    DEPS araya::tools araya::subagents
+    DEPS araya::tools araya::subagents araya::system-prompt
     TEST tests/tool_subagent_test.cpp
     TEST_DEPS araya::llm-mock
 )

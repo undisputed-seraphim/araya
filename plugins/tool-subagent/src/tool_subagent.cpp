@@ -2,6 +2,7 @@
 
 #include "araya/config.hpp"
 #include "araya/subagents/subagents.hpp"
+#include "araya/system-prompt/system_prompt.hpp"
 #include "araya/tools/tools.hpp"
 #include "araya/util/json.hpp"
 
@@ -208,7 +209,23 @@ struct tool_subagent_plugin : araya::plugin {
 	araya::task<void> apply(araya::plugin_context& ctx) override {
 		auto tools = ctx.require<araya::tools::tools_service>(araya::tools::tools_key).shared();
 		auto subs = ctx.require<subagents_service>(subagents_key).shared();
+		auto prompts =
+			ctx.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key).shared();
 		auto cfg = std::make_shared<subagent_config const>(config_);
+
+		// The delegation guidance, registered only for a background-enabled
+		// (continuable) tool, exactly as the harness ships it.
+		if (config_.continuable) {
+			araya::system_prompt::prompt_section section;
+			section.name = "tool:" + config_.tool_name;
+			section.order = araya::system_prompt::section_order("TOOL_SUBAGENT");
+			section.text = "Use " + config_.tool_name +
+						   " in the background by default. Start independent delegations together in one assistant "
+						   "message and continue useful work while they run. Set `run_in_background: false` only when "
+						   "your next action depends on that subagent's result. When a background run settles, the "
+						   "runtime sends you a notice containing its outcome and any final assistant message.";
+			prompts->section(ctx, std::move(section));
+		}
 
 		tools->register_tool(
 			ctx,
@@ -232,8 +249,9 @@ std::unique_ptr<araya::plugin> make_tool_subagent(araya::plugin_config const& co
 }
 
 static const araya::dependency_spec g_deps[]{
-	{araya::service_id{"tools", 1}, true, {}},
 	{araya::service_id{"subagents", 1}, true, {}},
+	{araya::service_id{"system-prompt", 1}, true, {}},
+	{araya::service_id{"tools", 1}, true, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
 static const araya::plugin_descriptor g_descriptor{"tool-subagent", g_deps, g_provs, &make_tool_subagent};

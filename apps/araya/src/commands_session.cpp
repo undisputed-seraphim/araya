@@ -67,7 +67,10 @@ void session_new(app_context& ctx, line_sink const& out, std::istream& is) {
 	auto store = store_of(ctx);
 	auto root_ctx = ctx.rt->root_context();
 	session_id sid = id.empty() ? store->mint_id() : session_id{std::move(id)};
-	auto s = store->create(root_ctx, std::move(sid), {});
+	araya::session::create_session_options options;
+	if (!ctx.cwd.empty())
+		options.cwd = ctx.cwd;
+	auto s = store->create(root_ctx, std::move(sid), std::move(options));
 	ctx.current = s->id();
 	out("session: created " + ctx.current->value);
 }
