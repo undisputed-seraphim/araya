@@ -420,7 +420,9 @@ araya::task<bool> agent_service::execute_tools(
 				arguments = boost::json::value{call.arguments};
 			try {
 				auto invoked = co_await tools_->invoke(
-					call.name, tool_context{call.id, call.name, std::move(arguments), options.stop}, scope);
+					call.name,
+					tool_context{call.id, call.name, session.id().value, std::move(arguments), options.stop},
+					scope);
 				result = invoked ? std::move(*invoked) : error_result("Error: unknown tool '" + call.name + "'");
 			} catch (std::exception const& e) {
 				result = error_result(std::string("Error: ") + e.what());

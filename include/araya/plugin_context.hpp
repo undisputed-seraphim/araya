@@ -7,6 +7,8 @@
 #include "araya/plugin.hpp"
 #include "araya/service.hpp"
 
+#include <boost/asio/any_io_executor.hpp>
+
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -82,6 +84,13 @@ public:
 	}
 
 	std::stop_token stop_token() const noexcept { return act_ ? act_->stop_token() : std::stop_token{}; }
+
+	// The runtime's control-strand executor. Background work that touches
+	// any service must run here: co_spawn onto this executor to keep a
+	// task on the control strand. An empty executor for a default context.
+	boost::asio::any_io_executor executor() const noexcept {
+		return act_ && act_->bus ? act_->bus->executor() : boost::asio::any_io_executor{};
+	}
 
 	// The interception metadata merged at access (Definition 27): the
 	// component-declared metadata overlaid with the context-carried

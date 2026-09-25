@@ -33,7 +33,9 @@ target_link_libraries(araya_app PRIVATE
     araya::logger
     araya::persistence
     araya::session
+    araya::subagents
     araya::timer
+    araya::tool-subagent
     ftxui::component
     ftxui::dom
     ftxui::screen

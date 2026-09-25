@@ -3,6 +3,7 @@
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
 
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/io_context.hpp>
 
@@ -128,6 +129,20 @@ std::unique_ptr<araya::plugin> make_counting(araya::plugin_config const&) {
 	return std::make_unique<counting_plugin>();
 }
 
+// Captures the control-strand executor exposed to plugin code.
+inline boost::asio::any_io_executor g_captured;
+
+struct executor_plugin : araya::plugin {
+	araya::task<void> apply(araya::plugin_context& ctx) override {
+		g_captured = ctx.executor();
+		co_return;
+	}
+};
+
+std::unique_ptr<araya::plugin> make_executor(araya::plugin_config const&) {
+	return std::make_unique<executor_plugin>();
+}
+
 static constexpr std::span<araya::dependency_spec const> g_no_deps{};
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
 static const araya::dependency_spec g_db_dep[]{{araya::service_id{"example.db", 1}, true, {}}};
@@ -141,6 +156,7 @@ static const araya::plugin_descriptor g_desc_C{"C", g_db_dep, g_no_provs, &make_
 static const araya::plugin_descriptor g_desc_O{"O", g_db_opt, g_no_provs, &make_optional};
 static const araya::plugin_descriptor g_desc_I{"I", g_db_dep, g_no_provs, &make_impostor};
 static const araya::plugin_descriptor g_desc_D{"D", g_no_deps, g_db_prov, &make_deactivator};
+static const araya::plugin_descriptor g_desc_E{"E", g_no_deps, g_no_provs, &make_executor};
 
 std::shared_ptr<araya::plugin_descriptor> shared_desc(araya::plugin_descriptor const& d) {
 	return std::shared_ptr<araya::plugin_descriptor>(
@@ -309,4 +325,22 @@ TEST_CASE("retirement still tears dependents down (deactivation path)") {
 		CHECK(rt->state_of(c.id()) == araya::fiber_state::inactive);
 		CHECK(rt->error_of(c.id()) != nullptr);
 	});
+}
+
+TEST_CASE("plugin_context exposes the control-strand executor") {
+	boost::asio::io_context io;
+	auto rt = std::make_shared<araya::runtime>(io.get_executor());
+
+	g_captured = {};
+	run(io, [&]() -> araya::task<void> {
+		co_await rt->mount(spec(g_desc_E));
+		co_await rt->wait_idle();
+	});
+
+	REQUIRE(static_cast<bool>(g_captured));
+	CHECK(g_captured == rt->bus()->executor());
+
+	// Drop the reference before the runtime and io_context it points into
+	// are destroyed at scope exit; the global outlives both.
+	g_captured = {};
 }

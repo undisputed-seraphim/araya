@@ -10,8 +10,10 @@
 #include "araya/logger/logger.hpp"
 #include "araya/persistence/persistence.hpp"
 #include "araya/session/events.hpp"
+#include "araya/subagents/subagents.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/timer/timer.hpp"
+#include "araya/tool-subagent/tool_subagent.hpp"
 #include "araya/tools/tools.hpp"
 
 #include <boost/asio/use_awaitable.hpp>
@@ -226,8 +228,8 @@ constexpr command_entry g_commands[]{
 	{"ls", "ls", "print the fiber tree", &cmd_ls},
 	{"load",
 	 "load <component> [json config]",
-	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | agent-loop | console | beacon | "
-	 "watcher",
+	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | tools | "
+	 "agent-loop | subagents | tool-subagent | console | beacon | watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -295,6 +297,10 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::tools::plugin_descriptor();
 	if (name == "agent-loop")
 		return &araya::agent::plugin_descriptor();
+	if (name == "subagents")
+		return &araya::subagents::plugin_descriptor();
+	if (name == "tool-subagent")
+		return &araya::tool_subagent::plugin_descriptor();
 	if (name == "console")
 		return &araya::console_demo::console_descriptor();
 	if (name == "beacon")
@@ -370,6 +376,11 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	ctx.desired["system-prompt"] = desired_entry{&araya::system_prompt::plugin_descriptor(), std::move(prompt_config)};
 	ctx.desired["tools"] = desired_entry{&araya::tools::plugin_descriptor(), {}};
 	ctx.desired["agent-loop"] = desired_entry{&araya::agent::plugin_descriptor(), {}};
+	// Delegation: the subagent seam (spawn provider + continuable
+	// children) and the model-facing tools. The child route is inherited
+	// from the parent's latest request header unless configured here.
+	ctx.desired["subagents"] = desired_entry{&araya::subagents::plugin_descriptor(), {}};
+	ctx.desired["tool-subagent"] = desired_entry{&araya::tool_subagent::plugin_descriptor(), {}};
 	if (!ctx.llm_config.empty())
 		ctx.desired["llm-openai"] =
 			desired_entry{&araya::llm_openai::plugin_descriptor(), {{"config_file", ctx.llm_config}}};

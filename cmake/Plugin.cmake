@@ -33,7 +33,10 @@ function(araya_add_plugin stem)
     target_link_libraries(${target} PUBLIC ${PLUGIN_DEPS})
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        # GCC 14 false positive: awaitable frames are allocated through
+        # Boost.Asio's aligned_new and freed by the frame's own delete,
+        # which the detector cannot see across the inlining boundary.
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-mismatched-new-delete)
     endif()
 
     if(Catch2_FOUND AND PLUGIN_TEST)

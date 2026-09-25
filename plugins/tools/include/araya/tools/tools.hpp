@@ -34,6 +34,11 @@ struct tool_definition {
 struct tool_context {
 	std::string call_id;
 	std::string name;
+	// The id of the session whose agent called this tool (the harness's
+	// `exec.agent`). Lets a tool that spawns work - subagents today -
+	// establish lineage and inherit its caller's context. Empty when the
+	// invocation has no owning session (direct API use, tests).
+	std::string session;
 	// The model's arguments: parsed JSON when they were valid, the raw
 	// text as a JSON string otherwise (the harness keeps invalid JSON as
 	// text rather than dropping the call).
