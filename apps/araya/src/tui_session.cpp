@@ -148,7 +148,7 @@ ftxui::Element build_prompt(render_context const& rc, snapshot const& snap) {
 	Element meta = hbox({
 		text("tokens " + araya::app::token_count_text(tokens.input_tokens, tokens.output_tokens, tokens.has_usage)) |
 			color(dim_text()),
-		text("   " + araya::app::context_percent_text(tokens.input_tokens, tokens.context_window, tokens.has_usage)) |
+		text("   " + araya::app::context_percent_text(tokens.context_tokens, tokens.context_window, tokens.has_usage)) |
 			color(dim_text()),
 		text("   $--") | color(dim_text()),
 		filler(),
@@ -187,7 +187,7 @@ ftxui::Element build_sidebar(snapshot const& snap, tui_theme const& theme, int s
 									 snap.tokens.input_tokens, snap.tokens.output_tokens, snap.tokens.has_usage)),
 			   text(
 				   "context  " + araya::app::context_percent_text(
-									 snap.tokens.input_tokens, snap.tokens.context_window, snap.tokens.has_usage)),
+									 snap.tokens.context_tokens, snap.tokens.context_window, snap.tokens.has_usage)),
 			   text("cost     $0.00"),
 			   separatorEmpty(),
 			   section("MCP", {}),

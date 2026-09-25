@@ -19,13 +19,15 @@ inline std::string token_count_text(std::uint64_t input_tokens, std::uint64_t ou
 	return std::to_string(input_tokens) + "/" + std::to_string(output_tokens);
 }
 
-// The latest request's prompt tokens as a whole percent of the model's
-// context window, or "--%" when the usage or the window is unknown. A
-// tiny prompt against a large window reads "0%" - honest to one percent.
-inline std::string context_percent_text(std::uint64_t input_tokens, std::uint64_t context_window, bool has_usage) {
+// The full prompt's tokens as a whole percent of the model's context
+// window, or "--%" when the usage or the window is unknown. Pass the
+// whole prompt (uncached input + cache reads), not just the uncached
+// part. A tiny prompt against a large window reads "0%" - honest to one
+// percent.
+inline std::string context_percent_text(std::uint64_t context_tokens, std::uint64_t context_window, bool has_usage) {
 	if (!has_usage || context_window == 0)
 		return "--%";
-	auto const percent = (input_tokens * 100 + context_window / 2) / context_window;
+	auto const percent = (context_tokens * 100 + context_window / 2) / context_window;
 	return std::to_string(percent) + "%";
 }
 

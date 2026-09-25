@@ -47,10 +47,13 @@ struct session_row {
 
 // The latest folded model metrics: the most recent assistant/message's
 // usage and the active model's advertised context window. `has_usage`
-// is false until a settled assistant turn carries usage.
+// is false until a settled assistant turn carries usage. `context_tokens`
+// is the full prompt size (uncached input + cache reads; cache writes are
+// not yet tracked) for the context-window percentage.
 struct token_metrics {
 	std::uint64_t input_tokens = 0;
 	std::uint64_t output_tokens = 0;
+	std::uint64_t context_tokens = 0;
 	std::uint64_t context_window = 0;
 	bool has_usage = false;
 

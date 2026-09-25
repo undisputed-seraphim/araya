@@ -144,6 +144,9 @@ void fold_messages(engine_state& e) {
 			continue;
 		metrics.input_tokens = get_uint(*usage, "input_tokens");
 		metrics.output_tokens = get_uint(*usage, "output_tokens");
+		// The context fill is the whole prompt: uncached input plus the
+		// cached prefix the provider served from its prompt cache.
+		metrics.context_tokens = metrics.input_tokens + get_uint(*usage, "cache_read_tokens");
 		metrics.has_usage = true;
 	}
 	if (metrics != e.tokens) {
