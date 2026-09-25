@@ -11,7 +11,7 @@ include(CMakePackageConfigHelpers)
 include(cmake/Format.cmake)
 include(cmake/Plugin.cmake)
 
-find_package(Boost 1.83 REQUIRED)
+find_package(Boost 1.91 REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Catch2 3 QUIET)
 

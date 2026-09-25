@@ -31,7 +31,7 @@ add_executable(araya_tests
 # The util json accessors are tested here; Boost.JSON is a compiled
 # component (separate compilation), so the test binary links it.
 set(Boost_NO_BOOST_CMAKE ON)
-find_package(Boost 1.83 REQUIRED COMPONENTS json)
+find_package(Boost 1.91 REQUIRED COMPONENTS json)
 
 target_link_libraries(araya_tests PRIVATE
     araya::araya

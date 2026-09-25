@@ -3,7 +3,7 @@
 # through the agent loop and stores children in the session store; the
 # llm bridge supplies the final-output fold and settlement message.
 set(Boost_NO_BOOST_CMAKE ON)
-find_package(Boost 1.83 REQUIRED COMPONENTS json)
+find_package(Boost 1.91 REQUIRED COMPONENTS json)
 
 araya_add_plugin(subagents
     SOURCES src/subagents.cpp src/plugin.cpp

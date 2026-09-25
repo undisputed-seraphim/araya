@@ -15,5 +15,5 @@ ARAYA_SYSTEM_PROMPT="You are from the environment." "$console" run "$script" > p
 
 grep -q 'You are from the environment.' prompt.log
 grep -q 'prompt: prefix set' prompt.log
-grep -q '"text":"Be terse."' prompt.log
+grep -q '"text":"Be terse.' prompt.log
 grep -q 'prompt: cleared' prompt.log

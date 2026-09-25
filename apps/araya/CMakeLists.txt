@@ -25,6 +25,7 @@ set_target_properties(araya_app PROPERTIES
 target_link_libraries(araya_app PRIVATE
     araya::araya
     araya::agent-loop
+    araya::coreutil
     araya::demo
     araya::llm
     araya::llm-bridge
@@ -33,6 +34,7 @@ target_link_libraries(araya_app PRIVATE
     araya::logger
     araya::persistence
     araya::session
+    araya::shell
     araya::subagents
     araya::timer
     araya::tool-subagent

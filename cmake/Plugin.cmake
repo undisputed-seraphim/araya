@@ -33,10 +33,14 @@ function(araya_add_plugin stem)
     target_link_libraries(${target} PUBLIC ${PLUGIN_DEPS})
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        # GCC 14 false positive: awaitable frames are allocated through
-        # Boost.Asio's aligned_new and freed by the frame's own delete,
-        # which the detector cannot see across the inlining boundary.
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-mismatched-new-delete)
+        # GCC 14 false positives: awaitable frames are allocated through
+        # Boost.Asio's aligned_new and freed by the frame's own delete
+        # (invisible across the inlining boundary); and libstdc++'s
+        # std::regex internals trip -Wmaybe-uninitialized under the
+        # sanitizer optimization settings. Keep the warnings visible, but
+        # do not fail the build on them.
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror
+            -Wno-mismatched-new-delete -Wno-error=maybe-uninitialized)
     endif()
 
     if(Catch2_FOUND AND PLUGIN_TEST)

@@ -7,7 +7,7 @@ find_package(OpenSSL REQUIRED)
 # module-mode search so a header-only Boost elsewhere cannot shadow it
 # (same recipe as the session plugin).
 set(Boost_NO_BOOST_CMAKE ON)
-find_package(Boost 1.83 REQUIRED COMPONENTS json)
+find_package(Boost 1.91 REQUIRED COMPONENTS json)
 
 araya_add_plugin(llm
     SOURCES src/http.cpp src/llm.cpp src/plugin.cpp

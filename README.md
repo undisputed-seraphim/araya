@@ -172,7 +172,7 @@ to your own executors and return to the strand to touch the context.
 ## Building
 
 - C++23 compiler (GCC 14+ or Clang 19+)
-- Boost ≥ 1.83 (header-only Asio)
+- Boost ≥ 1.91 (header-only Asio and Boost.Process v2)
 - CMake ≥ 3.24, Ninja recommended
 - Catch2 v3 (optional, for tests)
 - Java 21 + the TLA+ tools jar (optional, for the TLC model check; the build skips it with a
