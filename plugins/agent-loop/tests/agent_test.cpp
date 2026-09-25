@@ -6,6 +6,8 @@
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
 #include "araya/session/store.hpp"
+#include "araya/system-prompt/system_prompt.hpp"
+#include "araya/tools/tools.hpp"
 #include "support/plugin_harness.hpp"
 #include "support/stream_chunks.hpp"
 
@@ -99,22 +101,38 @@ struct harness : araya_test::plugin_harness {
 
 	araya::component_spec adapter_spec() { return spec(&g_adapter_desc); }
 
+	// The harness identity is off by default so an agent test without a
+	// persona renders an empty prompt (no system message).
+	araya::component_spec system_prompt_spec(araya::plugin_config cfg = {{"include_harness_identity", "false"}}) {
+		return spec(&araya::system_prompt::plugin_descriptor(), std::move(cfg));
+	}
+
+	araya::component_spec tools_spec() { return spec(&araya::tools::plugin_descriptor()); }
+
 	araya::component_spec agent_spec(araya::plugin_config cfg = {}) {
 		return spec(&araya::agent::plugin_descriptor(), std::move(cfg));
 	}
 };
 
-// Mounts session + llm + the scripted adapter + the agent, and returns a
-// ready session plus the services.
+// Mounts session + llm + the scripted adapter + the prompt registry + the
+// tool registry + the agent, and returns a ready session plus the
+// services.
 struct rig {
 	harness& h;
 	std::shared_ptr<araya::session::session> session;
 	std::shared_ptr<agent_service> agent;
+	std::shared_ptr<araya::system_prompt::system_prompt_service> prompts;
+	std::shared_ptr<araya::tools::tools_service> tools;
 
-	araya::task<void> mount(araya::runtime& rt, araya::plugin_config agent_config = {}) {
+	araya::task<void> mount(
+		araya::runtime& rt,
+		araya::plugin_config agent_config = {},
+		araya::plugin_config prompt_config = {{"include_harness_identity", "false"}}) {
 		co_await rt.mount(h.session_spec());
 		co_await rt.mount(h.llm_spec());
 		co_await rt.mount(h.adapter_spec());
+		co_await rt.mount(h.system_prompt_spec(std::move(prompt_config)));
+		co_await rt.mount(h.tools_spec());
 		co_await rt.mount(h.agent_spec(std::move(agent_config)));
 		co_await rt.wait_idle();
 
@@ -122,6 +140,9 @@ struct rig {
 		auto store = root_ctx.require<araya::session::session_store>(araya::session::sessions_key).shared();
 		session = store->create(root_ctx, araya::session::session_id{"s1"}, {});
 		agent = root_ctx.require<agent_service>(agent_key).shared();
+		prompts = root_ctx.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key)
+					  .shared();
+		tools = root_ctx.require<araya::tools::tools_service>(araya::tools::tools_key).shared();
 	}
 };
 
@@ -185,13 +206,13 @@ run_options options_for(std::string input = "hello") {
 	return options;
 }
 
-araya::task<tool_result> echo_tool(tool_context const& ctx) {
+araya::task<araya::tools::tool_result> echo_tool(araya::tools::tool_context const& ctx) {
 	std::string text = "ok";
 	if (auto const* object = ctx.arguments.if_object()) {
 		if (auto const* x = object->if_contains("x"))
 			text += " " + std::to_string(x->as_int64());
 	}
-	co_return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, false};
+	co_return araya::tools::tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, false};
 }
 
 } // namespace
@@ -244,8 +265,10 @@ TEST_CASE("tool calls execute and feed the next step") {
 		rig r{h};
 		co_await r.mount(rt);
 		auto root_ctx = rt.root_context();
-		r.agent->register_tool(
-			root_ctx, tool_spec{"echo", "echoes x", boost::json::value{{"type", "object"}}}, &echo_tool);
+		r.tools->register_tool(
+			root_ctx,
+			araya::tools::tool_definition{"echo", "echoes x", boost::json::value{{"type", "object"}}},
+			&echo_tool);
 
 		std::vector<agent_event> events;
 		event_sink sink = [&](agent_event const& event) { events.push_back(event); };
@@ -328,10 +351,12 @@ TEST_CASE("throwing handlers record error results and continue") {
 		rig r{h};
 		co_await r.mount(rt);
 		auto root_ctx = rt.root_context();
-		r.agent->register_tool(
+		r.tools->register_tool(
 			root_ctx,
-			tool_spec{"boom", "explodes", boost::json::value(nullptr)},
-			[](tool_context const&) -> araya::task<tool_result> { throw std::runtime_error("kaboom"); });
+			araya::tools::tool_definition{"boom", "explodes", boost::json::value(nullptr)},
+			[](araya::tools::tool_context const&) -> araya::task<araya::tools::tool_result> {
+				throw std::runtime_error("kaboom");
+			});
 
 		auto outcome = co_await r.agent->run(options_for("go"), {});
 
@@ -417,7 +442,8 @@ TEST_CASE("turns number consecutively and the step cap blocks a tool loop") {
 		rig r{h};
 		co_await r.mount(rt);
 		auto root_ctx = rt.root_context();
-		r.agent->register_tool(root_ctx, tool_spec{"echo", "echoes", boost::json::value(nullptr)}, &echo_tool);
+		r.tools->register_tool(
+			root_ctx, araya::tools::tool_definition{"echo", "echoes", boost::json::value(nullptr)}, &echo_tool);
 
 		auto options = options_for("go");
 		options.max_steps = 1;
@@ -432,26 +458,33 @@ TEST_CASE("turns number consecutively and the step cap blocks a tool loop") {
 	});
 }
 
-TEST_CASE("the configured system prompt commits once; registered sections stack") {
+TEST_CASE("the prompt registry commits one effective system node") {
 	harness h;
 	h.run([&](araya::runtime& rt) -> araya::task<void> {
 		g_scripted = std::make_shared<scripted_adapter>();
-		g_scripted->script = {{text_stream("hi")}, {text_stream("hi again")}};
+		g_scripted->script = {{text_stream("hi")}, {text_stream("hi again")}, {text_stream("hi a third")}};
 		rig r{h};
-		co_await r.mount(rt, {{"system_prompt", "be helpful"}});
+		co_await r.mount(rt);
 		auto root_ctx = rt.root_context();
-		r.agent->register_system_prompt(root_ctx, "tests", [] { return std::string("extra"); });
+		r.prompts->set_persona_prefix("be helpful");
+		r.prompts->section(root_ctx, {"tests", 1000, "extra"});
 
-		CHECK(r.agent->system_prompt() == "be helpful");
 		auto first = co_await r.agent->run(options_for("first"), {});
 		CHECK(first.status == run_status::completed);
-		CHECK(count_type(*r.session, "system/message") == 2);
-		CHECK(surface_roles(*r.session) == std::vector<std::string>{"system", "system", "user", "assistant"});
-		CHECK(find_data(*r.session, "system/message", 0)->at("message").at("source").at("plugin") == "agent-loop");
-		CHECK(find_data(*r.session, "system/message", 1)->at("message").at("source").at("plugin") == "tests");
+		CHECK(count_type(*r.session, "system/message") == 1);
+		CHECK(surface_roles(*r.session) == std::vector<std::string>{"system", "user", "assistant"});
+		CHECK(find_data(*r.session, "system/message")->at("message").at("source").at("plugin") == "agent-loop");
 
-		// a second turn does not duplicate the prompts
+		// An unchanged prompt adds no node on the next turn.
 		co_await r.agent->run(options_for("two"), {});
+		CHECK(count_type(*r.session, "system/message") == 1);
+		CHECK(count_type(*r.session, "surface/replace") == 0);
+
+		// A changed prompt appends a new in-history system node.
+		r.prompts->set_persona_prefix("be terse");
+		co_await r.agent->run(options_for("three"), {});
 		CHECK(count_type(*r.session, "system/message") == 2);
+		CHECK(count_type(*r.session, "surface/replace") == 0);
+		CHECK(surface_roles(*r.session).front() == "system");
 	});
 }

@@ -10,7 +10,9 @@
 #include "araya/logger/logger.hpp"
 #include "araya/persistence/persistence.hpp"
 #include "araya/session/events.hpp"
+#include "araya/system-prompt/system_prompt.hpp"
 #include "araya/timer/timer.hpp"
+#include "araya/tools/tools.hpp"
 
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/json/value.hpp>
@@ -54,13 +56,13 @@ araya::logger::log_level parse_level(std::string_view word) {
 
 // The app's demo tool: registered at boot so the scripted agent demo has
 // something to call. Real hosts register their own tools from plugins.
-araya::task<araya::agent::tool_result> demo_echo(araya::agent::tool_context const& ctx) {
+araya::task<araya::tools::tool_result> demo_echo(araya::tools::tool_context const& ctx) {
 	std::string text;
 	if (auto const* object = ctx.arguments.if_object()) {
 		if (auto const* node = object->if_contains("text"); node && node->is_string())
 			text = std::string(node->as_string());
 	}
-	co_return araya::agent::tool_result{boost::json::array{{{"type", "text"}, {"text", "echo tool: " + text}}}, false};
+	co_return araya::tools::tool_result{boost::json::array{{{"type", "text"}, {"text", "echo tool: " + text}}}, false};
 }
 
 // -- the misc commands (timer, log) ---------------------------------------
@@ -241,6 +243,10 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::llm_openai::plugin_descriptor();
 	if (name == "llm-mock")
 		return &araya::llm_mock::plugin_descriptor();
+	if (name == "system-prompt")
+		return &araya::system_prompt::plugin_descriptor();
+	if (name == "tools")
+		return &araya::tools::plugin_descriptor();
 	if (name == "agent-loop")
 		return &araya::agent::plugin_descriptor();
 	if (name == "console")
@@ -309,8 +315,10 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	ctx.desired["session"] = desired_entry{&araya::session::plugin_descriptor(), {}};
 	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", "araya-sessions"}}};
 	ctx.desired["llm"] = desired_entry{&araya::llm::plugin_descriptor(), {}};
-	// The agent-loop's system prompt is a config option: nothing is set
-	// by default, and nothing is hardcoded in the plugin.
+	// The prompt and tool registries the agent loop assembles from. The
+	// system prompt's persona is config-only - nothing is hardcoded.
+	ctx.desired["system-prompt"] = desired_entry{&araya::system_prompt::plugin_descriptor(), {}};
+	ctx.desired["tools"] = desired_entry{&araya::tools::plugin_descriptor(), {}};
 	ctx.desired["agent-loop"] = desired_entry{&araya::agent::plugin_descriptor(), {}};
 	if (!ctx.llm_config.empty())
 		ctx.desired["llm-openai"] =
@@ -352,10 +360,10 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 		// scripted agent demo has something to call. Real hosts register
 		// their tools from plugins.
 		auto root = ctx.rt->root_context();
-		auto agent = root.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
-		agent->register_tool(
+		auto tools = root.require<araya::tools::tools_service>(araya::tools::tools_key).shared();
+		tools->register_tool(
 			root,
-			araya::agent::tool_spec{
+			araya::tools::tool_definition{
 				"echo",
 				"echoes the text argument",
 				boost::json::value{

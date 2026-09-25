@@ -4,6 +4,7 @@
 #include "araya/llm/bridge.hpp"
 #include "araya/llm/llm.hpp"
 #include "araya/session/store.hpp"
+#include "araya/tools/tools.hpp"
 #include "araya/util/overloaded.hpp"
 
 #include <boost/json/value.hpp>
@@ -252,13 +253,13 @@ araya::task<void> cmd_say(app_context& ctx, line_sink const& out, std::string co
 
 araya::task<void> cmd_tool(app_context& ctx, line_sink const& out, std::string const&) {
 	try {
-		auto agent = ctx.rt->root_context().require<araya::agent::agent_service>(araya::agent::agent_key).shared();
-		auto tools = agent->tools();
-		if (tools.empty()) {
+		auto registry = ctx.rt->root_context().require<araya::tools::tools_service>(araya::tools::tools_key).shared();
+		auto list = registry->list();
+		if (list.empty()) {
 			out("tool: no tools registered");
 			co_return;
 		}
-		for (auto const& tool : tools)
+		for (auto const& tool : list)
 			out("tool: " + tool.name + " - " + tool.description);
 	} catch (std::exception const& e) {
 		out(std::string("tool: ") + e.what());
