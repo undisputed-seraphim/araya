@@ -1,0 +1,10 @@
+/load llm-mock
+/prompt
+/prompt set Be terse.
+/prompt identity off
+/prompt
+/session new prompt-demo
+/ask say hi
+/session show
+/prompt clear
+/prompt

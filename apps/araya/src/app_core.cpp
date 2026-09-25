@@ -170,6 +170,51 @@ araya::task<void> cmd_log(app_context& ctx, line_sink const& out, std::string co
 
 // -- the command table ----------------------------------------------------
 
+araya::task<void> cmd_prompt(app_context& ctx, line_sink const& out, std::string const& line) {
+	try {
+		auto prompts =
+			ctx.rt->root_context()
+				.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key)
+				.shared();
+		std::istringstream is(line);
+		std::string cmd;
+		std::string sub;
+		is >> cmd >> sub;
+		if (sub.empty() || sub == "show") {
+			out("prompt: prefix \"" + prompts->persona_prefix() + "\"");
+			out("prompt: suffix \"" + prompts->persona_suffix() + "\"");
+		} else if (sub == "set") {
+			std::string text;
+			std::getline(is, text);
+			prompts->set_persona_prefix(trim(text));
+			out("prompt: prefix set");
+		} else if (sub == "suffix") {
+			std::string text;
+			std::getline(is, text);
+			prompts->set_persona_suffix(trim(text));
+			out("prompt: suffix set");
+		} else if (sub == "clear") {
+			prompts->set_persona_prefix("");
+			prompts->set_persona_suffix("");
+			out("prompt: cleared");
+		} else if (sub == "identity") {
+			std::string value;
+			is >> value;
+			if (value != "on" && value != "off") {
+				out("prompt: usage: prompt identity on|off");
+				co_return;
+			}
+			prompts->set_include_harness_identity(value == "on");
+			out(std::string("prompt: identity ") + value);
+		} else {
+			out("prompt: show | set <text> | suffix <text> | identity on|off | clear");
+		}
+	} catch (std::exception const& e) {
+		out(std::string("prompt: ") + e.what());
+	}
+	co_return;
+}
+
 struct command_entry {
 	std::string_view name;
 	std::string_view usage;
@@ -194,6 +239,7 @@ constexpr command_entry g_commands[]{
 	 &cmd_session},
 	{"timer", "timer ...", "in <sec> <text> | every <sec> <text> | cancel", &cmd_timer},
 	{"log", "log ...", "level <level> | <level> <text>", &cmd_log},
+	{"prompt", "prompt ...", "show | set <text> | suffix <text> | identity on|off | clear", &cmd_prompt},
 	{"tool", "tool", "list the agent's registered tools", &cmd_tool},
 	{"ask", "ask <text>", "run the agent loop (tools + system prompt)", &cmd_ask},
 	{"chat", "chat <text>", "one-shot prompt through the llm service", &cmd_chat},
@@ -316,8 +362,12 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", "araya-sessions"}}};
 	ctx.desired["llm"] = desired_entry{&araya::llm::plugin_descriptor(), {}};
 	// The prompt and tool registries the agent loop assembles from. The
-	// system prompt's persona is config-only - nothing is hardcoded.
-	ctx.desired["system-prompt"] = desired_entry{&araya::system_prompt::plugin_descriptor(), {}};
+	// system prompt's persona is config-only - nothing is hardcoded; the
+	// ARAYA_SYSTEM_PROMPT environment variable seeds the prefix.
+	araya::plugin_config prompt_config;
+	if (auto const* env = std::getenv("ARAYA_SYSTEM_PROMPT"); env && *env)
+		prompt_config["persona_prefix"] = env;
+	ctx.desired["system-prompt"] = desired_entry{&araya::system_prompt::plugin_descriptor(), std::move(prompt_config)};
 	ctx.desired["tools"] = desired_entry{&araya::tools::plugin_descriptor(), {}};
 	ctx.desired["agent-loop"] = desired_entry{&araya::agent::plugin_descriptor(), {}};
 	if (!ctx.llm_config.empty())

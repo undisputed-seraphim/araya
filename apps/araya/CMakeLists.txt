@@ -81,6 +81,12 @@ if(CMAKE_TESTING_ENABLED)
             ${CMAKE_CURRENT_SOURCE_DIR}/demo/restore.txt)
     set_tests_properties(restore_cycle PROPERTIES TIMEOUT 60)
 
+    add_test(NAME prompt_cycle
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/demo/prompt-cycle.sh
+            $<TARGET_FILE:araya_app>
+            ${CMAKE_CURRENT_SOURCE_DIR}/demo/prompt.txt)
+    set_tests_properties(prompt_cycle PROPERTIES TIMEOUT 60)
+
     # The pure input-routing helpers (no plugins, no app library).
     add_executable(araya_app_tests tests/route_test.cpp)
     target_include_directories(araya_app_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
