@@ -28,14 +28,9 @@ add_executable(araya_tests
     version_test.cpp
 )
 
-# The util json accessors are tested here; Boost.JSON is a compiled
-# component (separate compilation), so the test binary links it.
-set(Boost_NO_BOOST_CMAKE ON)
-find_package(Boost 1.91 REQUIRED COMPONENTS json)
-
+# Boost.JSON rides araya::araya's PUBLIC link interface.
 target_link_libraries(araya_tests PRIVATE
     araya::araya
-    Boost::json
     Catch2::Catch2WithMain
     ${CMAKE_DL_LIBS}
 )
@@ -46,9 +41,7 @@ target_compile_definitions(araya_tests PRIVATE
     TEST_MODULE_PATH="$<TARGET_FILE:araya_test_module>"
 )
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(araya_tests PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+araya_enable_warnings(araya_tests)
 
 include(Catch)
 catch_discover_tests(araya_tests)

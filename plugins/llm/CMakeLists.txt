@@ -3,14 +3,8 @@
 # provides the shared libraries (dynamic linking, revisit later).
 find_package(OpenSSL REQUIRED)
 
-# boost::json::value is a header type with a compiled implementation;
-# module-mode search so a header-only Boost elsewhere cannot shadow it
-# (same recipe as the session plugin).
-set(Boost_NO_BOOST_CMAKE ON)
-find_package(Boost 1.91 REQUIRED COMPONENTS json)
-
 araya_add_plugin(llm
     SOURCES src/http.cpp src/llm.cpp src/plugin.cpp
-    DEPS araya::araya Boost::json OpenSSL::SSL OpenSSL::Crypto
+    DEPS araya::araya OpenSSL::SSL OpenSSL::Crypto
     TEST tests/llm_test.cpp
 )

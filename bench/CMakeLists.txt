@@ -11,9 +11,7 @@ target_link_libraries(araya_bench PRIVATE
     araya::timer
 )
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(araya_bench PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+araya_enable_warnings(araya_bench)
 
 # Link gperftools so CPUPROFILE/HEAPPROFILE work without LD_PRELOAD.
 # The combined library is preferred: linking libprofiler and libtcmalloc

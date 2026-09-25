@@ -43,21 +43,13 @@ target_link_libraries(araya_app PRIVATE
     ftxui::screen
 )
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(araya_app PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    # GCC 14 false positive (same as the engine library): awaitable
-    # frames are allocated through Boost.Asio's aligned_new
-    # (aligned_alloc) and released through the matching
-    # awaitable_frame_base::operator delete, which the mismatch
-    # detector cannot see across the inlining boundary at -O2.
-    target_compile_options(araya_app PRIVATE -Wno-mismatched-new-delete)
-endif()
+araya_enable_warnings(araya_app WERROR)
 
 install(TARGETS araya_app
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-if(CMAKE_TESTING_ENABLED)
+if(ARAYA_TESTING)
     add_test(NAME script_demo
         COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/demo.txt)
     set_tests_properties(script_demo PROPERTIES TIMEOUT 60)
@@ -92,12 +84,8 @@ if(CMAKE_TESTING_ENABLED)
     set_tests_properties(prompt_cycle PROPERTIES TIMEOUT 60)
 
     # The pure input-routing helpers (no plugins, no app library).
-    add_executable(araya_app_tests tests/route_test.cpp)
-    target_include_directories(araya_app_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(araya_app_tests PRIVATE Catch2::Catch2WithMain)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(araya_app_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    endif()
-    include(Catch)
-    catch_discover_tests(araya_app_tests)
+    araya_add_test(araya_app_tests
+        SOURCES tests/route_test.cpp
+        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
 endif()

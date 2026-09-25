@@ -1,13 +1,10 @@
 # The one-shot bash tool over Boost.Process v2: async pipe capture on the
 # control strand, with exit-code/signal/timeout markers and cooperative
-# cancellation. The child route resolves relative workdirs against the
-# calling session's cwd.
-set(Boost_NO_BOOST_CMAKE ON)
-find_package(Boost 1.91 REQUIRED COMPONENTS json process filesystem)
-
+# cancellation. Boost.Process is the only consumer of the process/filesystem
+# components (found at the root). araya::tools supplies the tool registry
+# and the system-prompt registry, araya::session the calling session's cwd.
 araya_add_plugin(shell
     SOURCES src/shell.cpp
-    DEPS araya::session araya::system-prompt araya::tools Boost::json Boost::process Boost::filesystem
+    DEPS araya::session araya::tools Boost::process Boost::filesystem
     TEST tests/shell_test.cpp
-    TEST_DEPS araya::session araya::system-prompt araya::tools
 )

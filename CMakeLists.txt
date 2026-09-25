@@ -9,11 +9,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(cmake/Format.cmake)
+include(cmake/Warnings.cmake)
+include(cmake/Testing.cmake)
 include(cmake/Plugin.cmake)
-
-find_package(Boost 1.91 REQUIRED)
-find_package(Threads REQUIRED)
-find_package(Catch2 3 QUIET)
 
 option(ARAYA_ENFORCE_INVARIANTS
     "Check engine invariants even in release builds (violations throw)"
@@ -30,6 +28,31 @@ option(ARAYA_BUILD_BENCH
 option(ARAYA_BUILD_APP
     "Build the unified araya application (console + TUI; requires plugins)"
     ON)
+
+option(ARAYA_BUILD_TESTS
+    "Build the Catch2 test suites (requires Catch2)"
+    ON)
+
+# Boost is discovered once. Boost.JSON is a compiled component and the
+# engine's public util/json.hpp depends on it, so it rides the engine's
+# PUBLIC link interface. Boost.Process v2 and Boost.Filesystem are only
+# used by the shell plugin, so they are required only when plugins are
+# built. Module mode (Boost_NO_BOOST_CMAKE) keeps a header-only Boost
+# elsewhere from shadowing the compiled components.
+set(ARAYA_BOOST_MIN 1.91)
+set(Boost_NO_BOOST_CMAKE ON)
+if(ARAYA_BUILD_PLUGINS)
+    find_package(Boost ${ARAYA_BOOST_MIN} REQUIRED COMPONENTS json process filesystem)
+else()
+    find_package(Boost ${ARAYA_BOOST_MIN} REQUIRED COMPONENTS json)
+endif()
+find_package(Threads REQUIRED)
+find_package(Catch2 3 QUIET)
+
+set(ARAYA_TESTING OFF)
+if(Catch2_FOUND AND ARAYA_BUILD_TESTS)
+    set(ARAYA_TESTING ON)
+endif()
 
 add_library(araya STATIC
     src/abi_host.cpp
@@ -55,23 +78,16 @@ target_include_directories(araya PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
-target_link_libraries(araya PUBLIC Boost::boost Threads::Threads)
+target_link_libraries(araya PUBLIC Boost::boost Boost::json Threads::Threads)
+
+araya_enable_warnings(araya WERROR)
 
 if(ARAYA_ENFORCE_INVARIANTS)
     target_compile_definitions(araya
         PUBLIC ARAYA_ENFORCE_INVARIANTS)
 endif()
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(araya PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    # GCC 14 false positive: awaitable frames are allocated through
-    # Boost.Asio's aligned_new (aligned_alloc) and released through the
-    # matching awaitable_frame_base::operator delete, which the
-    # mismatch detector cannot see across the inlining boundary at -O2.
-    target_compile_options(araya PRIVATE -Wno-mismatched-new-delete)
-endif()
-
-if(Catch2_FOUND)
+if(ARAYA_TESTING)
     # Shared test-support headers (the runtime harness, the llm chunk
     # builders); an INTERFACE target so plugin tests reach them through
     # one dependency.
