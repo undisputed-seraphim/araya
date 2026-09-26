@@ -12,8 +12,11 @@
 #include <boost/json/value.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -26,6 +29,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include <sys/wait.h>
 
 namespace araya::coreutil {
 namespace {
@@ -43,6 +48,7 @@ constexpr araya::config_key<std::uint64_t> read_max_line_key{"read_max_line_leng
 constexpr araya::config_key<std::uint64_t> glob_max_key{"glob_max_results"};
 constexpr araya::config_key<std::uint64_t> grep_max_key{"grep_max_matches"};
 constexpr araya::config_key<std::uint64_t> grep_max_line_key{"grep_max_line_bytes"};
+constexpr araya::config_key<std::uint64_t> spill_bytes_key{"spill_threshold_bytes"};
 constexpr araya::config_key<std::string> disabled_key{"disabled"};
 
 struct coreutil_config {
@@ -51,6 +57,8 @@ struct coreutil_config {
 	std::size_t glob_max = 100;
 	std::size_t grep_max = 250;
 	std::size_t grep_max_line = 2000;
+	// Complete search output above this many bytes spills to a file.
+	std::size_t spill_bytes = 200'000;
 	// Comma-separated tool names to leave unregistered.
 	std::vector<std::string> disabled;
 };
@@ -68,6 +76,8 @@ coreutil_config parse_config(araya::plugin_config const& config) {
 		out.grep_max = static_cast<std::size_t>(*value);
 	if (auto value = view.try_get(grep_max_line_key))
 		out.grep_max_line = static_cast<std::size_t>(*value);
+	if (auto value = view.try_get(spill_bytes_key))
+		out.spill_bytes = static_cast<std::size_t>(*value);
 	if (auto value = view.try_get(disabled_key)) {
 		std::stringstream stream(*value);
 		std::string item;
@@ -515,6 +525,94 @@ araya::task<tool_result> handle_edit(
 					: "The file " + file_path + " has been updated successfully.");
 }
 
+// -- ripgrep backend + spill -----------------------------------------------
+
+std::string shell_quote(std::string const& value) {
+	std::string out = "'";
+	for (char const c : value) {
+		if (c == '\'')
+			out += "'\\''";
+		else
+			out.push_back(c);
+	}
+	out += "'";
+	return out;
+}
+
+// Whether a `rg` binary is on PATH. Result is cached for the process.
+bool rg_available() {
+	static bool const available = [] {
+		auto const* path = std::getenv("PATH");
+		if (!path)
+			return false;
+		std::string_view view(path);
+		std::size_t start = 0;
+		while (start <= view.size()) {
+			auto const end = view.find(':', start);
+			auto const dir = view.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+			std::error_code ec;
+			if (!dir.empty() && fs::is_regular_file(fs::path(std::string(dir)) / "rg", ec))
+				return true;
+			if (end == std::string_view::npos)
+				break;
+			start = end + 1;
+		}
+		return false;
+	}();
+	return available;
+}
+
+struct command_result {
+	int status = -1; // exit code, or -1 on failure to run
+	std::string output;
+	bool truncated = false;
+};
+
+// Run a shell command synchronously and capture its stdout up to `cap` bytes.
+// The command string is built entirely from shell_quote'd arguments.
+command_result run_command(std::string const& command, std::size_t cap) {
+	command_result result;
+	FILE* pipe = ::popen(command.c_str(), "r");
+	if (!pipe)
+		return result;
+	std::array<char, 16384> buffer{};
+	for (;;) {
+		auto const read = std::fread(buffer.data(), 1, buffer.size(), pipe);
+		if (read == 0)
+			break;
+		if (result.output.size() < cap) {
+			auto const keep = std::min<std::size_t>(read, cap - result.output.size());
+			result.output.append(buffer.data(), keep);
+			if (keep < read)
+				result.truncated = true;
+		} else {
+			result.truncated = true;
+		}
+	}
+	auto const code = ::pclose(pipe);
+	if (code != -1 && WIFEXITED(code))
+		result.status = WEXITSTATUS(code);
+	return result;
+}
+
+// Persist complete search output to a file and return its path.
+std::optional<fs::path> write_spill(std::string const& text, std::string const& kind) {
+	std::error_code ec;
+	auto root = fs::temp_directory_path(ec) / "araya-spill";
+	if (ec)
+		return std::nullopt;
+	fs::create_directories(root, ec);
+	if (ec)
+		return std::nullopt;
+	auto const stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+	auto const path = root / (kind + "-" + std::to_string(stamp) + ".txt");
+	std::ofstream stream(path, std::ios::binary);
+	if (!stream)
+		return std::nullopt;
+	stream << text;
+	return path;
+}
+
 araya::task<tool_result>
 handle_glob(std::shared_ptr<araya::session::session_store> store, coreutil_config config, tool_context const& ctx) {
 	auto const* args = ctx.arguments.if_object();
@@ -552,8 +650,13 @@ handle_glob(std::shared_ptr<araya::session::session_store> store, coreutil_confi
 	if (matches.empty())
 		co_return text_result("No files found");
 	if (matches.size() > config.glob_max) {
+		std::string full;
+		for (auto const& match : matches)
+			full += relative_display(root, match) + "\n";
 		body += "\n\n(Showing " + std::to_string(shown) + " of " + std::to_string(matches.size()) +
 				" paths in modification-time order; narrow the pattern or path to see more.)";
+		if (auto path = write_spill(full, "glob"))
+			body += "\nComplete result: " + path->string();
 	}
 	co_return text_result(std::move(body));
 }
@@ -567,18 +670,93 @@ handle_grep(std::shared_ptr<araya::session::session_store> store, coreutil_confi
 	auto const raw_path = args ? araya::util::json::get_string(*args, "path") : std::string{};
 	auto const include = args ? araya::util::json::get_string(*args, "include") : std::string{};
 
+	fs::path const root =
+		raw_path.empty() ? resolve_path(*store, ctx.session, ".") : resolve_path(*store, ctx.session, raw_path);
+	std::error_code ec;
+	if (!fs::exists(root, ec))
+		co_return error_result("Error: grep path does not exist: " + root.string());
+
+	// Prefer the real ripgrep backend when available (ripgrep regex syntax,
+	// ignore-file aware, fast); fall back to the native ECMAScript matcher.
+	if (rg_available()) {
+		std::string command = "rg --line-number --no-heading --with-filename --color never";
+		command += " -e " + shell_quote(pattern);
+		if (!include.empty())
+			command += " -g " + shell_quote(include);
+		command += " -- " + shell_quote(root.string()) + " 2>/dev/null";
+		auto const rg = run_command(command, std::max<std::size_t>(config.spill_bytes, 4 * 1024 * 1024));
+		if (rg.status == 0 || rg.status == 1) {
+			if (rg.status == 1)
+				co_return text_result("No matches found");
+			struct rg_match {
+				std::string path;
+				std::size_t line;
+				std::string text;
+			};
+			std::vector<rg_match> matches;
+			std::size_t seen = 0;
+			bool capped = rg.truncated;
+			std::size_t start = 0;
+			while (start <= rg.output.size()) {
+				auto const end = rg.output.find('\n', start);
+				auto const line = std::string_view(rg.output).substr(
+					start, end == std::string::npos ? std::string_view::npos : end - start);
+				start = end == std::string::npos ? rg.output.size() + 1 : end + 1;
+				if (line.empty())
+					continue;
+				auto const first = line.find(':');
+				if (first == std::string_view::npos)
+					continue;
+				auto const second = line.find(':', first + 1);
+				if (second == std::string_view::npos)
+					continue;
+				++seen;
+				if (matches.size() >= config.grep_max) {
+					capped = true;
+					continue;
+				}
+				auto const file_path = std::string(line.substr(0, first));
+				auto const line_no =
+					std::strtoull(std::string(line.substr(first + 1, second - first - 1)).c_str(), nullptr, 10);
+				std::string text(line.substr(second + 1));
+				if (text.size() > config.grep_max_line)
+					text.resize(config.grep_max_line);
+				auto const display = fs::is_regular_file(root, ec) ? (raw_path.empty() ? file_path : raw_path)
+																   : relative_display(root, fs::path(file_path));
+				matches.push_back(rg_match{display, static_cast<std::size_t>(line_no), std::move(text)});
+			}
+			if (seen == 0)
+				co_return text_result("No matches found");
+			std::string body;
+			std::string current;
+			for (auto const& m : matches) {
+				if (m.path != current) {
+					if (!body.empty())
+						body += "\n\n";
+					body += m.path;
+					current = m.path;
+				}
+				body += "\nLine " + std::to_string(m.line) + ": " + m.text;
+			}
+			std::string const header =
+				capped ? "Found " + std::to_string(matches.size()) + " of " + std::to_string(seen) + " matches"
+					   : "Found " + std::to_string(seen) + (seen == 1 ? " match" : " matches");
+			std::string out = header + "\n\n" + body;
+			if (capped) {
+				out += "\n\n(Output truncated; narrow the pattern, path, or include to see more.)";
+				if (auto path = write_spill(rg.output, "grep"))
+					out += "\nComplete result: " + path->string();
+			}
+			co_return text_result(std::move(out));
+		}
+	}
+
 	std::regex re;
 	try {
 		re = std::regex(pattern, std::regex::ECMAScript);
 	} catch (std::regex_error const& e) {
 		co_return error_result(std::string("Error: invalid regular expression: ") + e.what());
 	}
-
-	fs::path const root =
-		raw_path.empty() ? resolve_path(*store, ctx.session, ".") : resolve_path(*store, ctx.session, raw_path);
-	std::error_code ec;
-	if (!fs::exists(root, ec))
-		co_return error_result("Error: grep path does not exist: " + root.string());
 
 	std::vector<fs::path> files;
 	if (fs::is_regular_file(root, ec)) {
@@ -641,8 +819,11 @@ handle_grep(std::shared_ptr<araya::session::session_store> store, coreutil_confi
 								   ? "Found " + std::to_string(all.size()) + " of " + std::to_string(seen) + " matches"
 								   : "Found " + std::to_string(seen) + (seen == 1 ? " match" : " matches");
 	std::string out = header + "\n\n" + body;
-	if (capped)
-		out += "\n\n(The complete result was not retained; narrow the pattern, path, or include to see more.)";
+	if (capped) {
+		out += "\n\n(Output truncated; narrow the pattern, path, or include to see more.)";
+		if (auto path = write_spill(body, "grep"))
+			out += "\nComplete result: " + path->string();
+	}
 	co_return text_result(std::move(out));
 }
 

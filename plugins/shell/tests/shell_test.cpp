@@ -20,8 +20,10 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stop_token>
 #include <string>
 
@@ -48,14 +50,18 @@ struct rig {
 	std::shared_ptr<tools_service> tools;
 	std::shared_ptr<araya::jobs::jobs_service> jobs;
 	std::string session = "s1";
-
-	araya::task<void> mount(araya::runtime& rt, harness& h, std::filesystem::path const& cwd, bool with_jobs = false) {
+	araya::task<void> mount(
+		araya::runtime& rt,
+		harness& h,
+		std::filesystem::path const& cwd,
+		bool with_jobs = false,
+		araya::plugin_config shell_cfg = {}) {
 		co_await rt.mount(h.session_spec());
 		co_await rt.mount(h.prompt_spec());
 		co_await rt.mount(h.tools_spec());
 		if (with_jobs)
 			co_await rt.mount(h.jobs_spec());
-		co_await rt.mount(h.shell_spec());
+		co_await rt.mount(h.shell_spec(std::move(shell_cfg)));
 		co_await rt.wait_idle();
 		auto root = rt.root_context();
 		auto store = root.require<araya::session::session_store>(araya::session::sessions_key).shared();
@@ -196,6 +202,31 @@ TEST_CASE("bash run_in_background registers a job that can be read, waited on, a
 		CHECK(r.jobs->kill("bash-2", std::string{"s1"}, "done") == araya::jobs::jobs_service::kill_result::requested);
 		auto killed = co_await r.jobs->wait("bash-2", 5000, std::string{"s1"}, {});
 		CHECK(killed.status == araya::jobs::job_status::killed);
+	});
+}
+
+TEST_CASE("bash spills truncated output to a file") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r;
+		co_await r.mount(rt, h, std::filesystem::current_path(), /*with_jobs=*/false, {{"max_output_bytes", "16"}});
+		auto out = co_await r.call("printf 'abcdefghijklmnopqrstuvwxyz'");
+		REQUIRE(out.has_value());
+		CHECK_FALSE(out->is_error);
+		auto text = text_of(*out);
+		CHECK(text.find("truncated") != std::string::npos);
+		auto const marker = text.find("[full stdout: ");
+		REQUIRE(marker != std::string::npos);
+		auto path = text.substr(marker + std::string("[full stdout: ").size());
+		if (auto const bracket = path.find(']'); bracket != std::string::npos)
+			path.resize(bracket);
+		REQUIRE(std::filesystem::exists(path));
+		std::ifstream stream(path, std::ios::binary);
+		std::stringstream buffer;
+		buffer << stream.rdbuf();
+		CHECK(buffer.str() == "abcdefghijklmnopqrstuvwxyz");
+		std::error_code ec;
+		std::filesystem::remove(path, ec);
 	});
 }
 

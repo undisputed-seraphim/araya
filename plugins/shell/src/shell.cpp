@@ -30,6 +30,7 @@
 #include <csignal>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <span>
@@ -43,6 +44,7 @@ namespace araya::shell {
 namespace {
 
 namespace bp = boost::process::v2;
+namespace fs = std::filesystem;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -54,12 +56,15 @@ constexpr araya::config_key<std::uint64_t> timeout_key{"timeout_ms"};
 constexpr araya::config_key<std::uint64_t> max_output_key{"max_output_bytes"};
 constexpr araya::config_key<std::string> shell_key{"shell"};
 constexpr araya::config_key<bool> background_key{"enable_run_in_background"};
+constexpr araya::config_key<std::uint64_t> spill_max_key{"spill_max_bytes"};
 
 struct shell_config {
 	std::uint64_t timeout_ms = 30000;
 	std::size_t max_output = 100'000;
 	std::string shell = "/bin/bash";
 	bool enable_run_in_background = true;
+	// Per-stream cap on the full-output spill file.
+	std::size_t spill_max = 64 * 1024 * 1024;
 };
 
 shell_config parse_config(araya::plugin_config const& config) {
@@ -73,6 +78,8 @@ shell_config parse_config(araya::plugin_config const& config) {
 		out.shell = *value;
 	if (auto value = view.try_get(background_key))
 		out.enable_run_in_background = *value;
+	if (auto value = view.try_get(spill_max_key))
+		out.spill_max = static_cast<std::size_t>(*value);
 	return out;
 }
 
@@ -84,6 +91,9 @@ struct shell_result {
 	std::string stderr_text;
 	std::size_t stdout_dropped = 0;
 	std::size_t stderr_dropped = 0;
+	// Paths to the full-output spill files when a stream overflowed.
+	std::string stdout_spill;
+	std::string stderr_spill;
 	int exit_code = 0;
 	int signal = 0;
 	std::string error;
@@ -106,7 +116,53 @@ void kill_process(watch_state& state) {
 		::kill(pid, SIGKILL);
 }
 
-awaitable<void> drain(readable_pipe& pipe, std::string& out, std::size_t cap, std::size_t& dropped) {
+// Retains a stream's overflow in a temp file so truncation never loses the
+// full output; the file is opened lazily on the first dropped byte and capped
+// at `limit`.
+struct spill_writer {
+	std::string kind;
+	std::size_t limit = 0;
+	fs::path path;
+	std::ofstream stream;
+	std::size_t written = 0;
+	bool prefix_written = false;
+
+	// Record the already-buffered prefix once, so the spill file is the
+	// complete stream (in-memory head plus overflow).
+	void write_prefix(std::string const& prefix) {
+		if (prefix_written)
+			return;
+		prefix_written = true;
+		write(prefix.data(), prefix.size());
+	}
+
+	void write(char const* data, std::size_t size) {
+		if (written >= limit || size == 0)
+			return;
+		if (!stream.is_open()) {
+			std::error_code ec;
+			auto root = fs::temp_directory_path(ec) / "araya-spill";
+			if (ec)
+				return;
+			fs::create_directories(root, ec);
+			if (ec)
+				return;
+			auto const stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+			path = root / (kind + "-" + std::to_string(stamp) + ".txt");
+			stream.open(path, std::ios::binary);
+			if (!stream) {
+				path.clear();
+				return;
+			}
+		}
+		auto const keep = std::min(size, limit - written);
+		stream.write(data, static_cast<std::streamsize>(keep));
+		written += keep;
+	}
+};
+
+awaitable<void>
+drain(readable_pipe& pipe, std::string& out, std::size_t cap, std::size_t& dropped, spill_writer* spill = nullptr) {
 	std::array<char, 16384> buffer{};
 	for (;;) {
 		boost::system::error_code ec;
@@ -117,9 +173,19 @@ awaitable<void> drain(readable_pipe& pipe, std::string& out, std::size_t cap, st
 		if (out.size() < cap) {
 			auto const keep = std::min<std::size_t>(read, cap - out.size());
 			out.append(buffer.data(), keep);
-			dropped += read - keep;
+			if (keep < read) {
+				dropped += read - keep;
+				if (spill) {
+					spill->write_prefix(out);
+					spill->write(buffer.data() + keep, read - keep);
+				}
+			}
 		} else {
 			dropped += read;
+			if (spill) {
+				spill->write_prefix(out);
+				spill->write(buffer.data(), read);
+			}
 		}
 	}
 	co_return;
@@ -275,10 +341,18 @@ awaitable<shell_result> run_shell(
 	// Caller cancellation: kill the child and let the pipes close.
 	std::stop_callback cancel(stop, [state] { kill_process(*state); });
 
+	spill_writer stdout_spill;
+	stdout_spill.kind = "stdout";
+	stdout_spill.limit = config.spill_max;
+	spill_writer stderr_spill;
+	stderr_spill.kind = "stderr";
+	stderr_spill.limit = config.spill_max;
 	using namespace boost::asio::experimental::awaitable_operators;
 	co_await (
-		drain(out, result.stdout_text, config.max_output, result.stdout_dropped) &&
-		drain(err, result.stderr_text, config.max_output, result.stderr_dropped));
+		drain(out, result.stdout_text, config.max_output, result.stdout_dropped, &stdout_spill) &&
+		drain(err, result.stderr_text, config.max_output, result.stderr_dropped, &stderr_spill));
+	result.stdout_spill = stdout_spill.path.string();
+	result.stderr_spill = stderr_spill.path.string();
 
 	boost::system::error_code wait_ec;
 	co_await process->async_wait(boost::asio::redirect_error(boost::asio::use_awaitable, wait_ec));
@@ -412,6 +486,10 @@ araya::task<tool_result> handle_bash(
 	std::vector<std::string> markers;
 	if (result.stdout_dropped > 0 || result.stderr_dropped > 0)
 		markers.push_back(truncation_notice(result.stdout_dropped + result.stderr_dropped));
+	if (!result.stdout_spill.empty())
+		markers.push_back("[full stdout: " + result.stdout_spill + "]");
+	if (!result.stderr_spill.empty())
+		markers.push_back("[full stderr: " + result.stderr_spill + "]");
 	if (result.timed_out)
 		markers.push_back("[timed out after " + std::to_string(config.timeout_ms) + "ms]");
 	if (result.signal != 0)

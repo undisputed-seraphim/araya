@@ -60,13 +60,18 @@ struct rig {
 	std::shared_ptr<tools_service> tools;
 	std::string session = "s1";
 
-	araya::task<void> mount(araya::runtime& rt, harness& h, fs::path const& cwd, bool with_policy = false) {
+	araya::task<void> mount(
+		araya::runtime& rt,
+		harness& h,
+		fs::path const& cwd,
+		bool with_policy = false,
+		araya::plugin_config core_cfg = {}) {
 		co_await rt.mount(h.session_spec());
 		co_await rt.mount(h.prompt_spec());
 		co_await rt.mount(h.tools_spec());
 		if (with_policy)
 			co_await rt.mount(h.policy_spec());
-		co_await rt.mount(h.coreutil_spec());
+		co_await rt.mount(h.coreutil_spec(std::move(core_cfg)));
 		co_await rt.wait_idle();
 		auto root = rt.root_context();
 		store = root.require<araya::session::session_store>(araya::session::sessions_key).shared();
@@ -212,6 +217,30 @@ TEST_CASE("glob matches by path and grep finds lines") {
 		REQUIRE(bad.has_value());
 		CHECK(bad->is_error);
 		CHECK(text_of(*bad).find("invalid regular expression") != std::string::npos);
+	});
+}
+
+TEST_CASE("grep spills a capped result to a file") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		scratch ws;
+		rig r;
+		co_await r.mount(rt, h, ws.dir, /*with_policy=*/false, {{"grep_max_matches", "2"}});
+		co_await r.call("write", {{"file_path", "many.txt"}, {"content", "alpha\nalpha\nalpha\nalpha\n"}});
+
+		auto out = co_await r.call("grep", {{"pattern", "alpha"}});
+		REQUIRE(out.has_value());
+		CHECK_FALSE(out->is_error);
+		auto text = text_of(*out);
+		CHECK(text.find("truncated") != std::string::npos);
+		auto const marker = text.find("Complete result: ");
+		REQUIRE(marker != std::string::npos);
+		auto path = text.substr(marker + std::string("Complete result: ").size());
+		if (auto const nl = path.find('\n'); nl != std::string::npos)
+			path.resize(nl);
+		CHECK(fs::exists(path));
+		std::error_code ec;
+		fs::remove(path, ec);
 	});
 }
 
