@@ -15,10 +15,12 @@
 #include "araya/persistence/persistence.hpp"
 #include "araya/session/events.hpp"
 #include "araya/shell/shell.hpp"
+#include "araya/skill/skill.hpp"
 #include "araya/subagents/subagents.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/timer/timer.hpp"
 #include "araya/tool-jobs/tool_jobs.hpp"
+#include "araya/tool-skill/tool_skill.hpp"
 #include "araya/tool-subagent/tool_subagent.hpp"
 #include "araya/tool-todo/tool_todo.hpp"
 #include "araya/tools/tools.hpp"
@@ -236,8 +238,8 @@ constexpr command_entry g_commands[]{
 	{"load",
 	 "load <component> [json config]",
 	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
-	 "agent-instructions | tools | tool-todo | agent-loop | coreutil | fs-observation-policy | jobs | shell | "
-	 "tool-jobs | subagents | tool-subagent | console | beacon | watcher",
+	 "agent-instructions | tools | tool-todo | agent-loop | coreutil | fs-observation-policy | jobs | skill | shell "
+	 "| tool-jobs | tool-skill | subagents | tool-subagent | console | beacon | watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -315,10 +317,14 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::fs_observation_policy::plugin_descriptor();
 	if (name == "jobs")
 		return &araya::jobs::plugin_descriptor();
+	if (name == "skill")
+		return &araya::skill::plugin_descriptor();
 	if (name == "shell")
 		return &araya::shell::plugin_descriptor();
 	if (name == "tool-jobs")
 		return &araya::tool_jobs::plugin_descriptor();
+	if (name == "tool-skill")
+		return &araya::tool_skill::plugin_descriptor();
 	if (name == "subagents")
 		return &araya::subagents::plugin_descriptor();
 	if (name == "tool-subagent")
@@ -411,6 +417,10 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// load attaches the controller producers need.
 	ctx.desired["jobs"] = desired_entry{&araya::jobs::plugin_descriptor(), {}};
 	ctx.desired["tool-jobs"] = desired_entry{&araya::tool_jobs::plugin_descriptor(), {}};
+	// Skills: the local filesystem registry, then the model-facing loader
+	// and its session catalog section.
+	ctx.desired["skill"] = desired_entry{&araya::skill::plugin_descriptor(), {}};
+	ctx.desired["tool-skill"] = desired_entry{&araya::tool_skill::plugin_descriptor(), {}};
 	// The built-in file/search tools and the one-shot shell tool. The
 	// shell resolves relative workdirs against the session cwd; its
 	// run_in_background path registers with the jobs registry.

@@ -38,9 +38,11 @@ target_link_libraries(araya_app PRIVATE
     araya::persistence
     araya::session
     araya::shell
+    araya::skill
     araya::subagents
     araya::timer
     araya::tool-jobs
+    araya::tool-skill
     araya::tool-subagent
     araya::tool-todo
     ftxui::component
