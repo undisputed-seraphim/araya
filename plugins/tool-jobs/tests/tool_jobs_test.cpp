@@ -1,7 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "araya/agent-loop/agent.hpp"
+#include "araya/agent-loop/events.hpp"
 #include "araya/jobs/jobs.hpp"
+#include "araya/llm-mock/mock.hpp"
 #include "araya/llm/bridge.hpp"
+#include "araya/llm/llm.hpp"
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
 #include "araya/session/store.hpp"
@@ -14,6 +18,7 @@
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/steady_timer.hpp>
+#include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
@@ -39,6 +44,11 @@ struct harness : araya_test::plugin_harness {
 	araya::component_spec tools_spec() { return spec(&araya::tools::plugin_descriptor()); }
 	araya::component_spec jobs_spec() { return spec(&araya::jobs::plugin_descriptor()); }
 	araya::component_spec tool_jobs_spec() { return spec(&araya::tool_jobs::plugin_descriptor()); }
+	araya::component_spec llm_spec() { return spec(&araya::llm::plugin_descriptor()); }
+	araya::component_spec mock_spec() {
+		return spec(&araya::llm_mock::plugin_descriptor(), {{"provider", "mock"}, {"response", "echo: {user}"}});
+	}
+	araya::component_spec agent_spec() { return spec(&araya::agent::plugin_descriptor()); }
 };
 
 struct rig {
@@ -136,6 +146,24 @@ std::size_t notice_count(std::shared_ptr<araya::session::session_store> const& s
 			++count;
 	}
 	return count;
+}
+
+std::size_t count_type(araya::session::session const& s, std::string_view type) {
+	std::size_t count = 0;
+	for (auto const& event : s.log()) {
+		if (event.type == type)
+			++count;
+	}
+	return count;
+}
+
+araya::task<void> wait_until(std::function<bool()> predicate, int max_ms = 1000) {
+	auto ex = co_await boost::asio::this_coro::executor;
+	boost::asio::steady_timer timer(ex);
+	for (int i = 0; i < max_ms && !predicate(); ++i) {
+		timer.expires_after(std::chrono::milliseconds(1));
+		co_await timer.async_wait(boost::asio::use_awaitable);
+	}
 }
 
 } // namespace
@@ -280,5 +308,41 @@ TEST_CASE("job controls reject foreign and unknown jobs") {
 		REQUIRE(unknown.has_value());
 		CHECK(unknown->is_error);
 		CHECK(text_of(*unknown).find("unknown job") != std::string::npos);
+	});
+}
+
+TEST_CASE("a completion notice wakes an idle owner's agent") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.mount(h.prompt_spec());
+		co_await rt.mount(h.tools_spec());
+		co_await rt.mount(h.llm_spec());
+		co_await rt.mount(h.mock_spec());
+		co_await rt.mount(h.agent_spec());
+		co_await rt.mount(h.jobs_spec());
+		co_await rt.mount(h.tool_jobs_spec());
+		co_await rt.wait_idle();
+
+		auto root = rt.root_context();
+		auto store = root.require<araya::session::session_store>(araya::session::sessions_key).shared();
+		auto jobs = root.require<jobs_service>(jobs_key).shared();
+		auto agent = root.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
+		auto session = store->create(root, araya::session::session_id{"s1"}, {});
+		araya::session::session_id const id{"s1"};
+		CHECK(agent->status(id) == araya::agent::agent_status::idle);
+
+		producer p;
+		jobs->start(make_start(p, "bash", "notify me"));
+		p.finish(job_outcome{job_status::completed, "exit code: 0", {}});
+
+		// The notice is queued in the owner's inbox and wakes a turn, which
+		// commits it as a durable user message and then drives the model.
+		co_await wait_until([&] {
+			return agent->status(id) == araya::agent::agent_status::idle && count_type(*session, "turn/start") >= 1;
+		});
+		CHECK(count_type(*session, "turn/start") == 1);
+		CHECK(count_type(*session, "user/message") == 1);
+		CHECK(agent->status(id) == araya::agent::agent_status::idle);
 	});
 }

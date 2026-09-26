@@ -3,6 +3,7 @@
 #include "araya/llm/bridge.hpp"
 
 #include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
 
 #include <algorithm>
 #include <exception>
@@ -325,19 +326,35 @@ void subagents_service::on_turn_done(std::string const& child_id, std::exception
 		}
 	}
 
-	// Deliver the settlement to the parent as a user message. The parent
-	// sees it at its next step (the request is rebuilt from the surface
-	// each step) or, if it already finished, at its next turn.
-	if (auto parent = store_->get(araya::session::session_id{state.parent})) {
-		std::string text = "[subagent " + (state.label.empty() ? state.id : state.label) + " " +
-						   (state.stop_reason.empty() ? "completed" : state.stop_reason) + "]";
-		if (!state.error.empty())
-			text += "\n" + state.error;
-		else if (!state.last_output.empty())
-			text += "\n" + state.last_output;
-		parent->append(
-			"user/message", araya::llm_bridge::user_message_data("c" + std::to_string(parent->log().size()), text));
-	}
+	// Deliver the settlement to the parent through the agent inbox: a busy
+	// parent consumes it at its next step, an idle parent is woken for a
+	// new turn. The delivery is async (the inbox API is), so it runs after
+	// this completion handler returns.
+	std::string text = "[subagent " + (state.label.empty() ? state.id : state.label) + " " +
+					   (state.stop_reason.empty() ? "completed" : state.stop_reason) + "]";
+	if (!state.error.empty())
+		text += "\n" + state.error;
+	else if (!state.last_output.empty())
+		text += "\n" + state.last_output;
+
+	auto self = shared_from_this();
+	auto parent_id = araya::session::session_id{state.parent};
+	boost::asio::co_spawn(
+		executor_,
+		[self, parent_id, text = std::move(text)]() -> araya::task<void> {
+			auto parent = self->store_->get(parent_id);
+			if (!parent)
+				co_return;
+			auto message = araya::llm_bridge::user_message_data(
+				"c" + std::to_string(parent->log().size()),
+				text,
+				araya::llm_bridge::message_source("plugin", {{"plugin", "subagents"}}));
+			if (self->agent_->status(parent_id) == araya::agent::agent_status::running)
+				co_await self->agent_->inject(parent_id, std::move(message));
+			else
+				co_await self->agent_->followup(parent_id, std::move(message));
+		},
+		boost::asio::detached);
 
 	// Continue with the next queued message at the turn boundary.
 	kick(child_id);

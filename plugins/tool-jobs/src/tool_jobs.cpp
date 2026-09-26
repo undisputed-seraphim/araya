@@ -1,5 +1,6 @@
 #include "araya/tool-jobs/tool_jobs.hpp"
 
+#include "araya/agent-loop/agent.hpp"
 #include "araya/config.hpp"
 #include "araya/jobs/jobs.hpp"
 #include "araya/llm/bridge.hpp"
@@ -8,6 +9,8 @@
 #include "araya/tools/tools.hpp"
 #include "araya/util/json.hpp"
 
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/value.hpp>
@@ -215,6 +218,14 @@ struct tool_jobs_plugin : araya::plugin {
 			ctx.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key).shared();
 		auto tools = ctx.require<tools_service>(tools_key).shared();
 
+		// The agent seam is optional: with it, a completion notice wakes an
+		// idle owner (or joins a busy one) through its durable inbox; without
+		// it, the notice is appended directly.
+		std::shared_ptr<araya::agent::agent_service> agent;
+		if (auto found = ctx.find<araya::agent::agent_service>(araya::agent::agent_key))
+			agent = found->shared();
+		auto executor = ctx.executor();
+
 		// Producers may start work only while a controller is attached.
 		jobs->attach_controller(ctx, "tool-jobs");
 
@@ -230,19 +241,45 @@ struct tool_jobs_plugin : araya::plugin {
 			prompts->section(ctx, std::move(section));
 		}
 
-		// A settled, unreported job appends a durable notice to its owner's
-		// session (the harness's in-session completion notice).
-		jobs->on_job_done(ctx, [store](job_snapshot const& snapshot, std::optional<std::string> const& owner) {
-			if (snapshot.reported || !owner)
-				return;
-			auto session = store->get(session_id{*owner});
-			if (!session)
-				return;
-			session->append(
-				"user/message",
-				araya::llm_bridge::user_message_data(
-					"c" + std::to_string(session->log().size()), notice_text(snapshot)));
-		});
+		// A settled, unreported job notifies its owner's session. With the
+		// agent seam the notice goes through the durable inbox: a busy owner
+		// joins it at its next step, an idle owner is woken for a new turn.
+		// Without the agent (e.g. a jobs-only deployment) it is appended
+		// directly, the pre-inbox behavior.
+		jobs->on_job_done(
+			ctx, [store, agent, executor](job_snapshot const& snapshot, std::optional<std::string> const& owner) {
+				if (snapshot.reported || !owner)
+					return;
+				auto session = store->get(session_id{*owner});
+				if (!session)
+					return;
+				if (!agent) {
+					session->append(
+						"user/message",
+						araya::llm_bridge::user_message_data(
+							"c" + std::to_string(session->log().size()), notice_text(snapshot)));
+					return;
+				}
+				auto id = session_id{*owner};
+				auto text = notice_text(snapshot);
+				auto job_id = snapshot.id;
+				boost::asio::co_spawn(
+					executor,
+					[agent, store, id, text = std::move(text), job_id]() -> araya::task<void> {
+						auto target = store->get(id);
+						if (!target)
+							co_return;
+						auto message = araya::llm_bridge::user_message_data(
+							"c" + std::to_string(target->log().size()),
+							text,
+							araya::llm_bridge::message_source("notice", {{"job_id", job_id}}));
+						if (agent->status(id) == araya::agent::agent_status::running)
+							co_await agent->inject(id, std::move(message));
+						else
+							co_await agent->followup(id, std::move(message));
+					},
+					boost::asio::detached);
+			});
 
 		auto config = config_;
 		tools->register_tool(
@@ -287,6 +324,8 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
 	{araya::service_id{"system-prompt", 1}, true, {}},
 	{araya::service_id{"tools", 1}, true, {}},
+	// Optional: present, completion notices wake the owner's agent driver.
+	{araya::service_id{"agent", 1}, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
 static const araya::plugin_descriptor g_descriptor{"tool-jobs", g_deps, g_provs, &make_tool_jobs};

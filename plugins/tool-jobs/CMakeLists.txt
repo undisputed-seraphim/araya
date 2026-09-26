@@ -4,6 +4,7 @@
 # araya::tools the tool registry (with the system-prompt registry).
 araya_add_plugin(tool-jobs
     SOURCES src/tool_jobs.cpp
-    DEPS araya::jobs araya::llm-bridge araya::tools
+    DEPS araya::jobs araya::llm-bridge araya::tools araya::agent-loop
     TEST tests/tool_jobs_test.cpp
+    TEST_DEPS araya::llm-mock
 )
