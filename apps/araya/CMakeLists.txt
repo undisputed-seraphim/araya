@@ -24,6 +24,7 @@ set_target_properties(araya_app PROPERTIES
 
 target_link_libraries(araya_app PRIVATE
     araya::araya
+    araya::agent-instructions
     araya::agent-loop
     araya::coreutil
     araya::demo
@@ -39,6 +40,7 @@ target_link_libraries(araya_app PRIVATE
     araya::subagents
     araya::timer
     araya::tool-subagent
+    araya::tool-todo
     ftxui::component
     ftxui::dom
     ftxui::screen

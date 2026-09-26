@@ -3,6 +3,7 @@
 
 #include "demo_plugins.hpp"
 
+#include "araya/agent-instructions/agent_instructions.hpp"
 #include "araya/agent-loop/agent.hpp"
 #include "araya/coreutil/coreutil.hpp"
 #include "araya/fs-observation-policy/fs_observation_policy.hpp"
@@ -17,6 +18,7 @@
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/timer/timer.hpp"
 #include "araya/tool-subagent/tool_subagent.hpp"
+#include "araya/tool-todo/tool_todo.hpp"
 #include "araya/tools/tools.hpp"
 
 #include <boost/asio/use_awaitable.hpp>
@@ -231,9 +233,9 @@ constexpr command_entry g_commands[]{
 	{"ls", "ls", "print the fiber tree", &cmd_ls},
 	{"load",
 	 "load <component> [json config]",
-	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | tools | "
-	 "agent-loop | coreutil | fs-observation-policy | shell | subagents | tool-subagent | console | beacon | "
-	 "watcher",
+	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
+	 "agent-instructions | tools | tool-todo | agent-loop | coreutil | fs-observation-policy | shell | subagents "
+	 "| tool-subagent | console | beacon | watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -297,8 +299,12 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::llm_mock::plugin_descriptor();
 	if (name == "system-prompt")
 		return &araya::system_prompt::plugin_descriptor();
+	if (name == "agent-instructions")
+		return &araya::agent_instructions::plugin_descriptor();
 	if (name == "tools")
 		return &araya::tools::plugin_descriptor();
+	if (name == "tool-todo")
+		return &araya::tool_todo::plugin_descriptor();
 	if (name == "agent-loop")
 		return &araya::agent::plugin_descriptor();
 	if (name == "coreutil")
@@ -390,7 +396,10 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 		prompt_config["persona_suffix"] = "Your working directory is {{cwd}}.";
 	}
 	ctx.desired["system-prompt"] = desired_entry{&araya::system_prompt::plugin_descriptor(), std::move(prompt_config)};
+	// Workspace instructions (AGENTS.md) as a system-prompt section.
+	ctx.desired["agent-instructions"] = desired_entry{&araya::agent_instructions::plugin_descriptor(), {}};
 	ctx.desired["tools"] = desired_entry{&araya::tools::plugin_descriptor(), {}};
+	ctx.desired["tool-todo"] = desired_entry{&araya::tool_todo::plugin_descriptor(), {}};
 	ctx.desired["agent-loop"] = desired_entry{&araya::agent::plugin_descriptor(), {}};
 	// The built-in file/search tools and the one-shot shell tool. The
 	// shell resolves relative workdirs against the session cwd.
