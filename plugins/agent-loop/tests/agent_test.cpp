@@ -597,3 +597,332 @@ TEST_CASE("the agent inbox projection folds appends and replay") {
 		CHECK(inbox_message_id(replayed->next_step[0]) == "s1");
 	});
 }
+
+namespace {
+
+drive_options mock_exec() {
+	drive_options exec;
+	exec.provider = "mock";
+	exec.model = "test-model";
+	return exec;
+}
+
+boost::json::value tagged(std::string id, std::string text, std::string kind = "user") {
+	return user_message_data(std::move(id), std::move(text), message_source(std::move(kind)));
+}
+
+template <class Pred>
+araya::task<void> spin_until(Pred pred) {
+	auto ex = co_await boost::asio::this_coro::executor;
+	boost::asio::steady_timer timer(ex, 1ms);
+	while (!pred()) {
+		timer.expires_after(1ms);
+		co_await timer.async_wait(boost::asio::use_awaitable);
+	}
+}
+
+std::vector<std::string> user_texts(araya::session::session const& s) {
+	std::vector<std::string> out;
+	for (auto const& message : s.surface().messages()) {
+		if (message.role == araya::session::message_role::user)
+			out.push_back(araya::llm_bridge::message_text(message));
+	}
+	return out;
+}
+
+} // namespace
+
+TEST_CASE("a session acquires and loses an agent driver with its lifecycle") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+
+		int created = 0;
+		int disposed = 0;
+		root_ctx.on(agent_created_key, [&](agent_created_msg const&) { ++created; });
+		root_ctx.on(agent_disposed_key, [&](agent_disposed_msg const&) { ++disposed; });
+
+		auto store = root_ctx.require<araya::session::session_store>(araya::session::sessions_key).shared();
+		store->create(root_ctx, araya::session::session_id{"s2"});
+		co_await rt.wait_idle();
+		CHECK(created == 1);
+		CHECK(r.agent->status(araya::session::session_id{"s2"}) == agent_status::idle);
+		CHECK(r.agent->scope_of(araya::session::session_id{"s2"}) != nullptr);
+
+		store->dispose(araya::session::session_id{"s2"});
+		co_await rt.wait_idle();
+		CHECK(disposed == 1);
+		CHECK(r.agent->scope_of(araya::session::session_id{"s2"}) == nullptr);
+	});
+}
+
+TEST_CASE("a followup wakes the driver, claims its message, and reports status") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("answer")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+		auto id = r.session->id();
+
+		std::vector<std::string> statuses;
+		std::vector<std::string> inserted;
+		std::vector<std::string> claimed;
+		root_ctx.on(agent_status_key, [&](agent_status_msg const& m) {
+			statuses.push_back(m.status == agent_status::running ? "running" : "idle");
+		});
+		root_ctx.on(agent_inbox_inserted_key, [&](agent_inbox_inserted_msg const& m) {
+			inserted.push_back(inbox_message_id(m.message));
+		});
+		root_ctx.on(agent_inbox_claimed_key, [&](agent_inbox_claimed_msg const& m) {
+			claimed.push_back(inbox_message_id(m.message));
+		});
+
+		co_await r.agent->followup(id, tagged("n1", "queued"), mock_exec());
+		co_await r.agent->when_idle(id);
+
+		CHECK(statuses == std::vector<std::string>{"running", "idle"});
+		CHECK(inserted == std::vector<std::string>{"n1"});
+		CHECK(claimed == std::vector<std::string>{"n1"});
+		CHECK(r.agent->status(id) == agent_status::idle);
+		CHECK(r.agent->last_outcome(id).status == run_status::completed);
+		CHECK(user_texts(*r.session) == std::vector<std::string>{"queued"});
+
+		auto const* boundary = r.agent->turn_boundary(id);
+		REQUIRE(boundary != nullptr);
+		CHECK(boundary->last_turn == 1);
+		CHECK(!boundary->open_turn_start_seq.has_value());
+		REQUIRE(boundary->last_step_boundary.has_value());
+		CHECK(boundary->last_step_boundary->start == false);
+	});
+}
+
+TEST_CASE("a turn claims next-step input before its next-turn message") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("done")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto id = r.session->id();
+
+		co_await r.agent->inject(id, tagged("s1", "steer", "plugin"));
+		co_await r.agent->followup(id, tagged("n1", "open"), mock_exec());
+		co_await r.agent->when_idle(id);
+
+		CHECK(user_texts(*r.session) == std::vector<std::string>{"steer", "open"});
+	});
+}
+
+TEST_CASE("inject queues without waking a driver") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		rig r{h};
+		co_await r.mount(rt);
+		auto id = r.session->id();
+
+		co_await r.agent->inject(id, tagged("s1", "later", "plugin"));
+
+		CHECK(r.agent->status(id) == agent_status::idle);
+		CHECK(count_type(*r.session, "turn/start") == 0);
+		auto const* inbox = r.agent->inbox(id);
+		REQUIRE(inbox != nullptr);
+		REQUIRE(inbox->next_step.size() == 1);
+		CHECK(inbox_message_id(inbox->next_step[0]) == "s1");
+	});
+}
+
+TEST_CASE("the pre-step waterfall can reject a step") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("never")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+		auto id = r.session->id();
+
+		root_ctx.on(pre_step_key, [](pre_step_msg msg, araya::waterfall_continuation<pre_step_msg>) -> pre_step_msg {
+			msg.reject = true;
+			return msg;
+		});
+
+		co_await r.agent->followup(id, tagged("n1", "go"), mock_exec());
+		co_await r.agent->when_idle(id);
+
+		CHECK(r.agent->last_outcome(id).status == run_status::blocked);
+		CHECK(count_type(*r.session, "step/start") == 0);
+		CHECK(count_type(*r.session, "assistant/message") == 0);
+		CHECK(count_type(*r.session, "turn/end") == 1);
+		CHECK(find_data(*r.session, "turn/end")->at("reason") == "blocked");
+		// The claimed (then rejected) message never entered the surface.
+		CHECK(user_texts(*r.session).empty());
+		CHECK(g_scripted->calls == 0);
+	});
+}
+
+TEST_CASE("the pre-step waterfall can add messages to a step") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("done")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+		auto id = r.session->id();
+
+		root_ctx.on(pre_step_key, [](pre_step_msg msg, araya::waterfall_continuation<pre_step_msg>) -> pre_step_msg {
+			msg.messages.push_back(user_message_data("injected", "from listener", message_source("plugin")));
+			return msg;
+		});
+
+		co_await r.agent->followup(id, tagged("n1", "go"), mock_exec());
+		co_await r.agent->when_idle(id);
+
+		CHECK(user_texts(*r.session) == std::vector<std::string>{"go", "from listener"});
+	});
+}
+
+TEST_CASE("a route-less followup inherits the session's logged route") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("first")}, {text_stream("second")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto id = r.session->id();
+
+		auto first = co_await r.agent->run(options_for("one"), {});
+		CHECK(first.status == run_status::completed);
+
+		// Drop the driver so its in-memory route is gone; the next followup
+		// must recover the route from the logged request header.
+		co_await r.agent->dispose(id);
+		co_await r.agent->followup(id, tagged("n2", "two"), {});
+		co_await r.agent->when_idle(id);
+
+		CHECK(count_type(*r.session, "turn/start") == 2);
+		CHECK(r.agent->last_outcome(id).status == run_status::completed);
+	});
+}
+
+TEST_CASE("cancel stops the drive and keep_inbox preserves pending input") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {
+			{{stream_chunk{block_start_chunk{0, content_block_type::text}},
+			  stream_chunk{text_delta_chunk{0, "partial "}}},
+			 true}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto id = r.session->id();
+
+		co_await r.agent->followup(id, tagged("n1", "start"), mock_exec());
+		co_await spin_until([&] { return r.agent->status(id) == agent_status::running; });
+		co_await r.agent->inject(id, tagged("s1", "pending", "plugin"));
+		r.agent->cancel(id, cancel_cause::user, /*keep_inbox=*/true);
+		co_await r.agent->when_idle(id);
+
+		CHECK(r.agent->status(id) == agent_status::idle);
+		CHECK(r.agent->last_outcome(id).status == run_status::aborted);
+		auto const* inbox = r.agent->inbox(id);
+		REQUIRE(inbox != nullptr);
+		CHECK(inbox->next_turn.empty());
+		CHECK(inbox->next_step.size() == 1);
+	});
+
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {
+			{{stream_chunk{block_start_chunk{0, content_block_type::text}},
+			  stream_chunk{text_delta_chunk{0, "partial "}}},
+			 true}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto id = r.session->id();
+
+		co_await r.agent->followup(id, tagged("n1", "start"), mock_exec());
+		co_await spin_until([&] { return r.agent->status(id) == agent_status::running; });
+		co_await r.agent->inject(id, tagged("s1", "pending", "plugin"));
+		r.agent->cancel(id, cancel_cause::user, /*keep_inbox=*/false);
+		co_await r.agent->when_idle(id);
+
+		auto const* inbox = r.agent->inbox(id);
+		REQUIRE(inbox != nullptr);
+		CHECK(inbox->next_turn.empty());
+		CHECK(inbox->next_step.empty());
+	});
+}
+
+TEST_CASE("the turn-boundary fold replays with the session log") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("hi")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto id = r.session->id();
+
+		co_await r.agent->followup(id, tagged("n1", "go"), mock_exec());
+		co_await r.agent->when_idle(id);
+		REQUIRE(r.agent->turn_boundary(id) != nullptr);
+		CHECK(r.agent->turn_boundary(id)->last_turn == 1);
+
+		auto store = rt.root_context().require<araya::session::session_store>(araya::session::sessions_key).shared();
+		auto log = r.session->log();
+		store->dispose(id);
+		CHECK(r.agent->turn_boundary(id) == nullptr);
+
+		auto restored = store->prepare(
+			id, araya::session::create_session_options{.seed = log, .inherited_event_count = log.size()});
+		store->enter(restored);
+		store->announce(*restored);
+		auto const* boundary = r.agent->turn_boundary(id);
+		REQUIRE(boundary != nullptr);
+		CHECK(boundary->last_turn == 1);
+		CHECK(!boundary->open_turn_start_seq.has_value());
+	});
+}
+
+TEST_CASE("agent events are scoped to their session's realm") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("a")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+		auto store = root_ctx.require<araya::session::session_store>(araya::session::sessions_key).shared();
+		auto other = store->create(root_ctx, araya::session::session_id{"s2"});
+		co_await rt.wait_idle();
+
+		int s1_running = 0;
+		int s2_running = 0;
+		root_ctx.on(
+			agent_status_key,
+			[&](agent_status_msg const& m) {
+				if (m.status == agent_status::running)
+					++s1_running;
+			},
+			{.scope = r.agent->scope_of(r.session->id())});
+		root_ctx.on(
+			agent_status_key,
+			[&](agent_status_msg const& m) {
+				if (m.status == agent_status::running)
+					++s2_running;
+			},
+			{.scope = r.agent->scope_of(other->id())});
+
+		co_await r.agent->followup(r.session->id(), tagged("n1", "go"), mock_exec());
+		co_await r.agent->when_idle(r.session->id());
+
+		CHECK(s1_running == 1);
+		CHECK(s2_running == 0);
+	});
+}

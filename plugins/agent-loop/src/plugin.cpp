@@ -1,5 +1,9 @@
 #include "araya/agent-loop/agent.hpp"
+#include "araya/agent-loop/events.hpp"
 #include "araya/agent-loop/inbox.hpp"
+#include "araya/session/events.hpp"
+
+#include <boost/json/object.hpp>
 
 #include <memory>
 #include <optional>
@@ -10,9 +14,15 @@
 namespace araya::agent {
 namespace {
 
+boost::json::value lifecycle_source(araya::session::session const& session) {
+	return boost::json::object{{"kind", session.header().is_seeded ? "resume" : "startup"}};
+}
+
 // The agent provider: constructs the loop over the llm, session, prompt,
-// and tool services and binds it under agent_key. It also registers the
-// built-in prompt variables (provider/model/cwd) with the registry.
+// and tool services and binds it under agent_key. It registers the built-in
+// prompt variables (provider/model/cwd), the durable inbox and turnBoundary
+// projections, and the session lifecycle listeners that create and dispose
+// drivers.
 struct agent_plugin : araya::plugin {
 	araya::task<void> apply(araya::plugin_context& ctx) override {
 		auto llm = ctx.require<araya::llm::llm_service>(araya::llm::llm_key).shared();
@@ -31,15 +41,41 @@ struct agent_plugin : araya::plugin {
 			return std::optional<std::string>(context.cwd);
 		});
 
-		// The durable inbox is a store-driven projection: fold every
-		// 'agent/inbox/spliced' event into per-session queue state. The
-		// registration is owned by this fiber (the ctx effect stack); the
-		// tracker is the service's read handle.
+		// The durable inbox and the turn/wait-step boundary fold are
+		// store-driven projections owned by this fiber; the trackers are the
+		// service's read handles.
 		araya::session::projection_state<inbox_state> inbox;
 		(void)store->register_projection(ctx, inbox_projection(), inbox);
+		araya::session::projection_state<turn_state> turn_boundary;
+		(void)store->register_projection(ctx, turn_boundary_projection(), turn_boundary);
 
 		auto service = std::make_shared<agent_service>(
-			std::move(llm), std::move(store), std::move(prompts), std::move(tools), std::move(inbox));
+			ctx.activation_ptr() ? ctx.activation_ptr()->bus : nullptr,
+			ctx.scope(),
+			ctx.executor(),
+			std::move(llm),
+			std::move(store),
+			std::move(prompts),
+			std::move(tools),
+			std::move(inbox),
+			std::move(turn_boundary));
+
+		// Lifecycle: a session acquires a driver when it is announced and
+		// loses it when it is disposed. Both listeners are owned by this
+		// fiber and removed at teardown.
+		auto handle = service;
+		ctx.on(
+			araya::session::created_key,
+			[handle](araya::session::session_created_msg const& message) -> araya::task<void> {
+				co_await handle->ensure(*message.s, lifecycle_source(*message.s));
+			});
+		ctx.on(
+			araya::session::disposed_key,
+			[handle](araya::session::session_disposed_msg const& message) -> araya::task<void> {
+				co_await handle->dispose(message.id);
+			});
+		ctx.effect([handle]() -> araya::cleanup_action { return [handle] { handle->shutdown(); }; });
+
 		ctx.provide(agent_key, std::move(service));
 		co_return;
 	}

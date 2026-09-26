@@ -184,19 +184,16 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 			co_return;
 		}
 
-		araya::agent::run_options options;
-		options.provider = resolved->provider;
-		options.model = resolved->model;
-		options.session = s->id();
-		options.input = text;
-
 		text_collector collector;
 		collector.hook = &ctx.stream_hook;
-		araya::llm::chunk_sink on_chunk = [&](araya::llm::stream_chunk const& chunk) -> araya::task<void> {
-			collector.feed(chunk);
-			co_return;
-		};
-		araya::agent::event_sink on_event = [&](araya::agent::agent_event const& event) {
+
+		// The durable-inbox path: queue the human message, drive to
+		// quiescence, then read the last turn's outcome. The tag marks it as
+		// direct human input for provenance-keyed authorities.
+		araya::agent::drive_options exec;
+		exec.provider = resolved->provider;
+		exec.model = resolved->model;
+		exec.on_event = [&](araya::agent::agent_event const& event) {
 			std::visit(
 				overloaded{
 					[&](araya::agent::tool_call_event const& call) { out("tool: " + call.name); },
@@ -206,7 +203,17 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 					[](auto const&) {}},
 				event);
 		};
-		auto outcome = co_await agent->run(options, on_event, on_chunk);
+		exec.on_chunk = [&](araya::llm::stream_chunk const& chunk) -> araya::task<void> {
+			collector.feed(chunk);
+			co_return;
+		};
+		co_await agent->followup(
+			s->id(),
+			araya::llm_bridge::user_message_data(
+				"u" + std::to_string(s->log().size()), text, araya::llm_bridge::message_source("user")),
+			std::move(exec));
+		co_await agent->when_idle(s->id());
+		auto outcome = agent->last_outcome(s->id());
 		// The agent loop owns its session appends; make the whole turn
 		// durable once it settles.
 		co_await s->flush();
