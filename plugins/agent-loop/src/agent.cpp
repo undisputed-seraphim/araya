@@ -250,11 +250,17 @@ agent_service::agent_service(
 	std::shared_ptr<araya::llm::llm_service> llm,
 	std::shared_ptr<araya::session::session_store> store,
 	std::shared_ptr<araya::system_prompt::system_prompt_service> prompts,
-	std::shared_ptr<araya::tools::tools_service> tools)
+	std::shared_ptr<araya::tools::tools_service> tools,
+	araya::session::projection_state<inbox_state> inbox)
 	: llm_(std::move(llm))
 	, store_(std::move(store))
 	, prompts_(std::move(prompts))
-	, tools_(std::move(tools)) {}
+	, tools_(std::move(tools))
+	, inbox_(std::move(inbox)) {}
+
+inbox_state const* agent_service::inbox(araya::session::session_id const& session) const {
+	return inbox_.state_of(session);
+}
 
 araya::system_prompt::prompt_assembly agent_service::assemble_prompt(session& session, run_options const& options) {
 	araya::system_prompt::assemble_context context;

@@ -62,6 +62,16 @@ std::optional<std::string> string_field(boost::json::object const& obj, std::str
 	return std::string(it->value().as_string());
 }
 
+// The raw source object a message carries, preserved verbatim (metadata:
+// the LLM bridge ignores it; the goal/notice producers and their readers
+// key on source.kind).
+std::optional<boost::json::value> source_field(boost::json::object const& obj) {
+	auto it = obj.find("source");
+	if (it == obj.end())
+		return std::nullopt;
+	return it->value();
+}
+
 std::optional<message_role> parse_role(std::string_view role) {
 	if (role == "user")
 		return message_role::user;
@@ -92,8 +102,8 @@ surface_plan fold_builtin(session_event const& ev) {
 		auto it = obj->find("content");
 		if (!id || it == obj->end())
 			return {};
-		return append_plan(
-			session_message{message_role::user, *std::move(id), it->value(), std::nullopt, std::nullopt});
+		return append_plan(session_message{
+			message_role::user, *std::move(id), it->value(), std::nullopt, std::nullopt, source_field(*obj)});
 	}
 	if (ev.type == "assistant/message") {
 		auto const* obj = message_object(ev);
@@ -103,8 +113,8 @@ surface_plan fold_builtin(session_event const& ev) {
 		auto it = obj->find("content");
 		if (!id || it == obj->end())
 			return {};
-		return append_plan(
-			session_message{message_role::assistant, *std::move(id), it->value(), std::nullopt, std::nullopt});
+		return append_plan(session_message{
+			message_role::assistant, *std::move(id), it->value(), std::nullopt, std::nullopt, source_field(*obj)});
 	}
 	if (ev.type == "system/message") {
 		auto const* obj = message_object(ev);
@@ -119,8 +129,8 @@ surface_plan fold_builtin(session_event const& ev) {
 			if (auto const* src = sit->value().if_object())
 				plugin = string_field(*src, "plugin");
 		}
-		return append_plan(
-			session_message{message_role::system, *std::move(id), it->value(), std::nullopt, std::move(plugin)});
+		return append_plan(session_message{
+			message_role::system, *std::move(id), it->value(), std::nullopt, std::move(plugin), source_field(*obj)});
 	}
 	if (ev.type == "tool/result") {
 		auto const* obj = message_object(ev);
@@ -139,8 +149,13 @@ surface_plan fold_builtin(session_event const& ev) {
 		auto call_id = string_field(*block, "tool_call_id");
 		if (!call_id)
 			return {};
-		return append_plan(
-			session_message{message_role::tool_result, *std::move(id), it->value(), std::move(call_id), std::nullopt});
+		return append_plan(session_message{
+			message_role::tool_result,
+			*std::move(id),
+			it->value(),
+			std::move(call_id),
+			std::nullopt,
+			source_field(*obj)});
 	}
 	if (ev.type == "surface/replace") {
 		auto const* obj = ev.data.if_object();
@@ -162,8 +177,8 @@ surface_plan fold_builtin(session_event const& ev) {
 				auto content = msg->find("content");
 				if (id && role && content != msg->end()) {
 					if (auto parsed = parse_role(*role))
-						plan.message =
-							session_message{*parsed, *std::move(id), content->value(), std::nullopt, std::nullopt};
+						plan.message = session_message{
+							*parsed, *std::move(id), content->value(), std::nullopt, std::nullopt, source_field(*msg)};
 				}
 			}
 		}

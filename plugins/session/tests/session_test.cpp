@@ -349,6 +349,44 @@ TEST_CASE("built-in message shapes are validated on append") {
 	});
 }
 
+TEST_CASE("a user message's source rides the surface and is validated") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto store = h.store(root_ctx);
+		auto s = store->create(root_ctx, session_id{"s1"});
+
+		boost::json::object tagged = message("u1", "user", boost::json::array{}).as_object();
+		tagged["source"] = boost::json::object{{"kind", "goal"}, {"goal_id", "g1"}};
+		s->append("user/message", std::move(tagged));
+
+		REQUIRE(s->surface().messages().size() == 1);
+		CHECK(s->surface().messages()[0].source.has_value());
+		CHECK(s->surface().messages()[0].source->at("kind") == "goal");
+		CHECK(s->surface().messages()[0].source->at("goal_id") == "g1");
+
+		// A source without a non-empty string kind is rejected, and so is a
+		// bare non-object source.
+		boost::json::object no_kind = message("u2", "user", boost::json::array{}).as_object();
+		no_kind["source"] = boost::json::object{{"goal_id", "g1"}};
+		CHECK_THROWS(s->append("user/message", std::move(no_kind)));
+
+		boost::json::object bare = message("u3", "user", boost::json::array{}).as_object();
+		bare["source"] = "user";
+		CHECK_THROWS(s->append("user/message", std::move(bare)));
+
+		// The tool result's source is preserved too.
+		s->append("tool/result", tool_result("t1", "tc1"));
+		auto const& tool = s->surface().messages().back();
+		REQUIRE(tool.source.has_value());
+		CHECK(tool.source->at("kind") == "tool");
+		CHECK(tool.source->at("call_id") == "tc1");
+	});
+}
+
 boost::json::value
 replace_event(std::int64_t start, std::int64_t end, std::optional<boost::json::value> msg = std::nullopt) {
 	boost::json::object data{{"start_seq", start}, {"end_seq", end}};

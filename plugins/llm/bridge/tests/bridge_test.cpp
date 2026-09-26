@@ -149,6 +149,20 @@ TEST_CASE("the built-in envelopes carry the store's validated shapes") {
 	CHECK(tool.at("source").at("call_id") == "call-9");
 }
 
+TEST_CASE("user_message_data carries structured content and an optional source") {
+	auto plain = user_message_data("u1", boost::json::array{{{"type", "text"}, {"text", "hi"}}}).as_object();
+	CHECK(plain.at("role") == "user");
+	REQUIRE(plain.at("content").as_array().size() == 1);
+	CHECK(plain.at("content").as_array()[0].at("text") == "hi");
+	CHECK(!plain.contains("source"));
+
+	auto tagged =
+		user_message_data("u2", boost::json::array{}, message_source("goal", {{"goal_id", "g1"}})).as_object();
+	CHECK(tagged.at("role") == "user");
+	CHECK(tagged.at("source").at("kind") == "goal");
+	CHECK(tagged.at("source").at("goal_id") == "g1");
+}
+
 TEST_CASE("message_text joins text blocks only") {
 	auto message_text_case = make_message(
 		message_role::system,

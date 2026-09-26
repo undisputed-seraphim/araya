@@ -1,4 +1,5 @@
 #include "araya/agent-loop/agent.hpp"
+#include "araya/agent-loop/inbox.hpp"
 
 #include <memory>
 #include <optional>
@@ -30,8 +31,15 @@ struct agent_plugin : araya::plugin {
 			return std::optional<std::string>(context.cwd);
 		});
 
-		auto service =
-			std::make_shared<agent_service>(std::move(llm), std::move(store), std::move(prompts), std::move(tools));
+		// The durable inbox is a store-driven projection: fold every
+		// 'agent/inbox/spliced' event into per-session queue state. The
+		// registration is owned by this fiber (the ctx effect stack); the
+		// tracker is the service's read handle.
+		araya::session::projection_state<inbox_state> inbox;
+		(void)store->register_projection(ctx, inbox_projection(), inbox);
+
+		auto service = std::make_shared<agent_service>(
+			std::move(llm), std::move(store), std::move(prompts), std::move(tools), std::move(inbox));
 		ctx.provide(agent_key, std::move(service));
 		co_return;
 	}

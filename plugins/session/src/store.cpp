@@ -390,6 +390,20 @@ void session_store::validate_event(session_event const& ev) const {
 		if (cit == src.end() || !cit->value().is_string() || cit->value().as_string() != call_id)
 			bad("session event 'tool/result' source call_id does not "
 				"match the block tool_call_id");
+	} else if (ev.type == "user/message") {
+		// A user message may carry provenance (source), which the surface
+		// preserves verbatim. When present it must be a tagged object so
+		// readers keying on source.kind never trip over a bare string.
+		auto sit = msg.find("source");
+		if (sit == msg.end())
+			return;
+		if (!sit->value().is_object())
+			bad("session event 'user/message' source must be an object");
+		auto const& src = sit->value().as_object();
+		auto kit = src.find("kind");
+		if (kit == src.end() || !kit->value().is_string() || kit->value().as_string().empty())
+			bad("session event 'user/message' source lacks a non-empty "
+				"string kind");
 	}
 }
 

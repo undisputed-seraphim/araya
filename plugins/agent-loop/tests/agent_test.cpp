@@ -488,3 +488,112 @@ TEST_CASE("the prompt registry commits one effective system node") {
 		CHECK(surface_roles(*r.session).front() == "system");
 	});
 }
+
+namespace {
+
+boost::json::value inbox_entry(std::string id, std::string text = "queued") {
+	return boost::json::object{
+		{"id", std::move(id)},
+		{"role", "user"},
+		{"content", boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}}};
+}
+
+} // namespace
+
+TEST_CASE("the inbox fold applies toSpliced splices") {
+	inbox_state state;
+	apply_inbox_splice(state, inbox_append_data(inbox_target::next_turn, inbox_entry("a")));
+	apply_inbox_splice(state, inbox_append_data(inbox_target::next_turn, inbox_entry("b")));
+	apply_inbox_splice(state, inbox_prepend_data(inbox_target::next_step, inbox_entry("s1")));
+	apply_inbox_splice(state, inbox_prepend_data(inbox_target::next_step, inbox_entry("s0")));
+
+	REQUIRE(state.next_turn.size() == 2);
+	CHECK(inbox_message_id(state.next_turn[0]) == "a");
+	CHECK(inbox_message_id(state.next_turn[1]) == "b");
+	REQUIRE(state.next_step.size() == 2);
+	CHECK(inbox_message_id(state.next_step[0]) == "s0");
+	CHECK(inbox_message_id(state.next_step[1]) == "s1");
+
+	// Message ids are unique across both queues: a duplicate is dropped.
+	apply_inbox_splice(state, inbox_append_data(inbox_target::next_step, inbox_entry("a")));
+	CHECK(state.next_step.size() == 2);
+
+	// A claim removes from the front.
+	apply_inbox_splice(state, inbox_claim_data(inbox_target::next_turn, 1));
+	REQUIRE(state.next_turn.size() == 1);
+	CHECK(inbox_message_id(state.next_turn[0]) == "b");
+
+	// A replace splices a removal and an insertion at one index.
+	apply_inbox_splice(state, inbox_splice_data(inbox_target::next_step, 0, 1, boost::json::array{inbox_entry("s2")}));
+	REQUIRE(state.next_step.size() == 2);
+	CHECK(inbox_message_id(state.next_step[0]) == "s2");
+	CHECK(inbox_message_id(state.next_step[1]) == "s1");
+}
+
+TEST_CASE("the inbox fold clamps coordinates and ignores malformed payloads") {
+	inbox_state state;
+	apply_inbox_splice(state, inbox_append_data(inbox_target::next_turn, inbox_entry("a")));
+	apply_inbox_splice(state, inbox_append_data(inbox_target::next_turn, inbox_entry("b")));
+
+	// A negative start counts from the end.
+	apply_inbox_splice(state, inbox_splice_data(inbox_target::next_turn, -1, 1));
+	REQUIRE(state.next_turn.size() == 1);
+	CHECK(inbox_message_id(state.next_turn[0]) == "a");
+
+	// Malformed payloads are no-ops.
+	apply_inbox_splice(state, boost::json::value{7});
+	apply_inbox_splice(state, boost::json::value(boost::json::object{{"target", "next-turn"}}));
+	apply_inbox_splice(state, boost::json::value(boost::json::object{{"target", "elsewhere"}, {"start", 0}}));
+	CHECK(state.next_turn.size() == 1);
+
+	// An out-of-range removal clamps to the end.
+	apply_inbox_splice(state, inbox_claim_data(inbox_target::next_turn, 99));
+	CHECK(state.next_turn.empty());
+}
+
+TEST_CASE("the agent inbox projection folds appends and replay") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("hi")}};
+		rig r{h};
+		co_await r.mount(rt);
+
+		auto id = r.session->id();
+		auto const* inbox = r.agent->inbox(id);
+		REQUIRE(inbox != nullptr);
+		CHECK(inbox->next_turn.empty());
+		CHECK(inbox->next_step.empty());
+
+		r.session->append(
+			"agent/inbox/spliced", inbox_append_data(inbox_target::next_turn, inbox_entry("n1", "knock")));
+		r.session->append(
+			"agent/inbox/spliced", inbox_prepend_data(inbox_target::next_step, inbox_entry("s1", "steer")));
+
+		inbox = r.agent->inbox(id);
+		REQUIRE(inbox != nullptr);
+		REQUIRE(inbox->next_turn.size() == 1);
+		CHECK(inbox_message_id(inbox->next_turn[0]) == "n1");
+		REQUIRE(inbox->next_step.size() == 1);
+		CHECK(inbox_message_id(inbox->next_step[0]) == "s1");
+
+		// The inbox is durable: a restore replays it into a fresh cell
+		// alongside the surface.
+		auto store = rt.root_context().require<araya::session::session_store>(araya::session::sessions_key).shared();
+		auto log = r.session->log();
+		store->dispose(id);
+		CHECK(r.agent->inbox(id) == nullptr);
+
+		auto restored = store->prepare(
+			id, araya::session::create_session_options{.seed = log, .inherited_event_count = log.size()});
+		store->enter(restored);
+		store->announce(*restored);
+
+		auto const* replayed = r.agent->inbox(id);
+		REQUIRE(replayed != nullptr);
+		REQUIRE(replayed->next_turn.size() == 1);
+		CHECK(inbox_message_id(replayed->next_turn[0]) == "n1");
+		REQUIRE(replayed->next_step.size() == 1);
+		CHECK(inbox_message_id(replayed->next_step[0]) == "s1");
+	});
+}

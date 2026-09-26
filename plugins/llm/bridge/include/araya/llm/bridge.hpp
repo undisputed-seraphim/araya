@@ -193,6 +193,31 @@ inline boost::json::value user_message_data(std::string_view id, std::string_vie
 	};
 }
 
+// A user message with a structured content-block array and an optional
+// provenance tag (source): the shape the agent inbox and the goal/notice
+// producers use. The tag is metadata - only content reaches the model.
+inline boost::json::value user_message_data(
+	std::string_view id,
+	boost::json::array content,
+	std::optional<boost::json::value> source = std::nullopt) {
+	boost::json::object data;
+	data["id"] = std::string(id);
+	data["role"] = "user";
+	data["content"] = std::move(content);
+	if (source)
+		data["source"] = std::move(*source);
+	return data;
+}
+
+// Builds a source object: {kind: <kind>, ...fields}. The vocabulary the
+// session validates is just "a non-empty string kind"; the agent loop and
+// its consumers read "user", "goal", "plugin", "notice", and
+// "skill-invocation".
+inline boost::json::object message_source(std::string_view kind, boost::json::object fields = {}) {
+	fields["kind"] = std::string(kind);
+	return fields;
+}
+
 // The tool/result envelope: the data IS the message, exactly one content
 // block carrying the call id, and source.call_id matching it (the
 // store's validated shape).

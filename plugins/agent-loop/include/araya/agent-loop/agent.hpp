@@ -9,6 +9,8 @@
 #include "araya/task.hpp"
 #include "araya/tools/tools.hpp"
 
+#include "araya/agent-loop/inbox.hpp"
+
 #include <boost/json/value.hpp>
 
 #include <cstdint>
@@ -119,7 +121,14 @@ public:
 		std::shared_ptr<araya::llm::llm_service> llm,
 		std::shared_ptr<araya::session::session_store> store,
 		std::shared_ptr<araya::system_prompt::system_prompt_service> prompts,
-		std::shared_ptr<araya::tools::tools_service> tools);
+		std::shared_ptr<araya::tools::tools_service> tools,
+		araya::session::projection_state<inbox_state> inbox = {});
+
+	// The durable inbox fold state for an entered session, or null when the
+	// session is unknown or the projection is gone. The inbox is the
+	// pending-message queue the driver consumes; it restores and forks with
+	// the log.
+	inbox_state const* inbox(araya::session::session_id const& session) const;
 
 	// Drives one turn of `options.session`: steps until the model stops
 	// calling tools (or the run ends for another reason). Lifecycle events
@@ -167,6 +176,7 @@ private:
 	std::shared_ptr<araya::session::session_store> store_;
 	std::shared_ptr<araya::system_prompt::system_prompt_service> prompts_;
 	std::shared_ptr<araya::tools::tools_service> tools_;
+	araya::session::projection_state<inbox_state> inbox_;
 };
 
 inline constexpr araya::service_key<agent_service> agent_key{"agent", 1};

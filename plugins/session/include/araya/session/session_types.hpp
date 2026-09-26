@@ -75,13 +75,17 @@ enum class message_role : std::uint8_t {
 // One folded surface message. `content` is an array of content blocks (the
 // agent loop's schema); `tool_call_id` links a tool result to the assistant
 // block that requested it; `source_plugin` names the plugin that authored a
-// system message.
+// system message. `source` is the message's raw provenance object when the
+// log carried one (a user message's {kind: ...} tag, a tool result's
+// {kind:"tool", call_id}, a system message's {kind:"plugin", plugin}); it is
+// metadata only - the LLM bridge ignores it.
 struct session_message {
 	message_role role = message_role::user;
 	std::string id;
 	boost::json::value content;
 	std::optional<std::string> tool_call_id;
 	std::optional<std::string> source_plugin;
+	std::optional<boost::json::value> source;
 };
 
 // Options for creating (or restoring) a session. `seed` replays or forks an
@@ -100,7 +104,8 @@ struct create_session_options {
 };
 
 // The built-in event types the surface understands:
-//   user/message     data IS the message:  {id, role:"user", content:[...]}
+//   user/message     data IS the message:  {id, role:"user", content:[...],
+//                                           source?: {kind: ...}}
 //   assistant/message data = {"message":   {id, role:"assistant", content:[...]}}
 //   system/message   data = {"message":    {id, role:"system", content:[...],
 //                                           source:{kind:"plugin", plugin:...}}}
@@ -109,6 +114,10 @@ struct create_session_options {
 //                                           source:{kind:"tool", call_id}}
 // Everything else is non-surface vocabulary (request metadata, markers,
 // plugin-owned types registered as projections, or unknown/ignorable types).
+// Plugin-owned vocabulary - for example the agent loop's 'agent/inbox/spliced'
+// inbox splices - is not surface-relevant: it rides the log and is folded by
+// its typed projection when the registering plugin is live, and is otherwise
+// ignorable to every reader (the event-vocabulary growth story).
 bool is_builtin_surface_type(std::string_view type) noexcept;
 
 inline std::int64_t now_ms() noexcept {
