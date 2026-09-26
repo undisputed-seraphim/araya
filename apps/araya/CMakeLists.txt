@@ -29,6 +29,7 @@ target_link_libraries(araya_app PRIVATE
     araya::coreutil
     araya::demo
     araya::fs-observation-policy
+    araya::jobs
     araya::llm
     araya::llm-bridge
     araya::llm-mock
@@ -39,6 +40,7 @@ target_link_libraries(araya_app PRIVATE
     araya::shell
     araya::subagents
     araya::timer
+    araya::tool-jobs
     araya::tool-subagent
     araya::tool-todo
     ftxui::component

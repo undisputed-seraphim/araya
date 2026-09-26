@@ -1,6 +1,8 @@
 #include "araya/shell/shell.hpp"
 
 #include "araya/config.hpp"
+#include "araya/effects.hpp"
+#include "araya/jobs/jobs.hpp"
 #include "araya/session/store.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/tools/tools.hpp"
@@ -51,11 +53,13 @@ using boost::asio::steady_timer;
 constexpr araya::config_key<std::uint64_t> timeout_key{"timeout_ms"};
 constexpr araya::config_key<std::uint64_t> max_output_key{"max_output_bytes"};
 constexpr araya::config_key<std::string> shell_key{"shell"};
+constexpr araya::config_key<bool> background_key{"enable_run_in_background"};
 
 struct shell_config {
 	std::uint64_t timeout_ms = 30000;
 	std::size_t max_output = 100'000;
 	std::string shell = "/bin/bash";
+	bool enable_run_in_background = true;
 };
 
 shell_config parse_config(araya::plugin_config const& config) {
@@ -67,6 +71,8 @@ shell_config parse_config(araya::plugin_config const& config) {
 		out.max_output = static_cast<std::size_t>(*value);
 	if (auto value = view.try_get(shell_key))
 		out.shell = *value;
+	if (auto value = view.try_get(background_key))
+		out.enable_run_in_background = *value;
 	return out;
 }
 
@@ -117,6 +123,111 @@ awaitable<void> drain(readable_pipe& pipe, std::string& out, std::size_t cap, st
 		}
 	}
 	co_return;
+}
+
+// A detached background process: its pipes are drained by a coroutine that
+// outlives the tool call, and read_output() hands the model the delta since the
+// previous read (stderr under a marked section). The producer owns the buffers;
+// the jobs registry owns identity and lifecycle.
+struct bg_state {
+	std::string stdout_text;
+	std::string stderr_text;
+	std::size_t stdout_cursor = 0;
+	std::size_t stderr_cursor = 0;
+	std::size_t stdout_dropped = 0;
+	std::size_t stderr_dropped = 0;
+	std::size_t stdout_dropped_reported = 0;
+	std::size_t stderr_dropped_reported = 0;
+	std::atomic<bool> alive{true};
+	std::atomic<long> pid{0};
+	std::atomic<bool> requested_cancel{false};
+	std::optional<bp::process> process;
+
+	std::string read_output() {
+		std::string text;
+		if (stdout_cursor < stdout_text.size()) {
+			text.append(stdout_text, stdout_cursor, std::string::npos);
+			stdout_cursor = stdout_text.size();
+		}
+		if (stderr_cursor < stderr_text.size()) {
+			if (!text.empty() && text.back() != '\n')
+				text += '\n';
+			text += "[stderr]\n";
+			text.append(stderr_text, stderr_cursor, std::string::npos);
+			stderr_cursor = stderr_text.size();
+		}
+		auto const dropped = (stdout_dropped - stdout_dropped_reported) + (stderr_dropped - stderr_dropped_reported);
+		if (dropped > 0) {
+			if (!text.empty() && text.back() != '\n')
+				text += '\n';
+			text += "[output truncated; " + std::to_string(dropped) + " bytes dropped, full output not retained]";
+			stdout_dropped_reported = stdout_dropped;
+			stderr_dropped_reported = stderr_dropped;
+		}
+		return text;
+	}
+};
+
+void kill_background(bg_state& state) {
+	if (!state.alive.load())
+		return;
+	auto const pid = static_cast<pid_t>(state.pid.load());
+	if (pid > 0)
+		::kill(pid, SIGKILL);
+}
+
+araya::task<void> run_background(
+	boost::asio::any_io_executor executor,
+	std::string shell,
+	std::size_t max_output,
+	std::string command,
+	std::string workdir,
+	std::shared_ptr<bg_state> state,
+	std::function<void(araya::jobs::job_outcome)> settle) {
+	readable_pipe out(executor);
+	readable_pipe err(executor);
+	try {
+		state->process.emplace(
+			executor,
+			std::move(shell),
+			std::initializer_list<std::string>{"-c", std::move(command)},
+			bp::process_stdio{.in = nullptr, .out = out, .err = err},
+			bp::process_start_dir(bp::filesystem::path(std::move(workdir))));
+	} catch (std::exception const& e) {
+		state->alive = false;
+		settle(araya::jobs::job_outcome{
+			araya::jobs::job_status::failed, std::string("failed to launch command: ") + e.what(), {}});
+		co_return;
+	}
+	state->pid = static_cast<long>(state->process->id());
+
+	using namespace boost::asio::experimental::awaitable_operators;
+	co_await (
+		drain(out, state->stdout_text, max_output, state->stdout_dropped) &&
+		drain(err, state->stderr_text, max_output, state->stderr_dropped));
+
+	boost::system::error_code wait_ec;
+	co_await state->process->async_wait(boost::asio::redirect_error(boost::asio::use_awaitable, wait_ec));
+	state->alive = false;
+	if (wait_ec) {
+		state->process.reset();
+		settle(araya::jobs::job_outcome{araya::jobs::job_status::failed, wait_ec.message(), {}});
+		co_return;
+	}
+	auto const raw = state->process->native_exit_code();
+	state->process.reset();
+	if (state->requested_cancel.load()) {
+		std::string detail = WIFSIGNALED(raw) ? "signal: " + std::to_string(WTERMSIG(raw)) : "killed before exit";
+		settle(araya::jobs::job_outcome{araya::jobs::job_status::killed, std::move(detail), {}});
+	} else if (WIFEXITED(raw)) {
+		settle(araya::jobs::job_outcome{
+			araya::jobs::job_status::completed, "exit code: " + std::to_string(WEXITSTATUS(raw)), {}});
+	} else if (WIFSIGNALED(raw)) {
+		settle(araya::jobs::job_outcome{
+			araya::jobs::job_status::completed, "signal: " + std::to_string(WTERMSIG(raw)), {}});
+	} else {
+		settle(araya::jobs::job_outcome{araya::jobs::job_status::completed, {}, {}});
+	}
 }
 
 awaitable<shell_result> run_shell(
@@ -200,6 +311,8 @@ std::string truncation_notice(std::size_t dropped) {
 araya::task<tool_result> handle_bash(
 	boost::asio::any_io_executor executor,
 	std::shared_ptr<araya::session::session_store> store,
+	std::shared_ptr<araya::jobs::jobs_service> jobs,
+	std::shared_ptr<std::vector<std::weak_ptr<bg_state>>> live,
 	shell_config config,
 	tool_context const& ctx) {
 	auto const* args = ctx.arguments.if_object();
@@ -230,6 +343,53 @@ araya::task<tool_result> handle_bash(
 		if (*timeout <= 0)
 			co_return text_result("Error: 'timeoutMs' must be positive", true);
 		config.timeout_ms = static_cast<std::uint64_t>(*timeout);
+	}
+
+	if (args && araya::util::json::opt_bool(*args, "run_in_background").value_or(false)) {
+		if (!config.enable_run_in_background)
+			co_return text_result("Error: run_in_background is disabled for this deployment", true);
+		if (!jobs)
+			co_return text_result("Error: background jobs unavailable: load the jobs plugin", true);
+		if (ctx.stop.stop_requested())
+			co_return text_result("Error: tool call aborted before dispatch", true);
+
+		// The job outlives this tool call: the detached runner drains the pipes
+		// and settles through the registry, and cancellation is the job's, not
+		// the turn's stop token.
+		auto state = std::make_shared<bg_state>();
+		live->push_back(state);
+		auto label = command;
+		auto shell = config.shell;
+		auto max_output = config.max_output;
+		std::string job_id;
+		try {
+			job_id = jobs->start(araya::jobs::job_start{
+				.kind = "bash",
+				.label = std::move(label),
+				.owner_session = ctx.session.empty() ? std::nullopt : std::optional<std::string>{ctx.session},
+				.output_limit_bytes = std::optional<std::size_t>{max_output},
+				.run =
+					[executor, shell, max_output, command, workdir, state](
+						std::function<void(araya::jobs::job_outcome)> settle) {
+						araya::jobs::job_handle handle{
+							.cancel =
+								[state](std::string const&) {
+									state->requested_cancel = true;
+									kill_background(*state);
+								},
+							.read_output = [state] { return state->read_output(); },
+						};
+						boost::asio::co_spawn(
+							executor,
+							run_background(executor, shell, max_output, command, workdir, state, std::move(settle)),
+							boost::asio::detached);
+						return handle;
+					},
+			});
+		} catch (std::exception const& e) {
+			co_return text_result(std::string("Error: ") + e.what(), true);
+		}
+		co_return text_result("started background job " + job_id);
 	}
 
 	auto result = co_await run_shell(executor, config, std::move(command), std::move(workdir), ctx.stop);
@@ -278,8 +438,26 @@ struct shell_plugin : araya::plugin {
 		auto prompts =
 			ctx.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key).shared();
 		auto store = ctx.require<araya::session::session_store>(araya::session::sessions_key).shared();
+		auto jobs = ctx.find<araya::jobs::jobs_service>(araya::jobs::jobs_key)
+						.transform([](auto lease) { return lease.shared(); })
+						.value_or(nullptr);
 		auto executor = ctx.executor();
 		auto config = config_;
+
+		// Background processes outlive a plugin reload only if something kills
+		// them; teardown cancels every live one (the jobs registry also cancels
+		// the jobs it owns, but shell may unload first).
+		auto live = std::make_shared<std::vector<std::weak_ptr<bg_state>>>();
+		ctx.effect([live]() -> araya::cleanup_action {
+			return [live] {
+				for (auto const& weak : *live) {
+					if (auto state = weak.lock()) {
+						state->requested_cancel = true;
+						kill_background(*state);
+					}
+				}
+			};
+		});
 
 		{
 			araya::system_prompt::prompt_section section;
@@ -305,18 +483,35 @@ struct shell_plugin : araya::plugin {
 				 {"type", "string"}, {"description", "Working directory. Defaults to the session workspace."}}},
 		};
 
+		bool const background_enabled = config.enable_run_in_background && jobs != nullptr;
+		if (background_enabled) {
+			properties["run_in_background"] = boost::json::object{
+				{"type", "boolean"},
+				{"description",
+				 "Run in the background and return a job id immediately (collect with job_output, stop with "
+				 "job_kill). No timeout applies."}};
+		}
+		std::string description =
+			"Execute a bash command and return its combined output with [exit code: N], signal, or timeout "
+			"markers. "
+			"Each call uses a fresh shell, so state does not persist across calls.";
+		if (background_enabled)
+			description +=
+				" Set `run_in_background: true` for long-running commands: the call returns a job id immediately; "
+				"read its output with `job_output` and stop it with `job_kill`.";
+
 		tools->register_tool(
 			ctx,
 			tool_definition{
 				"bash",
-				"Execute a bash command and return its combined output with [exit code: N], signal, or timeout "
-				"markers. "
-				"Each call uses a fresh shell, so state does not persist across calls.",
+				std::move(description),
 				boost::json::value{
 					{"type", "object"},
 					{"properties", std::move(properties)},
 					{"required", boost::json::array{"command"}}}},
-			[executor, store, config](tool_context const& call) { return handle_bash(executor, store, config, call); });
+			[executor, store, jobs, live, config](tool_context const& call) {
+				return handle_bash(executor, store, jobs, live, config, call);
+			});
 		co_return;
 	}
 
@@ -332,6 +527,9 @@ static const araya::dependency_spec g_shell_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
 	{araya::service_id{"system-prompt", 1}, true, {}},
 	{araya::service_id{"tools", 1}, true, {}},
+	// Optional: background `run_in_background` needs the jobs registry, but
+	// foreground bash works without it.
+	{araya::service_id{"jobs", 1}, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_shell_provs{};
 static const araya::plugin_descriptor g_descriptor{"shell", g_shell_deps, g_shell_provs, &make_shell};

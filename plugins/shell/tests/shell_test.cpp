@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "araya/jobs/jobs.hpp"
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
 #include "araya/session/store.hpp"
@@ -40,21 +41,29 @@ struct harness : araya_test::plugin_harness {
 	araya::component_spec shell_spec(araya::plugin_config cfg = {}) {
 		return spec(&araya::shell::plugin_descriptor(), std::move(cfg));
 	}
+	araya::component_spec jobs_spec() { return spec(&araya::jobs::plugin_descriptor()); }
 };
 
 struct rig {
 	std::shared_ptr<tools_service> tools;
+	std::shared_ptr<araya::jobs::jobs_service> jobs;
 	std::string session = "s1";
 
-	araya::task<void> mount(araya::runtime& rt, harness& h, std::filesystem::path const& cwd) {
+	araya::task<void> mount(araya::runtime& rt, harness& h, std::filesystem::path const& cwd, bool with_jobs = false) {
 		co_await rt.mount(h.session_spec());
 		co_await rt.mount(h.prompt_spec());
 		co_await rt.mount(h.tools_spec());
+		if (with_jobs)
+			co_await rt.mount(h.jobs_spec());
 		co_await rt.mount(h.shell_spec());
 		co_await rt.wait_idle();
 		auto root = rt.root_context();
 		auto store = root.require<araya::session::session_store>(araya::session::sessions_key).shared();
 		tools = root.require<tools_service>(tools_key).shared();
+		if (with_jobs) {
+			jobs = root.require<araya::jobs::jobs_service>(araya::jobs::jobs_key).shared();
+			jobs->attach_controller(root, "test");
+		}
 		araya::session::create_session_options options;
 		options.cwd = cwd.string();
 		store->create(root, araya::session::session_id{session}, options);
@@ -160,6 +169,33 @@ TEST_CASE("bash aborts on caller cancellation") {
 		REQUIRE(out.has_value());
 		CHECK(out->is_error);
 		CHECK(text_of(*out).find("aborted") != std::string::npos);
+	});
+}
+
+TEST_CASE("bash run_in_background registers a job that can be read, waited on, and killed") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r;
+		co_await r.mount(rt, h, std::filesystem::current_path(), /*with_jobs=*/true);
+
+		auto out = co_await r.call("printf 'one\\ntwo\\n'", {{"run_in_background", true}});
+		REQUIRE(out.has_value());
+		CHECK_FALSE(out->is_error);
+		CHECK(text_of(*out).find("started background job bash-1") != std::string::npos);
+
+		auto snapshot = co_await r.jobs->wait("bash-1", 5000, std::string{"s1"}, {});
+		CHECK(snapshot.status == araya::jobs::job_status::completed);
+		CHECK(snapshot.detail == std::optional<std::string>{"exit code: 0"});
+		auto read = r.jobs->read("bash-1", std::string{"s1"});
+		CHECK(read.text.find("one") != std::string::npos);
+		CHECK(read.text.find("two") != std::string::npos);
+
+		auto long_out = co_await r.call("sleep 30", {{"run_in_background", true}});
+		REQUIRE(long_out.has_value());
+		CHECK(text_of(*long_out).find("started background job bash-2") != std::string::npos);
+		CHECK(r.jobs->kill("bash-2", std::string{"s1"}, "done") == araya::jobs::jobs_service::kill_result::requested);
+		auto killed = co_await r.jobs->wait("bash-2", 5000, std::string{"s1"}, {});
+		CHECK(killed.status == araya::jobs::job_status::killed);
 	});
 }
 
