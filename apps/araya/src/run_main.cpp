@@ -65,13 +65,22 @@ araya::task<void> exec_line(araya::app::app_context& ctx, bool& quitting, std::s
 araya::task<void> run(araya::app::app_context& ctx, std::string script_path) {
 	try {
 		araya::app::line_sink sink = [](std::string text) { out(std::move(text)); };
-		co_await araya::app::boot(ctx, sink);
 
 		std::ifstream script(script_path);
 		if (!script) {
 			out("error: cannot open script '" + script_path + "'");
 			co_return;
 		}
+		// `ask_user_question` reads its answer from the next script line (the
+		// console answerer). Set before boot so the answerer is registered.
+		ctx.answer_input = [&script, &sink](std::string_view prompt) {
+			sink(std::string(prompt));
+			std::string answer;
+			std::getline(script, answer);
+			return answer;
+		};
+		co_await araya::app::boot(ctx, sink);
+
 		bool quitting = false;
 		std::string line;
 		while (std::getline(script, line) && !quitting) {

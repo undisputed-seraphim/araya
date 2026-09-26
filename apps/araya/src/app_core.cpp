@@ -19,12 +19,14 @@
 #include "araya/subagents/subagents.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/timer/timer.hpp"
+#include "araya/tool-ask-user/tool_ask_user.hpp"
 #include "araya/tool-jobs/tool_jobs.hpp"
 #include "araya/tool-skill/tool_skill.hpp"
 #include "araya/tool-subagent/tool_subagent.hpp"
 #include "araya/tool-todo/tool_todo.hpp"
 #include "araya/tool-web/tool_web.hpp"
 #include "araya/tools/tools.hpp"
+#include "araya/user-questions/user_questions.hpp"
 #include "araya/web/web.hpp"
 
 #include <boost/asio/use_awaitable.hpp>
@@ -241,7 +243,8 @@ constexpr command_entry g_commands[]{
 	 "load <component> [json config]",
 	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
 	 "agent-instructions | tools | tool-todo | agent-loop | coreutil | fs-observation-policy | jobs | skill | shell | "
-	 "web | tool-jobs | tool-skill | tool-web | subagents | tool-subagent | console | beacon | watcher",
+	 "user-questions | web | tool-ask-user | tool-jobs | tool-skill | tool-web | subagents | tool-subagent | console | "
+	 "beacon | watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -327,8 +330,12 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::tool_jobs::plugin_descriptor();
 	if (name == "tool-skill")
 		return &araya::tool_skill::plugin_descriptor();
+	if (name == "user-questions")
+		return &araya::user_questions::plugin_descriptor();
 	if (name == "web")
 		return &araya::web::plugin_descriptor();
+	if (name == "tool-ask-user")
+		return &araya::tool_ask_user::plugin_descriptor();
 	if (name == "tool-web")
 		return &araya::tool_web::plugin_descriptor();
 	if (name == "subagents")
@@ -431,6 +438,10 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// Without a configured search provider only `web_fetch` is registered.
 	ctx.desired["web"] = desired_entry{&araya::web::plugin_descriptor(), {}};
 	ctx.desired["tool-web"] = desired_entry{&araya::tool_web::plugin_descriptor(), {}};
+	// Human interaction: the user-questions service and the model-facing
+	// ask tool. The answerer below is what makes the service usable.
+	ctx.desired["user-questions"] = desired_entry{&araya::user_questions::plugin_descriptor(), {}};
+	ctx.desired["tool-ask-user"] = desired_entry{&araya::tool_ask_user::plugin_descriptor(), {}};
 	// The built-in file/search tools and the one-shot shell tool. The
 	// shell resolves relative workdirs against the session cwd; its
 	// run_in_background path registers with the jobs registry.
@@ -453,6 +464,56 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 
 	co_await ctx.rt->reconcile(make_desired(ctx));
 	co_await ctx.rt->wait_idle();
+
+	// The script/console answerer for `ask_user_question`: render the
+	// questions, read one answer line from the surface, and map it onto the
+	// answer shape (an exact option label selects it; anything else is custom
+	// text). No input source means no answerer, so the tool fails clearly.
+	if (ctx.answer_input) {
+		auto root = ctx.rt->root_context();
+		auto questions =
+			root.require<araya::user_questions::user_questions_service>(araya::user_questions::user_questions_key)
+				.shared();
+		auto input = ctx.answer_input;
+		questions->register_answerer(root, [input](araya::user_questions::ask_request const& request) {
+			std::string prompt = "user question:\n";
+			for (auto const& q : request.questions) {
+				if (q.header)
+					prompt += "[" + *q.header + "] ";
+				prompt += q.question;
+				if (!q.options.empty()) {
+					prompt += " (options: ";
+					for (std::size_t i = 0; i < q.options.size(); ++i) {
+						if (i)
+							prompt += ", ";
+						prompt += q.options[i].label;
+					}
+					prompt += ")";
+				}
+				prompt += "\n";
+			}
+			std::string const line = input(prompt);
+			araya::user_questions::answer answer;
+			for (auto const& q : request.questions) {
+				araya::user_questions::answer_item item;
+				item.id = q.id;
+				if (!line.empty()) {
+					bool matched = false;
+					for (auto const& option : q.options) {
+						if (option.label == line) {
+							item.selected.push_back(line);
+							matched = true;
+							break;
+						}
+					}
+					if (!matched)
+						item.custom = line;
+				}
+				answer.answers.push_back(std::move(item));
+			}
+			return answer;
+		});
+	}
 
 	std::error_code cwd_ec;
 	ctx.cwd = std::filesystem::current_path(cwd_ec).string();

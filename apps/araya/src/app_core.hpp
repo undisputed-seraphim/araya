@@ -67,6 +67,10 @@ struct app_context {
 	// The surface's transient-stream sink; the commands forward model
 	// content/reasoning deltas here. Empty disables streaming.
 	stream_callback stream_hook;
+	// The script/console answer provider for `ask_user_question`: renders the
+	// prompt and returns the raw answer line. Empty means no answerer is
+	// registered, so the tool fails.
+	std::function<std::string(std::string_view prompt)> answer_input;
 };
 
 // A no-op-deleter view over a static descriptor: the same pattern the

@@ -41,11 +41,13 @@ target_link_libraries(araya_app PRIVATE
     araya::skill
     araya::subagents
     araya::timer
+    araya::tool-ask-user
     araya::tool-jobs
     araya::tool-skill
     araya::tool-subagent
     araya::tool-todo
     araya::tool-web
+    araya::user-questions
     araya::web
     ftxui::component
     ftxui::dom
