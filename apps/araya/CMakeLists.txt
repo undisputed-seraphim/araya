@@ -45,6 +45,8 @@ target_link_libraries(araya_app PRIVATE
     araya::tool-skill
     araya::tool-subagent
     araya::tool-todo
+    araya::tool-web
+    araya::web
     ftxui::component
     ftxui::dom
     ftxui::screen

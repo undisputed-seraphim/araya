@@ -23,7 +23,9 @@
 #include "araya/tool-skill/tool_skill.hpp"
 #include "araya/tool-subagent/tool_subagent.hpp"
 #include "araya/tool-todo/tool_todo.hpp"
+#include "araya/tool-web/tool_web.hpp"
 #include "araya/tools/tools.hpp"
+#include "araya/web/web.hpp"
 
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/json/value.hpp>
@@ -238,8 +240,8 @@ constexpr command_entry g_commands[]{
 	{"load",
 	 "load <component> [json config]",
 	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
-	 "agent-instructions | tools | tool-todo | agent-loop | coreutil | fs-observation-policy | jobs | skill | shell "
-	 "| tool-jobs | tool-skill | subagents | tool-subagent | console | beacon | watcher",
+	 "agent-instructions | tools | tool-todo | agent-loop | coreutil | fs-observation-policy | jobs | skill | shell | "
+	 "web | tool-jobs | tool-skill | tool-web | subagents | tool-subagent | console | beacon | watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -325,6 +327,10 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::tool_jobs::plugin_descriptor();
 	if (name == "tool-skill")
 		return &araya::tool_skill::plugin_descriptor();
+	if (name == "web")
+		return &araya::web::plugin_descriptor();
+	if (name == "tool-web")
+		return &araya::tool_web::plugin_descriptor();
 	if (name == "subagents")
 		return &araya::subagents::plugin_descriptor();
 	if (name == "tool-subagent")
@@ -421,6 +427,10 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// and its session catalog section.
 	ctx.desired["skill"] = desired_entry{&araya::skill::plugin_descriptor(), {}};
 	ctx.desired["tool-skill"] = desired_entry{&araya::tool_skill::plugin_descriptor(), {}};
+	// Web access: the fetch/search service and the model-facing tools.
+	// Without a configured search provider only `web_fetch` is registered.
+	ctx.desired["web"] = desired_entry{&araya::web::plugin_descriptor(), {}};
+	ctx.desired["tool-web"] = desired_entry{&araya::tool_web::plugin_descriptor(), {}};
 	// The built-in file/search tools and the one-shot shell tool. The
 	// shell resolves relative workdirs against the session cwd; its
 	// run_in_background path registers with the jobs registry.
