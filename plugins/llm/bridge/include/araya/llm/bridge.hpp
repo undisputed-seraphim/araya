@@ -218,6 +218,12 @@ inline boost::json::object message_source(std::string_view kind, boost::json::ob
 	return fields;
 }
 
+// A plain-text user message with a provenance tag.
+inline boost::json::value user_message_data(std::string_view id, std::string_view text, boost::json::object source) {
+	return user_message_data(
+		id, boost::json::array{{{"type", "text"}, {"text", std::string(text)}}}, boost::json::value(std::move(source)));
+}
+
 // The tool/result envelope: the data IS the message, exactly one content
 // block carrying the call id, and source.call_id matching it (the
 // store's validated shape).

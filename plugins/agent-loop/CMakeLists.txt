@@ -4,7 +4,7 @@
 # seam; araya::tools supplies the tool registry and (transitively) the
 # system-prompt registry.
 araya_add_plugin(agent-loop
-    SOURCES src/agent.cpp src/inbox.cpp src/plugin.cpp
+    SOURCES src/agent.cpp src/events.cpp src/inbox.cpp src/plugin.cpp
     DEPS araya::llm-bridge araya::tools
     TEST tests/agent_test.cpp
 )

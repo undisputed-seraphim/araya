@@ -65,6 +65,29 @@ boost::json::value inbox_prepend_data(inbox_target target, boost::json::value co
 // Removes the first `count` messages of a queue (the claim).
 boost::json::value inbox_claim_data(inbox_target target, std::int64_t count);
 
+// The normalized result of one mutation: the exact splice payload to
+// append (coordinates already clamped, `outcome` resolved) plus the
+// messages it removed. `noop` is true when the splice changes nothing, in
+// which case no event is written.
+struct inbox_mutation {
+	boost::json::value data;
+	std::vector<boost::json::value> removed;
+	bool noop = false;
+};
+
+// Normalizes a splice the way the durable fold will read it (the harness's
+// mutate): clamps `start`/`delete_count` to the current queue, returns the
+// removed messages, omits `removedCount` when zero, and marks
+// `outcome:"canceled"` only when `discard` is set and something was
+// removed. A no-op yields `noop` and no payload.
+inbox_mutation make_inbox_splice(
+	inbox_state const& state,
+	inbox_target target,
+	std::int64_t start,
+	std::int64_t delete_count,
+	boost::json::array inserted,
+	bool discard);
+
 // Folds one 'agent/inbox/spliced' payload into the state. Malformed payloads
 // are a no-op. Message ids are unique across both queues: an inserted entry
 // with no id, or an id already present, is dropped rather than duplicated,

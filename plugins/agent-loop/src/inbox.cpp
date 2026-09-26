@@ -48,7 +48,8 @@ boost::json::value inbox_splice_data(
 	boost::json::object data;
 	data["target"] = target_name(target);
 	data["start"] = start;
-	data["removedCount"] = removed_count;
+	if (removed_count != 0)
+		data["removedCount"] = removed_count;
 	data["inserted"] = std::move(inserted);
 	if (!outcome.empty())
 		data["outcome"] = std::string(outcome);
@@ -77,6 +78,35 @@ std::string inbox_message_id(boost::json::value const& message) {
 	if (it == object->end() || !it->value().is_string())
 		return {};
 	return std::string(it->value().as_string());
+}
+
+inbox_mutation make_inbox_splice(
+	inbox_state const& state,
+	inbox_target target,
+	std::int64_t start,
+	std::int64_t delete_count,
+	boost::json::array inserted,
+	bool discard) {
+	auto const& queue = target == inbox_target::next_turn ? state.next_turn : state.next_step;
+	auto const length = static_cast<std::int64_t>(queue.size());
+	if (start < 0)
+		start = std::max(length + start, std::int64_t{0});
+	else
+		start = std::min(start, length);
+	if (delete_count < 0)
+		delete_count = 0;
+	delete_count = std::min(delete_count, length - start);
+	if (delete_count == 0 && inserted.empty()) {
+		inbox_mutation none;
+		none.noop = true;
+		return none;
+	}
+
+	inbox_mutation result;
+	result.removed.assign(queue.begin() + start, queue.begin() + start + delete_count);
+	result.data = inbox_splice_data(
+		target, start, delete_count, std::move(inserted), (discard && delete_count > 0) ? "canceled" : "");
+	return result;
 }
 
 void apply_inbox_splice(inbox_state& state, boost::json::value const& data) {
