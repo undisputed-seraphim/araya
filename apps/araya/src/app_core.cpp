@@ -5,6 +5,7 @@
 
 #include "araya/agent-instructions/agent_instructions.hpp"
 #include "araya/agent-loop/agent.hpp"
+#include "araya/attachment/attachment.hpp"
 #include "araya/coreutil/coreutil.hpp"
 #include "araya/fs-observation-policy/fs_observation_policy.hpp"
 #include "araya/jobs/jobs.hpp"
@@ -21,6 +22,7 @@
 #include "araya/timer/timer.hpp"
 #include "araya/tool-ask-user/tool_ask_user.hpp"
 #include "araya/tool-jobs/tool_jobs.hpp"
+#include "araya/tool-read-image/tool_read_image.hpp"
 #include "araya/tool-skill/tool_skill.hpp"
 #include "araya/tool-subagent/tool_subagent.hpp"
 #include "araya/tool-todo/tool_todo.hpp"
@@ -242,9 +244,9 @@ constexpr command_entry g_commands[]{
 	{"load",
 	 "load <component> [json config]",
 	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
-	 "agent-instructions | tools | tool-todo | agent-loop | coreutil | fs-observation-policy | jobs | skill | shell | "
-	 "user-questions | web | tool-ask-user | tool-jobs | tool-skill | tool-web | subagents | tool-subagent | console | "
-	 "beacon | watcher",
+	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | jobs | "
+	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-skill | tool-web | "
+	 "subagents | tool-subagent | console | beacon | watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -316,6 +318,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::tool_todo::plugin_descriptor();
 	if (name == "agent-loop")
 		return &araya::agent::plugin_descriptor();
+	if (name == "attachment")
+		return &araya::attachment::plugin_descriptor();
 	if (name == "coreutil")
 		return &araya::coreutil::plugin_descriptor();
 	if (name == "fs-observation-policy")
@@ -328,6 +332,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::shell::plugin_descriptor();
 	if (name == "tool-jobs")
 		return &araya::tool_jobs::plugin_descriptor();
+	if (name == "tool-read-image")
+		return &araya::tool_read_image::plugin_descriptor();
 	if (name == "tool-skill")
 		return &araya::tool_skill::plugin_descriptor();
 	if (name == "user-questions")
@@ -442,6 +448,9 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// ask tool. The answerer below is what makes the service usable.
 	ctx.desired["user-questions"] = desired_entry{&araya::user_questions::plugin_descriptor(), {}};
 	ctx.desired["tool-ask-user"] = desired_entry{&araya::tool_ask_user::plugin_descriptor(), {}};
+	// Image attachments: the content-addressed store and the read_image tool.
+	ctx.desired["attachment"] = desired_entry{&araya::attachment::plugin_descriptor(), {{"root", "araya-attachments"}}};
+	ctx.desired["tool-read-image"] = desired_entry{&araya::tool_read_image::plugin_descriptor(), {}};
 	// The built-in file/search tools and the one-shot shell tool. The
 	// shell resolves relative workdirs against the session cwd; its
 	// run_in_background path registers with the jobs registry.

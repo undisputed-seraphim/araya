@@ -65,7 +65,25 @@ inline araya::llm::llm_message to_llm_message(araya::session::session_message co
 					tool.content = *node;
 				if (auto const* node = object->if_contains("is_error"); node && node->is_bool())
 					tool.is_error = node->as_bool();
+				// Lift images out of the tool result content so adapters render
+				// them as attachments beside the flattened text result.
+				if (auto const* content = araya::util::json::as_array(tool.content)) {
+					for (auto const& inner : *content) {
+						auto const* inner_object = araya::util::json::as_object(inner);
+						if (!inner_object || araya::util::json::get_string(*inner_object, "type") != "image")
+							continue;
+						result.content.emplace_back(araya::llm::image_block{
+							araya::util::json::get_string(*inner_object, "attachment_id"),
+							araya::util::json::get_string(*inner_object, "media_type"),
+							araya::util::json::get_string(*inner_object, "data")});
+					}
+				}
 				result.content.emplace_back(std::move(tool));
+			} else if (type == "image") {
+				result.content.emplace_back(araya::llm::image_block{
+					araya::util::json::get_string(*object, "attachment_id"),
+					araya::util::json::get_string(*object, "media_type"),
+					araya::util::json::get_string(*object, "data")});
 			}
 		}
 	}
@@ -107,6 +125,12 @@ inline boost::json::value blocks_to_json(std::vector<araya::llm::content_block> 
 			if (result->is_error)
 				object["is_error"] = true;
 			array.emplace_back(std::move(object));
+		} else if (auto const* image = std::get_if<araya::llm::image_block>(&block)) {
+			array.emplace_back(boost::json::object{
+				{"type", "image"},
+				{"attachment_id", image->attachment_id},
+				{"media_type", image->media_type},
+				{"data", image->data}});
 		}
 	}
 	return array;

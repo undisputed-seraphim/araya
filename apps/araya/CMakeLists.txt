@@ -26,6 +26,7 @@ target_link_libraries(araya_app PRIVATE
     araya::araya
     araya::agent-instructions
     araya::agent-loop
+    araya::attachment
     araya::coreutil
     araya::demo
     araya::fs-observation-policy
@@ -43,6 +44,7 @@ target_link_libraries(araya_app PRIVATE
     araya::timer
     araya::tool-ask-user
     araya::tool-jobs
+    araya::tool-read-image
     araya::tool-skill
     araya::tool-subagent
     araya::tool-todo

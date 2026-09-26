@@ -100,15 +100,29 @@ std::string tool_result_text(boost::json::value const& content) {
 	return text;
 }
 
+// One image part for a user message's content array (an inline data URL).
+boost::json::object image_part(araya::llm::image_block const& image) {
+	return boost::json::object{
+		{"type", "image_url"},
+		{"image_url", boost::json::object{{"url", "data:" + image.media_type + ";base64," + image.data}}}};
+}
+
 void append_user_message(boost::json::array& messages, araya::llm::llm_message const& message) {
-	// Tool results serialize as role "tool" messages first; the remaining
-	// text becomes the user message.
+	// Tool results serialize as role "tool" messages first; images lifted from
+	// a tool result follow in one user message; the remaining text last.
 	for (auto const& block : message.content) {
 		if (auto const* tool = std::get_if<araya::llm::tool_result_block>(&block)) {
 			messages.emplace_back(boost::json::object{
 				{"role", "tool"}, {"tool_call_id", tool->tool_call_id}, {"content", tool_result_text(tool->content)}});
 		}
 	}
+	boost::json::array image_parts;
+	for (auto const& block : message.content) {
+		if (auto const* image = std::get_if<araya::llm::image_block>(&block))
+			image_parts.push_back(image_part(*image));
+	}
+	if (!image_parts.empty())
+		messages.emplace_back(boost::json::object{{"role", "user"}, {"content", std::move(image_parts)}});
 	if (auto text = join_text(message); !text.empty())
 		messages.emplace_back(boost::json::object{{"role", "user"}, {"content", std::move(text)}});
 }

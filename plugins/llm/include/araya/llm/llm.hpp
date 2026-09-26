@@ -73,7 +73,17 @@ struct tool_result_block {
 	bool is_error = false;
 };
 
-using content_block = std::variant<text_block, reasoning_block, tool_call_block, tool_result_block>;
+// An image attached to a message (typically a tool result from `read_image`).
+// Local v1 carries the base64 bytes inline so the request path is
+// self-contained; the durable attachment store is referenced by id but the
+// adapters never resolve it.
+struct image_block {
+	std::string attachment_id;
+	std::string media_type;
+	std::string data; // base64-encoded bytes
+};
+
+using content_block = std::variant<text_block, reasoning_block, tool_call_block, tool_result_block, image_block>;
 
 struct llm_message {
 	message_role role = message_role::user;
@@ -161,6 +171,8 @@ struct model_info {
 	std::uint64_t context_window = 0;
 	std::uint64_t default_max_tokens = 0;
 	std::vector<std::string> reasoning_efforts;
+	// Whether the model accepts image input (routed through `read_image`).
+	bool supports_image = false;
 };
 
 struct provider_info {

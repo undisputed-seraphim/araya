@@ -32,6 +32,7 @@ struct openai_model {
 	std::uint64_t context_window = 0;
 	std::uint64_t default_max_tokens = 0;
 	std::vector<std::string> reasoning_efforts;
+	bool supports_image = false;
 };
 
 struct openai_config {

@@ -57,6 +57,27 @@ TEST_CASE("build_request maps roles, tool calls, and tool results to the wire") 
 	CHECK(messages[3] == parse(R"({"role":"tool","tool_call_id":"call-1","content":"sunny"})"));
 }
 
+TEST_CASE("build_request renders an image block as a data-URL user message") {
+	generate_options options;
+	options.model = "vision";
+	options.messages = {
+		message(message_role::assistant, {tool_call_block{"call-1", "read_image", "{}"}}),
+		message(
+			message_role::user,
+			{image_block{"att-1", "image/png", "QUJD"},
+			 tool_result_block{
+				 "call-1", boost::json::array{{{"type", "text"}, {"text", "<path>a.png</path>"}}}, false}}),
+	};
+
+	auto const request = build_request(options);
+	auto const& messages = request.as_object().at("messages").as_array();
+	REQUIRE(messages.size() == 3);
+	CHECK(messages[1] == parse(R"({"role":"tool","tool_call_id":"call-1","content":"<path>a.png</path>"})"));
+	CHECK(
+		messages[2] ==
+		parse(R"({"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,QUJD"}}]})"));
+}
+
 TEST_CASE("build_request carries reasoning effort, tools, temperature, and stop") {
 	generate_options options;
 	options.model = "deepseek-reasoner";

@@ -46,6 +46,26 @@ TEST_CASE("to_llm_message converts the surface block vocabulary") {
 	CHECK(tool->content.is_array());
 }
 
+TEST_CASE("to_llm_message lifts images out of a tool result") {
+	auto message = make_message(
+		message_role::user,
+		boost::json::array{
+			{{"type", "tool_result"},
+			 {"tool_call_id", "c1"},
+			 {"content",
+			  boost::json::array{
+				  {{"type", "text"}, {"text", "env"}},
+				  {{"type", "image"}, {"attachment_id", "a1"}, {"media_type", "image/png"}, {"data", "QUJD"}}}}}});
+	auto converted = to_llm_message(message);
+	REQUIRE(converted.content.size() == 2);
+	auto const* image = std::get_if<araya::llm::image_block>(&converted.content[0]);
+	REQUIRE(image != nullptr);
+	CHECK(image->attachment_id == "a1");
+	CHECK(image->media_type == "image/png");
+	CHECK(image->data == "QUJD");
+	CHECK(std::get_if<araya::llm::tool_result_block>(&converted.content[1]) != nullptr);
+}
+
 TEST_CASE("to_llm_message maps roles and assistant tool calls") {
 	auto assistant = make_message(
 		message_role::assistant,
