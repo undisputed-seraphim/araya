@@ -8,6 +8,8 @@
 #include "araya/attachment/attachment.hpp"
 #include "araya/coreutil/coreutil.hpp"
 #include "araya/fs-observation-policy/fs_observation_policy.hpp"
+#include "araya/goal-round-driver/goal_round_driver.hpp"
+#include "araya/goal/goal.hpp"
 #include "araya/jobs/jobs.hpp"
 #include "araya/llm-mock/mock.hpp"
 #include "araya/llm-openai/openai.hpp"
@@ -21,6 +23,7 @@
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/timer/timer.hpp"
 #include "araya/tool-ask-user/tool_ask_user.hpp"
+#include "araya/tool-goal/tool_goal.hpp"
 #include "araya/tool-jobs/tool_jobs.hpp"
 #include "araya/tool-read-image/tool_read_image.hpp"
 #include "araya/tool-skill/tool_skill.hpp"
@@ -244,7 +247,8 @@ constexpr command_entry g_commands[]{
 	{"load",
 	 "load <component> [json config]",
 	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
-	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | jobs | "
+	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
+	 "goal-round-driver | tool-goal | jobs | "
 	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-skill | tool-web | "
 	 "subagents | tool-subagent | console | beacon | watcher",
 	 &cmd_load},
@@ -324,6 +328,10 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::coreutil::plugin_descriptor();
 	if (name == "fs-observation-policy")
 		return &araya::fs_observation_policy::plugin_descriptor();
+	if (name == "goal")
+		return &araya::goal::plugin_descriptor();
+	if (name == "goal-round-driver")
+		return &araya::goal_round_driver::plugin_descriptor();
 	if (name == "jobs")
 		return &araya::jobs::plugin_descriptor();
 	if (name == "skill")
@@ -332,6 +340,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::shell::plugin_descriptor();
 	if (name == "tool-jobs")
 		return &araya::tool_jobs::plugin_descriptor();
+	if (name == "tool-goal")
+		return &araya::tool_goal::plugin_descriptor();
 	if (name == "tool-read-image")
 		return &araya::tool_read_image::plugin_descriptor();
 	if (name == "tool-skill")
@@ -459,6 +469,11 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// The read-before-write/edit policy: an event-only gate the coreutil
 	// executor consults. Without it the fs tools are unconstrained.
 	ctx.desired["fs-observation-policy"] = desired_entry{&araya::fs_observation_policy::plugin_descriptor(), {}};
+	// Goals: the event-sourced goal domain, its model-facing tools, and the
+	// automatic round driver. The driver disarms on load; a human resumes.
+	ctx.desired["goal"] = desired_entry{&araya::goal::plugin_descriptor(), {}};
+	ctx.desired["goal-round-driver"] = desired_entry{&araya::goal_round_driver::plugin_descriptor(), {}};
+	ctx.desired["tool-goal"] = desired_entry{&araya::tool_goal::plugin_descriptor(), {}};
 	// Delegation: the subagent seam (spawn provider + continuable
 	// children) and the model-facing tools. The child route is inherited
 	// from the parent's latest request header unless configured here.

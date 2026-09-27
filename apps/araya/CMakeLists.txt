@@ -30,6 +30,8 @@ target_link_libraries(araya_app PRIVATE
     araya::coreutil
     araya::demo
     araya::fs-observation-policy
+    araya::goal
+    araya::goal-round-driver
     araya::jobs
     araya::llm
     araya::llm-bridge
@@ -43,6 +45,7 @@ target_link_libraries(araya_app PRIVATE
     araya::subagents
     araya::timer
     araya::tool-ask-user
+    araya::tool-goal
     araya::tool-jobs
     araya::tool-read-image
     araya::tool-skill
