@@ -564,57 +564,65 @@ araya::task<bool> agent_service::turn(state_ptr const& state) {
 	std::uint64_t step = 0;
 	bool first_step = true;
 
-	for (;;) {
-		if (state->exec.stop.stop_requested()) {
-			ended = run_status::aborted;
-			break;
-		}
-		if (step >= state->exec.max_steps) {
-			ended = run_status::blocked;
-			break;
-		}
-		++step;
-		araya::system_prompt::prompt_assembly assembly;
-		auto decision = co_await pre_step(state, *session, turn_no, step, first_step, assembly);
-		if (decision.reject) {
-			ended = run_status::blocked;
-			break;
-		}
-		if (ended && decision.messages.empty())
-			break;
-		if (first_step && decision.messages.empty()) {
-			ended = run_status::completed;
-			break;
-		}
+	try {
+		for (;;) {
+			if (state->exec.stop.stop_requested()) {
+				ended = run_status::aborted;
+				break;
+			}
+			if (step >= state->exec.max_steps) {
+				ended = run_status::blocked;
+				break;
+			}
+			++step;
+			araya::system_prompt::prompt_assembly assembly;
+			auto decision = co_await pre_step(state, *session, turn_no, step, first_step, assembly);
+			if (decision.reject) {
+				ended = run_status::blocked;
+				break;
+			}
+			if (ended && decision.messages.empty())
+				break;
+			if (first_step && decision.messages.empty()) {
+				ended = run_status::completed;
+				break;
+			}
 
-		emit(sink, step_event{turn_no, step});
-		session->append("step/start", boost::json::value{{"turn", turn_no}, {"step", step}});
-		std::optional<run_status> exit;
-		try {
-			exit = co_await run_step(state, *session, turn_no, step, assembly, decision.messages, sink);
-		} catch (...) {
+			emit(sink, step_event{turn_no, step});
+			session->append("step/start", boost::json::value{{"turn", turn_no}, {"step", step}});
+			std::optional<run_status> exit;
+			try {
+				exit = co_await run_step(state, *session, turn_no, step, assembly, decision.messages, sink);
+			} catch (...) {
+				session->append("step/end", boost::json::value{{"turn", turn_no}, {"step", step}});
+				throw;
+			}
 			session->append("step/end", boost::json::value{{"turn", turn_no}, {"step", step}});
-			throw;
-		}
-		session->append("step/end", boost::json::value{{"turn", turn_no}, {"step", step}});
-		if (exit && (!ended || *ended != run_status::max_tokens))
-			ended = exit;
-		first_step = false;
+			if (exit && (!ended || *ended != run_status::max_tokens))
+				ended = exit;
+			first_step = false;
 
-		bool next_step_pending = false;
-		if (auto inbox = inbox_.state_of(state->session))
-			next_step_pending = !inbox->next_step.empty();
-		if (ended && !next_step_pending) {
-			if (bus_)
-				co_await bus_->dispatch(
-					agent_turn_stopping_key,
-					agent_turn_stopping_msg{state->session, turn_no, state->exec.stop},
-					state->realm_scope.get());
+			bool next_step_pending = false;
 			if (auto inbox = inbox_.state_of(state->session))
 				next_step_pending = !inbox->next_step.empty();
+			if (ended && !next_step_pending) {
+				if (bus_)
+					co_await bus_->dispatch(
+						agent_turn_stopping_key,
+						agent_turn_stopping_msg{state->session, turn_no, state->exec.stop},
+						state->realm_scope.get());
+				if (auto inbox = inbox_.state_of(state->session))
+					next_step_pending = !inbox->next_step.empty();
+			}
+			if (ended && !next_step_pending)
+				break;
 		}
-		if (ended && !next_step_pending)
-			break;
+	} catch (...) {
+		// A step failure still closes its turn (the harness's finally): a
+		// driver or replay must see this turn end, not leave it open.
+		session->append("turn/end", turn_end_data(turn_no, run_status::error, state->last_outcome.failure));
+		emit(sink, run_finish_event{turn_no, run_status::error});
+		throw;
 	}
 
 	session->append(

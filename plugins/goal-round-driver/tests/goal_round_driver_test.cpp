@@ -46,6 +46,7 @@ struct harness : araya_test::plugin_harness {
 struct rig {
 	std::shared_ptr<araya::session::session_store> store;
 	std::shared_ptr<goal_service> goals;
+	std::shared_ptr<araya::agent::agent_service> agent;
 	std::shared_ptr<araya::session::session> session;
 
 	araya::task<void> mount(araya::runtime& rt, harness& h) {
@@ -61,6 +62,7 @@ struct rig {
 		auto root = rt.root_context();
 		store = root.require<araya::session::session_store>(araya::session::sessions_key).shared();
 		goals = root.require<goal_service>(goals_key).shared();
+		agent = root.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
 		session = store->create(root, araya::session::session_id{"s1"}, {});
 	}
 };
@@ -90,7 +92,17 @@ TEST_CASE("an armed goal drives a round and blocks at its round limit") {
 		rig r;
 		co_await r.mount(rt, h);
 
-		auto goal = r.goals->create(araya::session::session_id{"s1"}, "finish the task", 1);
+		// Establish a route so the round turns complete normally (an errored
+		// turn disarms the goal, which is not what this test exercises).
+		araya::agent::run_options options;
+		options.provider = "mock";
+		options.model = "mock-model";
+		options.session = araya::session::session_id{"s1"};
+		options.input = "warm up";
+		auto warmup = co_await r.agent->run(options);
+		CHECK(warmup.status == araya::agent::run_status::completed);
+
+		auto goal = r.goals->create(araya::session::session_id{"s1"}, "finish the task", 2);
 		CHECK(goal.activation == goal_activation::armed);
 
 		co_await wait_until([&] {
@@ -103,7 +115,29 @@ TEST_CASE("an armed goal drives a round and blocks at its round limit") {
 		CHECK(current->phase == goal_phase::blocked);
 		REQUIRE(current->blocked_reason.has_value());
 		CHECK(current->blocked_reason->code == "round-limit");
-		CHECK(current->rounds_started == 1);
+		CHECK(current->rounds_started == 2);
 		CHECK(saw_goal_round(*r.session));
+	});
+}
+
+TEST_CASE("an errored round disarms the goal instead of spinning") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r;
+		co_await r.mount(rt, h);
+
+		// No route: the first round's turn fails, and the goal must disarm.
+		r.goals->create(araya::session::session_id{"s1"}, "no route", 8);
+
+		co_await wait_until([&] {
+			auto current = r.goals->get(araya::session::session_id{"s1"});
+			return current && current->activation == goal_activation::disarmed;
+		});
+
+		auto current = r.goals->get(araya::session::session_id{"s1"});
+		REQUIRE(current.has_value());
+		CHECK(current->activation == goal_activation::disarmed);
+		CHECK(current->rounds_started == 1);
+		CHECK(current->phase == goal_phase::active);
 	});
 }

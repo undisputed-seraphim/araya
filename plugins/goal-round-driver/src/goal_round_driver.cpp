@@ -5,6 +5,7 @@
 #include "araya/agent-loop/inbox.hpp"
 #include "araya/goal/goal.hpp"
 #include "araya/llm/bridge.hpp"
+#include "araya/session/events.hpp"
 #include "araya/session/store.hpp"
 #include "araya/util/json.hpp"
 
@@ -194,6 +195,21 @@ struct goal_round_driver_plugin : araya::plugin {
 					next_turn = true;
 			if (next_turn)
 				d->state_of(message.session.value)->competing = true;
+		});
+
+		// An errored or truncated turn drops automatic authority: never spin
+		// rounds through failing turns.
+		ctx.on(araya::session::appended_key, [d](araya::session::session_appended_msg const& message) {
+			if (message.event.type != "turn/end")
+				return;
+			auto const* object = message.event.data.if_object();
+			auto reason = object ? araya::util::json::get_string(*object, "reason") : std::string{};
+			if (reason != "error" && reason != "max_tokens")
+				return;
+			try {
+				(void)d->goals->disarm(message.id);
+			} catch (...) {
+			}
 		});
 
 		// Fence the reservation at the pre-step: drop a round that no longer
