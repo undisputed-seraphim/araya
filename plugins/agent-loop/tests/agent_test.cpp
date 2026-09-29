@@ -926,3 +926,72 @@ TEST_CASE("agent events are scoped to their session's realm") {
 		CHECK(s2_running == 0);
 	});
 }
+
+TEST_CASE("context producers contribute ordered, idempotent messages before the claim") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("a")}, {text_stream("b")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+		auto id = r.session->id();
+
+		r.agent->add_context_producer(
+			root_ctx, context_producer{"alpha", [](araya::session::session const& s, context_producer_context const&) {
+										   return injected_context(s, "alpha", "alpha-body");
+									   }});
+		r.agent->add_context_producer(
+			root_ctx, context_producer{"beta", [](araya::session::session const& s, context_producer_context const&) {
+										   return injected_context(s, "beta", "beta-body");
+									   }});
+
+		co_await r.agent->followup(id, tagged("n1", "first"), mock_exec());
+		co_await r.agent->when_idle(id);
+		co_await r.agent->followup(id, tagged("n2", "second"), mock_exec());
+		co_await r.agent->when_idle(id);
+
+		// Registration order, before the claimed message; the second turn
+		// re-injects nothing because both renders are unchanged.
+		CHECK(user_texts(*r.session) == std::vector<std::string>{"alpha-body", "beta-body", "first", "second"});
+	});
+}
+
+TEST_CASE("a changed context message is re-injected and survives restore") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("a")}, {text_stream("b")}, {text_stream("c")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+		auto id = r.session->id();
+
+		std::string body = "one";
+		r.agent->add_context_producer(
+			root_ctx,
+			context_producer{"changing", [&body](araya::session::session const& s, context_producer_context const&) {
+								 return injected_context(s, "changing", body);
+							 }});
+
+		co_await r.agent->followup(id, tagged("n1", "first"), mock_exec());
+		co_await r.agent->when_idle(id);
+		body = "two";
+		co_await r.agent->followup(id, tagged("n2", "second"), mock_exec());
+		co_await r.agent->when_idle(id);
+		CHECK(user_texts(*r.session) == std::vector<std::string>{"one", "first", "two", "second"});
+
+		// The injected context is durable: a restore replays it, and an
+		// unchanged render contributes nothing more.
+		auto store = root_ctx.require<araya::session::session_store>(araya::session::sessions_key).shared();
+		auto log = r.session->log();
+		store->dispose(id);
+		auto restored = store->prepare(
+			id, araya::session::create_session_options{.seed = log, .inherited_event_count = log.size()});
+		store->enter(restored);
+		store->announce(*restored);
+		co_await r.agent->followup(id, tagged("n3", "third"), mock_exec());
+		co_await r.agent->when_idle(id);
+		CHECK(user_texts(*restored) == std::vector<std::string>{"one", "first", "two", "second", "third"});
+	});
+}

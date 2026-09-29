@@ -2,15 +2,16 @@
 
 #include "araya/plugin.hpp"
 
-// Workspace instructions (AGENTS.md-compatible) as a system-prompt section:
-// discover the candidate files from the session cwd up to the project root,
-// read and render them within a byte budget, and contribute the result at
-// the AGENT_INSTRUCTIONS order. A feature-replication of the deepseek-harness
+// Workspace instructions (AGENTS.md-compatible) as a durable agent context
+// producer: discover the candidate files from the session cwd up to the
+// project root, read and render them within a byte budget, and contribute
+// the result as a pre-step user message (refreshed only when it changes).
+// A feature-replication of the deepseek-harness
 // `@deepseek-ai/dsh-agent-instructions` baseline, trimmed to the read-only
 // discovery/render path (no fs-touch reconciliation, no user-global file).
 namespace araya::agent_instructions {
 
-// The plugin descriptor: requires `system-prompt`; provides nothing.
+// The plugin descriptor: requires `agent`; provides nothing.
 araya::plugin_descriptor const& plugin_descriptor();
 
 } // namespace araya::agent_instructions

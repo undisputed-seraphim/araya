@@ -279,6 +279,36 @@ char const* run_status_name(run_status status) noexcept {
 	return index < k_run_status_names.size() ? k_run_status_names[index] : "error";
 }
 
+std::optional<boost::json::value>
+injected_context(araya::session::session const& session, std::string_view producer, std::string_view content) {
+	if (content.empty())
+		return std::nullopt;
+	// Compare against this producer's last contribution, if any: an
+	// unchanged render contributes nothing, so a turn never re-injects and
+	// a restore/replay cannot duplicate the message.
+	std::optional<std::string> previous;
+	auto const& messages = session.surface().messages();
+	for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+		if (it->role != araya::session::message_role::user || !it->source)
+			continue;
+		auto const* object = it->source->if_object();
+		auto const* kind = object ? object->if_contains("kind") : nullptr;
+		auto const* plugin = object ? object->if_contains("plugin") : nullptr;
+		if (!kind || !kind->is_string() || kind->as_string() != "plugin")
+			continue;
+		if (!plugin || !plugin->is_string() || plugin->as_string() != producer)
+			continue;
+		previous = araya::llm_bridge::message_text(*it);
+		break;
+	}
+	if (previous && *previous == content)
+		return std::nullopt;
+	return araya::llm_bridge::user_message_data(
+		"ctx-" + std::string(producer) + "-" + std::to_string(session.log().size()),
+		std::string(content),
+		araya::llm_bridge::message_source("plugin", {{"plugin", std::string(producer)}}));
+}
+
 // -- controller state ------------------------------------------------------
 
 struct agent_service::agent_state {
@@ -673,6 +703,16 @@ araya::task<pre_step_msg> agent_service::pre_step(
 		auto snapshot = araya::system_prompt::render_context_snapshot(assembly);
 		if (!snapshot.empty())
 			proposed.push_back(user_message_data("c" + std::to_string(session.log().size()), snapshot));
+		context_producer_context producer_context;
+		producer_context.provider = state->exec.provider;
+		producer_context.model = state->exec.model;
+		if (session.header().cwd)
+			producer_context.cwd = *session.header().cwd;
+		for (auto const& [id, producer] : context_producers_) {
+			(void)id;
+			if (auto message = producer.produce(session, producer_context))
+				proposed.push_back(std::move(*message));
+		}
 	}
 	for (auto& message : claimed)
 		proposed.push_back(std::move(message));
@@ -954,6 +994,18 @@ araya::task<void> agent_service::inject(araya::session::session_id const& sessio
 	co_await ensure(*s, lifecycle_source(*s));
 	auto state = require(session);
 	enqueue(state, inbox_target::next_step, message);
+}
+
+araya::registration agent_service::add_context_producer(araya::plugin_context& caller, context_producer producer) {
+	if (producer.name.empty())
+		throw std::invalid_argument("agent: context producer name must not be empty");
+	if (!producer.produce)
+		throw std::invalid_argument("agent: context producer '" + producer.name + "' has no renderer");
+	return caller.effect([this, producer = std::move(producer)]() mutable -> araya::cleanup_action {
+		auto const id = next_context_producer_id_++;
+		context_producers_.emplace_back(id, std::move(producer));
+		return [this, id] { std::erase_if(context_producers_, [id](auto const& entry) { return entry.first == id; }); };
+	});
 }
 
 void agent_service::cancel(araya::session::session_id const& session, cancel_cause cause, bool keep_inbox) {

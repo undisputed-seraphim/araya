@@ -1,7 +1,8 @@
 #include "araya/agent-instructions/agent_instructions.hpp"
 
+#include "araya/agent-loop/agent.hpp"
 #include "araya/config.hpp"
-#include "araya/system-prompt/system_prompt.hpp"
+#include "araya/session/session_types.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -357,16 +358,20 @@ struct agent_instructions_plugin : araya::plugin {
 	}
 
 	araya::task<void> apply(araya::plugin_context& ctx) override {
-		auto prompts =
-			ctx.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key).shared();
+		auto agent = ctx.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
 		auto state = state_;
-		araya::system_prompt::prompt_section section;
-		section.name = "agent-instructions";
-		section.order = araya::system_prompt::section_order("AGENT_INSTRUCTIONS");
-		section.render = [state](araya::system_prompt::assemble_context const& context) {
-			return state->instructions_for(context.cwd);
-		};
-		prompts->section(ctx, std::move(section));
+		// Workspace instructions are a durable pre-step message, not a
+		// prompt section: the driver injects them once (and again only when
+		// the workspace changes), matching the harness's timing.
+		agent->add_context_producer(
+			ctx,
+			araya::agent::context_producer{
+				"agent-instructions",
+				[state](araya::session::session const& session, araya::agent::context_producer_context const& context)
+					-> std::optional<boost::json::value> {
+					return araya::agent::injected_context(
+						session, "agent-instructions", state->instructions_for(context.cwd));
+				}});
 		co_return;
 	}
 
@@ -379,7 +384,7 @@ std::unique_ptr<araya::plugin> make_agent_instructions(araya::plugin_config cons
 }
 
 static const araya::dependency_spec g_deps[]{
-	{araya::service_id{"system-prompt", 1}, true, {}},
+	{araya::service_id{"agent", 1}, true, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
 static const araya::plugin_descriptor g_descriptor{"agent-instructions", g_deps, g_no_provs, &make_agent_instructions};

@@ -1,5 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "araya/agent-loop/agent.hpp"
+#include "araya/llm-mock/mock.hpp"
+#include "araya/llm/bridge.hpp"
+#include "araya/llm/llm.hpp"
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
 #include "araya/session/store.hpp"
@@ -10,6 +14,7 @@
 
 #include "support/plugin_harness.hpp"
 
+#include <boost/asio/io_context.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/value.hpp>
 
@@ -17,8 +22,10 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <utility>
 
 namespace {
 
@@ -51,34 +58,63 @@ struct workspace {
 
 struct harness : araya_test::plugin_harness {
 	araya::component_spec session_spec() { return spec(&araya::session::plugin_descriptor()); }
+	araya::component_spec llm_spec() { return spec(&araya::llm::plugin_descriptor()); }
+	araya::component_spec mock_spec() {
+		return spec(&araya::llm_mock::plugin_descriptor(), {{"provider", "mock"}, {"response", "echo: {user}"}});
+	}
 	araya::component_spec prompt_spec() {
 		return spec(&araya::system_prompt::plugin_descriptor(), {{"include_harness_identity", "false"}});
 	}
 	araya::component_spec tools_spec() { return spec(&araya::tools::plugin_descriptor()); }
 	araya::component_spec skill_spec() { return spec(&araya::skill::plugin_descriptor()); }
+	araya::component_spec agent_spec() { return spec(&araya::agent::plugin_descriptor()); }
 	araya::component_spec tool_skill_spec() { return spec(&araya::tool_skill::plugin_descriptor()); }
 };
 
 struct rig {
 	std::shared_ptr<tools_service> tools;
-	std::shared_ptr<araya::system_prompt::system_prompt_service> prompts;
+	std::shared_ptr<araya::agent::agent_service> agent;
+	std::shared_ptr<araya::session::session> sess;
 	std::string session = "s1";
 
 	araya::task<void> mount(araya::runtime& rt, harness& h, fs::path const& cwd) {
 		co_await rt.mount(h.session_spec());
+		co_await rt.mount(h.llm_spec());
+		co_await rt.mount(h.mock_spec());
 		co_await rt.mount(h.prompt_spec());
 		co_await rt.mount(h.tools_spec());
 		co_await rt.mount(h.skill_spec());
+		co_await rt.mount(h.agent_spec());
 		co_await rt.mount(h.tool_skill_spec());
 		co_await rt.wait_idle();
 		auto root = rt.root_context();
 		auto store = root.require<araya::session::session_store>(araya::session::sessions_key).shared();
 		tools = root.require<tools_service>(tools_key).shared();
-		prompts =
-			root.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key).shared();
+		agent = root.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
 		araya::session::create_session_options options;
 		options.cwd = cwd.string();
-		store->create(root, araya::session::session_id{session}, options);
+		sess = store->create(root, araya::session::session_id{session}, options);
+	}
+
+	// Drives one turn so the catalog producer runs, then returns the catalog
+	// message's text (empty when no skill is visible).
+	araya::task<std::string> catalog() {
+		araya::agent::run_options options;
+		options.provider = "mock";
+		options.model = "mock-model";
+		options.session = araya::session::session_id{session};
+		options.input = "go";
+		co_await agent->run(options);
+		auto const& messages = sess->surface().messages();
+		for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+			if (it->role != araya::session::message_role::user || !it->source)
+				continue;
+			auto const* object = it->source->if_object();
+			auto const* plugin = object ? object->if_contains("plugin") : nullptr;
+			if (plugin && plugin->is_string() && plugin->as_string() == "skill-catalog")
+				co_return araya::llm_bridge::message_text(*it);
+		}
+		co_return std::string{};
 	}
 
 	araya::task<std::optional<tool_result>> call(std::string name) {
@@ -105,17 +141,6 @@ std::string text_of(tool_result const& result) {
 	return it != object->end() && it->value().is_string() ? std::string(it->value().as_string()) : std::string{};
 }
 
-std::string
-section_text(std::shared_ptr<araya::system_prompt::system_prompt_service> const& prompts, std::string const& cwd) {
-	araya::system_prompt::assemble_context context;
-	context.cwd = cwd;
-	for (auto const& section : prompts->assemble(context).sections) {
-		if (section.name == "skill:catalog")
-			return section.text;
-	}
-	return {};
-}
-
 } // namespace
 
 TEST_CASE("the skill tool loads a discovered skill and the catalog lists it") {
@@ -134,7 +159,7 @@ TEST_CASE("the skill tool loads a discovered skill and the catalog lists it") {
 		rig r;
 		co_await r.mount(rt, h, ws.root);
 
-		auto catalog = section_text(r.prompts, ws.root.string());
+		auto catalog = co_await r.catalog();
 		CHECK(catalog.find("<available_skills>") != std::string::npos);
 		CHECK(catalog.find("`deep-dive`: Investigate a topic thoroughly.") != std::string::npos);
 		CHECK(catalog.find("for research") != std::string::npos);
@@ -171,12 +196,12 @@ TEST_CASE("the skill tool rejects unknown and model-disabled skills") {
 	});
 }
 
-TEST_CASE("an empty skill set drops the catalog section") {
+TEST_CASE("an empty skill set injects no catalog") {
 	harness h;
 	h.run([&](araya::runtime& rt) -> araya::task<void> {
 		workspace ws;
 		rig r;
 		co_await r.mount(rt, h, ws.root);
-		CHECK(section_text(r.prompts, ws.root.string()).empty());
+		CHECK((co_await r.catalog()).empty());
 	});
 }

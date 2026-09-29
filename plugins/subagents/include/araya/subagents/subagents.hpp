@@ -5,12 +5,14 @@
 #include "araya/plugin_context.hpp"
 #include "araya/service.hpp"
 #include "araya/session/store.hpp"
+#include "araya/system-prompt/system_prompt.hpp"
 #include "araya/task.hpp"
+#include "araya/tools/tools.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
 
 #include <cstdint>
-#include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -23,14 +25,19 @@
 // in-process orchestration of durable child agents. A feature-replication
 // of the deepseek-harness `@deepseek-ai/dsh-subagent` seam, trimmed to the
 // v1 shape: one in-process `spawn` provider, foreground one-shot runs, and
-// continuable children whose turns run in the background and whose
-// settlement is appended to the parent session (the harness delivers it
-// through an agent inbox we do not have yet).
+// continuable children that are ordinary driver sessions.
+//
+// A continuable child is a session driven by the agent service: its first
+// turn is a `followup` carrying the task, later input is a `steer` while it
+// runs and a `followup` once it is idle, and a settlement is appended to
+// the parent whenever the child's driver goes idle. The service keeps only
+// the provider registry, route/depth resolution, lineage, and the control
+// surface - no private turn loop or pending queue.
 //
 // Threading: strand-confined like every service. The service captures the
-// control-strand executor at apply time and co_spawns background child
-// turns there, so child appends satisfy the session store's control-strand
-// dispatch discipline.
+// control-strand executor at apply time; the settlement delivery co_spawns
+// there so its appends satisfy the session store's control-strand dispatch
+// discipline.
 namespace araya::subagents {
 
 // Start-time features a provider supports. A request needing a capability
@@ -40,6 +47,7 @@ struct capabilities {
 	bool continuable = true;
 	bool depth_limit = true;
 	bool agent_options = true;
+	bool output_schema = true;
 };
 
 // What a caller asks for when delegating. `parent` is the calling session
@@ -57,6 +65,10 @@ struct start_request {
 	// Optional delegation-depth cap for this call (the deployment's is the
 	// ceiling on any call override).
 	std::optional<std::uint32_t> max_depth;
+	// Optional object-rooted JSON Schema. When set (one-shot runs only), the
+	// child reports its final answer by calling a scoped `structured_output`
+	// tool and the validated value lands in result.structure.
+	std::optional<boost::json::value> output_schema;
 };
 
 // One settled (or rejected) delegation outcome.
@@ -68,6 +80,9 @@ struct result {
 	std::string error;
 	// The child session id (set whenever a child was created).
 	std::string child;
+	// The validated structured result, set iff the request carried an
+	// output_schema and the child recorded one.
+	std::optional<boost::json::value> structure;
 };
 
 // Observe-only view of one continuable child.
@@ -102,7 +117,14 @@ public:
 		boost::asio::any_io_executor executor,
 		std::shared_ptr<araya::session::session_store> store,
 		std::shared_ptr<araya::agent::agent_service> agent,
+		std::shared_ptr<araya::tools::tools_service> tools,
+		std::shared_ptr<araya::system_prompt::system_prompt_service> prompts,
 		std::uint32_t max_depth);
+
+	// The plugin hands the service a factory for fresh plugin-context views
+	// over its own activation; the service uses it to register the scoped
+	// structured-output tool/section for a child at run time.
+	void set_context_factory(std::function<araya::plugin_context()> factory);
 
 	// Registers a provider under `name`; owned by `caller`.
 	araya::registration
@@ -116,7 +138,7 @@ public:
 	araya::task<result> run(std::string_view provider, start_request req);
 
 	// Continuable: create the child, start its first turn in the
-	// background, and return the child id immediately. The turn's outcome
+	// background, and return the child id immediately. Each turn's outcome
 	// is appended to the parent session when it settles.
 	araya::task<result> start_continuable(std::string_view provider, start_request req);
 
@@ -124,6 +146,10 @@ public:
 	araya::task<result> send_message(std::string const& child, std::string text);
 	bool interrupt(std::string const& child);
 	std::vector<child_info> list_children(std::optional<std::string> const& parent = {}) const;
+
+	// A child's driver went idle: deliver its settlement to the parent.
+	// Wired by the plugin to the agent's idle transition.
+	void on_agent_idle(araya::session::session_id const& child);
 
 	// Disposes every child this service created (teardown).
 	void dispose_children();
@@ -138,15 +164,6 @@ private:
 		std::string model;
 		std::string reasoning_effort;
 		std::stop_token parent_stop;
-		std::shared_ptr<std::stop_source> current_stop;
-		// Shared (not optional) because stop_callback is move-only with no
-		// move assignment; this keeps child_state movable.
-		std::shared_ptr<std::stop_callback<std::function<void()>>> parent_bridge;
-		std::deque<std::string> pending;
-		bool running = false;
-		std::string last_output;
-		std::string stop_reason;
-		std::string error;
 	};
 
 	// Resolves route/depth, creates the child, and records it as a
@@ -154,14 +171,17 @@ private:
 	std::shared_ptr<araya::session::session>
 	create_child(std::string_view provider_name, start_request const& req, child_state& state);
 
-	araya::task<void> run_turn(std::string child_id, std::string input, std::shared_ptr<std::stop_source> stop);
-	void kick(std::string const& child_id);
-	void on_turn_done(std::string const& child_id, std::exception_ptr ep);
+	// Builds the settlement notice from a child's last outcome and written
+	// it through the shared inbox verbs.
+	araya::task<void> deliver_settlement(std::string child_id);
 	std::optional<std::string> inherit_route(std::string const& parent, std::string_view key) const;
 
 	boost::asio::any_io_executor executor_;
 	std::shared_ptr<araya::session::session_store> store_;
 	std::shared_ptr<araya::agent::agent_service> agent_;
+	std::shared_ptr<araya::tools::tools_service> tools_;
+	std::shared_ptr<araya::system_prompt::system_prompt_service> prompts_;
+	std::function<araya::plugin_context()> context_factory_;
 	std::uint32_t max_depth_;
 	std::map<std::string, std::shared_ptr<subagent_provider>> providers_;
 	std::map<std::string, child_state> children_;

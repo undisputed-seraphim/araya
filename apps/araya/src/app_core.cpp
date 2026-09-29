@@ -30,9 +30,11 @@
 #include "araya/tool-subagent/tool_subagent.hpp"
 #include "araya/tool-todo/tool_todo.hpp"
 #include "araya/tool-web/tool_web.hpp"
+#include "araya/tool-workflow/tool_workflow.hpp"
 #include "araya/tools/tools.hpp"
 #include "araya/user-questions/user_questions.hpp"
 #include "araya/web/web.hpp"
+#include "araya/workflow/workflow.hpp"
 
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/json/value.hpp>
@@ -250,7 +252,7 @@ constexpr command_entry g_commands[]{
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | "
 	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-skill | tool-web | "
-	 "subagents | tool-subagent | console | beacon | watcher",
+	 "subagents | tool-subagent | workflow | tool-workflow | console | beacon | watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -358,6 +360,10 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::tool_ask_user::plugin_descriptor();
 	if (name == "tool-web")
 		return &araya::tool_web::plugin_descriptor();
+	if (name == "workflow")
+		return &araya::workflow::plugin_descriptor();
+	if (name == "tool-workflow")
+		return &araya::tool_workflow::plugin_descriptor();
 	if (name == "subagents")
 		return &araya::subagents::plugin_descriptor();
 	if (name == "tool-subagent")
@@ -441,7 +447,7 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 		prompt_config["persona_suffix"] = "Your working directory is {{cwd}}.";
 	}
 	ctx.desired["system-prompt"] = desired_entry{&araya::system_prompt::plugin_descriptor(), std::move(prompt_config)};
-	// Workspace instructions (AGENTS.md) as a system-prompt section.
+	// Workspace instructions (AGENTS.md) as an agent context producer.
 	ctx.desired["agent-instructions"] = desired_entry{&araya::agent_instructions::plugin_descriptor(), {}};
 	ctx.desired["tools"] = desired_entry{&araya::tools::plugin_descriptor(), {}};
 	ctx.desired["tool-todo"] = desired_entry{&araya::tool_todo::plugin_descriptor(), {}};
@@ -451,7 +457,7 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	ctx.desired["jobs"] = desired_entry{&araya::jobs::plugin_descriptor(), {}};
 	ctx.desired["tool-jobs"] = desired_entry{&araya::tool_jobs::plugin_descriptor(), {}};
 	// Skills: the local filesystem registry, then the model-facing loader
-	// and its session catalog section.
+	// and its session catalog context producer.
 	ctx.desired["skill"] = desired_entry{&araya::skill::plugin_descriptor(), {}};
 	ctx.desired["tool-skill"] = desired_entry{&araya::tool_skill::plugin_descriptor(), {}};
 	// Web access: the fetch/search service and the model-facing tools.
@@ -483,6 +489,11 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// from the parent's latest request header unless configured here.
 	ctx.desired["subagents"] = desired_entry{&araya::subagents::plugin_descriptor(), {}};
 	ctx.desired["tool-subagent"] = desired_entry{&araya::tool_subagent::plugin_descriptor(), {}};
+	// Workflow: an out-of-process JavaScript orchestration engine over the
+	// subagent seam. The engine mounts inert; the model-facing tool stays off
+	// until enabled (config enabled=true) because it needs a Node runtime.
+	ctx.desired["workflow"] = desired_entry{&araya::workflow::plugin_descriptor(), {}};
+	ctx.desired["tool-workflow"] = desired_entry{&araya::tool_workflow::plugin_descriptor(), {}};
 	if (!ctx.llm_config.empty())
 		ctx.desired["llm-openai"] =
 			desired_entry{&araya::llm_openai::plugin_descriptor(), {{"config_file", ctx.llm_config}}};

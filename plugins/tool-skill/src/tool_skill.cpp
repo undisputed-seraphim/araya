@@ -1,9 +1,10 @@
 #include "araya/tool-skill/tool_skill.hpp"
 
+#include "araya/agent-loop/agent.hpp"
 #include "araya/plugin_context.hpp"
+#include "araya/session/session_types.hpp"
 #include "araya/session/store.hpp"
 #include "araya/skill/skill.hpp"
-#include "araya/system-prompt/system_prompt.hpp"
 #include "araya/tools/tools.hpp"
 #include "araya/util/json.hpp"
 
@@ -98,9 +99,9 @@ std::string render_skill_content(skill_definition const& skill) {
 	return text;
 }
 
-// The session skill catalog rendered as one system-prompt section (the
-// harness's `<available_skills>` frame). Empty when no model-invocable skill is
-// available, which drops the section.
+// The session skill catalog rendered as one context message (the harness's
+// `<available_skills>` frame). Empty when no model-invocable skill is
+// available, which injects nothing.
 std::string render_catalog(std::vector<skill_summary> const& skills) {
 	std::vector<skill_summary const*> visible;
 	for (auto const& skill : skills) {
@@ -177,19 +178,20 @@ struct tool_skill_plugin : araya::plugin {
 	araya::task<void> apply(araya::plugin_context& ctx) override {
 		auto skills = ctx.require<skills_service>(skills_key).shared();
 		auto store = ctx.require<session_store>(sessions_key).shared();
-		auto prompts =
-			ctx.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key).shared();
+		auto agent = ctx.require<araya::agent::agent_service>(araya::agent::agent_key).shared();
 		auto tools = ctx.require<tools_service>(tools_key).shared();
 
-		{
-			araya::system_prompt::prompt_section section;
-			section.name = "skill:catalog";
-			section.order = araya::system_prompt::section_order("SKILL_CATALOG");
-			section.render = [skills](araya::system_prompt::assemble_context const& context) {
-				return render_catalog(skills->list(context.cwd));
-			};
-			prompts->section(ctx, std::move(section));
-		}
+		// The skill catalog is a durable pre-step message, not a prompt
+		// section: injected once and refreshed only when the catalog changes.
+		agent->add_context_producer(
+			ctx,
+			araya::agent::context_producer{
+				"skill-catalog",
+				[skills](araya::session::session const& session, araya::agent::context_producer_context const& context)
+					-> std::optional<boost::json::value> {
+					return araya::agent::injected_context(
+						session, "skill-catalog", render_catalog(skills->list(context.cwd)));
+				}});
 
 		tools->register_tool(
 			ctx,
@@ -211,7 +213,7 @@ std::unique_ptr<araya::plugin> make_tool_skill(araya::plugin_config const& confi
 static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
 	{araya::service_id{"skills", 1}, true, {}},
-	{araya::service_id{"system-prompt", 1}, true, {}},
+	{araya::service_id{"agent", 1}, true, {}},
 	{araya::service_id{"tools", 1}, true, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};

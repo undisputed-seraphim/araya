@@ -175,7 +175,7 @@ const tool_definition g_subagent_def{
 const tool_definition g_send_def{
 	"send_message",
 	"Send a message to a continuable child agent started by subagent. If the child is idle it starts "
-	"a turn; if it is already working the message is queued for its next turn boundary.",
+	"a turn; if it is already working the message is delivered to it at its next step.",
 	boost::json::value{
 		{"type", "object"},
 		{"properties",

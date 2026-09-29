@@ -53,8 +53,10 @@ target_link_libraries(araya_app PRIVATE
     araya::tool-subagent
     araya::tool-todo
     araya::tool-web
+    araya::tool-workflow
     araya::user-questions
     araya::web
+    araya::workflow
     ftxui::component
     ftxui::dom
     ftxui::screen

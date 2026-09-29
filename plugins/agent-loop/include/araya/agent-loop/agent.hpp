@@ -22,6 +22,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -138,6 +139,38 @@ struct drive_options {
 	araya::llm::chunk_sink on_chunk;
 };
 
+// -- context producers -----------------------------------------------------
+//
+// A durable context contribution: on a turn's first step the driver asks
+// each registered producer for one user message and places it before the
+// claimed batch (and after the runtime-context snapshot). This is the seam
+// the skill catalog and workspace instructions use instead of a prompt
+// section, matching the harness's pre-step message injection.
+struct context_producer_context {
+	std::string provider;
+	std::string model;
+	std::string cwd;
+};
+
+struct context_producer {
+	// A stable id: the message source tag and the dedup key.
+	std::string name;
+	// Returns the durable user message to contribute, or nullopt for
+	// nothing. Producers are expected to be idempotent across turns; use
+	// `injected_context` to append only when the rendered content changed.
+	std::function<std::optional<boost::json::value>(
+		araya::session::session const& session,
+		context_producer_context const& context)>
+		produce;
+};
+
+// The idempotent-context helper: builds the durable user message for
+// `content`, tagged {kind:"plugin", plugin:producer}, or nullopt when
+// `content` is empty or the session's surface already carries this
+// producer's current content (so a restart or replay never duplicates it).
+std::optional<boost::json::value>
+injected_context(araya::session::session const& session, std::string_view producer, std::string_view content);
+
 // -- the service -----------------------------------------------------------
 
 class agent_service : public std::enable_shared_from_this<agent_service> {
@@ -180,6 +213,10 @@ public:
 	araya::task<void>
 	steer(araya::session::session_id const& session, boost::json::value message, drive_options options = {});
 	araya::task<void> inject(araya::session::session_id const& session, boost::json::value message);
+
+	// Registers a context producer owned by `caller` (removed at teardown).
+	// Producers run in registration order on a turn's first step.
+	araya::registration add_context_producer(araya::plugin_context& caller, context_producer producer);
 
 	// Cancels the running drive; unless `keep_inbox`, clears pending input
 	// (emitting 'agent/inbox/discarded' per message).
@@ -267,6 +304,8 @@ private:
 	araya::session::projection_state<inbox_state> inbox_;
 	araya::session::projection_state<turn_state> turn_boundary_;
 	std::map<araya::session::session_id, state_ptr> states_;
+	std::vector<std::pair<std::uint64_t, context_producer>> context_producers_;
+	std::uint64_t next_context_producer_id_ = 1;
 };
 
 inline constexpr araya::service_key<agent_service> agent_key{"agent", 1};

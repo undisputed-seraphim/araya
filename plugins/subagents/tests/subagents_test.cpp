@@ -2,6 +2,7 @@
 
 #include "araya/agent-loop/agent.hpp"
 #include "araya/llm-mock/mock.hpp"
+#include "araya/llm/bridge.hpp"
 #include "araya/llm/llm.hpp"
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
@@ -15,6 +16,7 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
+#include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 
 #include <chrono>
@@ -51,10 +53,13 @@ struct rig {
 	std::shared_ptr<subagents_service> subs;
 	std::shared_ptr<araya::session::session> parent;
 
-	araya::task<void> mount(araya::runtime& rt, araya::plugin_config sub_cfg = {}) {
+	araya::task<void> mount(
+		araya::runtime& rt,
+		araya::plugin_config sub_cfg = {},
+		araya::plugin_config mock_cfg = {{"provider", "mock"}, {"response", "echo: {user}"}}) {
 		co_await rt.mount(h.session_spec());
 		co_await rt.mount(h.llm_spec());
-		co_await rt.mount(h.mock_spec());
+		co_await rt.mount(h.mock_spec(std::move(mock_cfg)));
 		co_await rt.mount(h.prompt_spec());
 		co_await rt.mount(h.tools_spec());
 		co_await rt.mount(h.agent_spec());
@@ -75,6 +80,15 @@ std::size_t count_type(araya::session::session const& s, std::string_view type) 
 			++count;
 	}
 	return count;
+}
+
+std::vector<std::string> user_texts(araya::session::session const& s) {
+	std::vector<std::string> out;
+	for (auto const& message : s.surface().messages()) {
+		if (message.role == araya::session::message_role::user)
+			out.push_back(araya::llm_bridge::message_text(message));
+	}
+	return out;
 }
 
 // Yields to the control strand until `predicate` holds or the budget runs
@@ -220,5 +234,154 @@ TEST_CASE("depth limit refuses a too-deep child") {
 		auto result = co_await r.subs->run("spawn", std::move(req));
 		CHECK(result.is_error);
 		CHECK(result.error.find("depth limit") != std::string::npos);
+	});
+}
+
+TEST_CASE("send_message steers a running child inside its current turn") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		// A paced reply keeps the child's first turn in flight long enough
+		// for the send to take the running branch.
+		co_await r.mount(rt, {}, {{"provider", "mock"}, {"response", "echo: {user}"}, {"delay_ms", "50"}});
+
+		start_request req;
+		req.prompt = "first";
+		req.parent = "parent";
+		req.provider = "mock";
+		req.model = "mock-model";
+		auto started = co_await r.subs->start_continuable("spawn", std::move(req));
+		REQUIRE_FALSE(started.is_error);
+
+		auto sent = co_await r.subs->send_message(started.child, "steer");
+		REQUIRE_FALSE(sent.is_error);
+		CHECK(sent.stop_reason == "queued");
+
+		co_await wait_until([&] { return count_type(*r.parent, "user/message") >= 1; });
+
+		// The steer joined the running turn: one turn, both inputs.
+		auto child = r.store->get(araya::session::session_id{started.child});
+		REQUIRE(child);
+		CHECK(count_type(*child, "turn/start") == 1);
+		CHECK(user_texts(*child) == std::vector<std::string>{"first", "steer"});
+	});
+}
+
+namespace {
+
+struct no_schema_provider : subagent_provider {
+	capabilities caps() const override {
+		capabilities c;
+		c.output_schema = false;
+		return c;
+	}
+	std::shared_ptr<araya::session::session> create_child(start_request const&, std::uint32_t) override {
+		return nullptr;
+	}
+};
+
+boost::json::value object_schema() {
+	return boost::json::parse(
+		R"({"type":"object","properties":{"answer":{"type":"number"}},"required":["answer"],"additionalProperties":false})");
+}
+
+start_request structured_request(std::string prompt) {
+	start_request req;
+	req.prompt = std::move(prompt);
+	req.parent = "parent";
+	req.provider = "mock";
+	req.model = "mock-model";
+	req.output_schema = object_schema();
+	return req;
+}
+
+} // namespace
+
+TEST_CASE("a structured one-shot captures and validates the child result") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		co_await r.mount(
+			rt,
+			{},
+			{{"provider", "mock"},
+			 {"script",
+			  R"([{"tool_call":{"name":"structured_output","arguments":"{\"answer\":42}"}},{"text":"done"}])"}});
+
+		auto result = co_await r.subs->run("spawn", structured_request("answer the question"));
+
+		CHECK_FALSE(result.is_error);
+		CHECK(result.stop_reason == "completed");
+		REQUIRE(result.structure.has_value());
+		CHECK(result.structure->at("answer").as_int64() == 42);
+	});
+}
+
+TEST_CASE("a completed child that never records is an error") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		co_await r.mount(rt); // default mock replies with plain text
+
+		auto result = co_await r.subs->run("spawn", structured_request("just talk"));
+
+		CHECK(result.is_error);
+		CHECK(result.stop_reason == "error");
+		CHECK(result.error.find("not recorded") != std::string::npos);
+	});
+}
+
+TEST_CASE("invalid structured arguments are rejected so the child can retry") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		co_await r.mount(
+			rt,
+			{},
+			{{"provider", "mock"},
+			 {"script",
+			  R"([{"tool_call":{"name":"structured_output","arguments":"{\"wrong\":1}"}},{"tool_call":{"name":"structured_output","arguments":"{\"answer\":7}"}},{"text":"done"}])"}});
+
+		auto result = co_await r.subs->run("spawn", structured_request("answer"));
+
+		CHECK_FALSE(result.is_error);
+		REQUIRE(result.structure.has_value());
+		CHECK(result.structure->at("answer").as_int64() == 7);
+	});
+}
+
+TEST_CASE("a provider without structured-output support is rejected") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		co_await r.mount(rt);
+		auto root = rt.root_context();
+		r.subs->register_provider(root, "no-schema", std::make_shared<no_schema_provider>());
+
+		auto result = co_await r.subs->run("no-schema", structured_request("answer"));
+
+		CHECK(result.is_error);
+		CHECK(result.error.find("does not support structured output") != std::string::npos);
+	});
+}
+
+TEST_CASE("consecutive structured children keep their own captures") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		co_await r.mount(
+			rt,
+			{},
+			{{"provider", "mock"},
+			 {"script",
+			  R"([{"tool_call":{"name":"structured_output","arguments":"{\"answer\":1}"}},{"text":"one"},{"tool_call":{"name":"structured_output","arguments":"{\"answer\":2}"}},{"text":"two"}])"}});
+
+		auto first = co_await r.subs->run("spawn", structured_request("first"));
+		auto second = co_await r.subs->run("spawn", structured_request("second"));
+
+		REQUIRE(first.structure.has_value());
+		REQUIRE(second.structure.has_value());
+		CHECK(first.structure->at("answer").as_int64() == 1);
+		CHECK(second.structure->at("answer").as_int64() == 2);
 	});
 }
