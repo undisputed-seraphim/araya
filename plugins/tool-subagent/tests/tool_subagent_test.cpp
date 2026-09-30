@@ -95,6 +95,70 @@ TEST_CASE("tool-subagent registers the delegation and control tools") {
 		CHECK(has("send_message"));
 		CHECK(has("interrupt_agent"));
 		CHECK(has("list_agents"));
+		CHECK(has("list_subagent_models"));
+	});
+}
+
+TEST_CASE("list_subagent_models reports providers, models, and efforts") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r;
+		co_await r.mount(rt, h, {{"child_provider", "mock"}, {"child_model", "mock-model"}});
+
+		auto providers = co_await r.tools->invoke(
+			"list_subagent_models", tool_context{.call_id = "c", .name = "list_subagent_models", .session = "parent"});
+		REQUIRE(providers.has_value());
+		CHECK_FALSE(providers->is_error);
+		CHECK(text_of(*providers).find("mock") != std::string::npos);
+
+		// The mock adapter advertises no model catalog.
+		auto models = co_await r.tools->invoke(
+			"list_subagent_models",
+			tool_context{
+				.call_id = "c",
+				.name = "list_subagent_models",
+				.session = "parent",
+				.arguments = boost::json::object{{"provider", "mock"}},
+			});
+		REQUIRE(models.has_value());
+		CHECK(text_of(*models).find("no advertised models") != std::string::npos);
+
+		// An exact model resolves with its reasoning-effort section.
+		auto exact = co_await r.tools->invoke(
+			"list_subagent_models",
+			tool_context{
+				.call_id = "c",
+				.name = "list_subagent_models",
+				.session = "parent",
+				.arguments = boost::json::object{{"provider", "mock"}, {"model", "mock-model"}},
+			});
+		REQUIRE(exact.has_value());
+		CHECK_FALSE(exact->is_error);
+		CHECK(text_of(*exact).find("mock/") != std::string::npos);
+		CHECK(text_of(*exact).find("Reasoning efforts:") != std::string::npos);
+
+		// `model` without `provider` is a malformed ask.
+		auto malformed = co_await r.tools->invoke(
+			"list_subagent_models",
+			tool_context{
+				.call_id = "c",
+				.name = "list_subagent_models",
+				.session = "parent",
+				.arguments = boost::json::object{{"model", "mock-model"}},
+			});
+		REQUIRE(malformed.has_value());
+		CHECK(malformed->is_error);
+	});
+}
+
+TEST_CASE("list_subagent_models is absent when list_models is disabled") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r;
+		co_await r.mount(rt, h, {{"child_provider", "mock"}, {"child_model", "mock-model"}, {"list_models", "false"}});
+		auto names = r.tools->list();
+		for (auto const& def : names)
+			CHECK(def.name != "list_subagent_models");
 	});
 }
 

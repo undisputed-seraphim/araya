@@ -1,6 +1,7 @@
 #include "araya/tool-subagent/tool_subagent.hpp"
 
 #include "araya/config.hpp"
+#include "araya/llm/llm.hpp"
 #include "araya/subagents/subagents.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/tools/tools.hpp"
@@ -33,6 +34,7 @@ constexpr araya::config_key<std::uint32_t> max_depth_key{"max_depth"};
 constexpr araya::config_key<std::string> child_provider_key{"child_provider"};
 constexpr araya::config_key<std::string> child_model_key{"child_model"};
 constexpr araya::config_key<std::string> reasoning_effort_key{"reasoning_effort"};
+constexpr araya::config_key<bool> list_models_key{"list_models"};
 
 tool_result text_result(std::string text, bool is_error = false) {
 	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
@@ -46,6 +48,10 @@ struct subagent_config {
 	std::optional<std::string> child_provider;
 	std::optional<std::string> child_model;
 	std::optional<std::string> reasoning_effort;
+	// Register the `list_subagent_models` discovery tool (when the llm
+	// service is mounted). One instance should own it; a second instance
+	// sharing the name would collide, so set it false there.
+	bool list_models = true;
 };
 
 subagent_config parse_config(araya::plugin_config const& config) {
@@ -71,6 +77,8 @@ subagent_config parse_config(araya::plugin_config const& config) {
 		out.child_model = *value;
 	if (auto value = view.try_get(reasoning_effort_key))
 		out.reasoning_effort = *value;
+	if (auto value = view.try_get(list_models_key))
+		out.list_models = *value;
 	return out;
 }
 
@@ -156,6 +164,91 @@ araya::task<tool_result> list_handler(std::shared_ptr<subagents_service> subs, t
 	co_return text_result(std::move(text));
 }
 
+std::string model_line(araya::llm::model_info const& info) {
+	return info.provider + "/" + info.model + " — " + (info.name.empty() ? info.model : info.name);
+}
+
+// The model-facing discovery tool: providers, a provider's advertised models,
+// or one exact model's reasoning efforts. Purely advisory (an adapter may
+// accept an unlisted model id).
+araya::task<tool_result> list_models_handler(std::shared_ptr<araya::llm::llm_service> llm, tool_context const& ctx) {
+	auto const* args = ctx.arguments.if_object();
+	auto provider = args ? araya::util::json::opt_string(*args, "provider") : std::nullopt;
+	auto model = args ? araya::util::json::opt_string(*args, "model") : std::nullopt;
+	if (model && !provider)
+		co_return text_result("Error: 'model' requires 'provider'", true);
+
+	if (!provider) {
+		auto providers = llm->providers();
+		if (providers.empty())
+			co_return text_result("(no LLM providers)");
+		std::string text;
+		for (auto const& id : providers) {
+			auto info = llm->describe_provider(id);
+			if (!text.empty())
+				text += "\n";
+			text += id + " — " + (info.name.empty() ? id : info.name);
+		}
+		co_return text_result(std::move(text));
+	}
+	if (provider->empty())
+		co_return text_result("Error: 'provider' must be non-empty", true);
+
+	if (!model) {
+		auto models = llm->list_models(*provider);
+		if (models.empty())
+			co_return text_result("(no advertised models for " + *provider + ")");
+		std::string text;
+		for (auto const& info : models) {
+			if (!text.empty())
+				text += "\n";
+			text += model_line(info);
+		}
+		co_return text_result(std::move(text));
+	}
+	if (model->empty())
+		co_return text_result("Error: 'model' must be non-empty", true);
+
+	auto info = llm->resolve_model(*provider, *model);
+	if (!info)
+		co_return text_result("Error: unknown model '" + *provider + "/" + *model + "'", true);
+	std::string text = model_line(*info);
+	text += "\nReasoning efforts:\n";
+	if (info->reasoning_efforts.empty()) {
+		text += "(no advertised reasoning efforts)";
+	} else {
+		for (std::size_t index = 0; index < info->reasoning_efforts.size(); ++index) {
+			if (index != 0)
+				text += "\n";
+			text += info->reasoning_efforts[index];
+		}
+	}
+	co_return text_result(std::move(text));
+}
+
+const tool_definition g_list_models_def{
+	"list_subagent_models",
+	"Discover LLM routes for subagents without changing the current agent. Call with no arguments to list "
+	"registered providers, with `provider` to list its advertised models, or with `provider` and `model` to "
+	"inspect that exact model and its reasoning efforts. Catalog membership is advisory: an adapter may accept "
+	"an unlisted model id. Use the returned ids with a delegation tool's `provider`, `model`, and "
+	"`reasoning_effort` fields.",
+	boost::json::value{
+		{"type", "object"},
+		{"properties",
+		 boost::json::object{
+			 {"provider",
+			  boost::json::object{
+				  {"type", "string"},
+				  {"description", "Registered LLM provider id. Omit to list providers."}}},
+			 {"model",
+			  boost::json::object{
+				  {"type", "string"},
+				  {"description",
+				   "Exact model id to inspect. Requires provider; omit to list that provider's advertised "
+				   "models."}}}}}},
+};
+
 const tool_definition g_subagent_def{
 	"subagent",
 	"Delegate a task to a child agent. In continuable mode the child is durable: it runs in the "
@@ -237,6 +330,17 @@ struct tool_subagent_plugin : araya::plugin {
 		tools->register_tool(
 			ctx, g_interrupt_def, [subs](tool_context const& call) { return interrupt_handler(subs, call); });
 		tools->register_tool(ctx, g_list_def, [subs](tool_context const& call) { return list_handler(subs, call); });
+
+		// Optional catalog discovery: registered by the one instance that owns
+		// it, only when the llm service is mounted.
+		if (config_.list_models) {
+			auto llm = ctx.find<araya::llm::llm_service>(araya::llm::llm_key)
+						   .transform([](auto lease) { return lease.shared(); })
+						   .value_or(nullptr);
+			if (llm)
+				tools->register_tool(
+					ctx, g_list_models_def, [llm](tool_context const& call) { return list_models_handler(llm, call); });
+		}
 		co_return;
 	}
 
@@ -252,6 +356,8 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"subagents", 1}, true, {}},
 	{araya::service_id{"system-prompt", 1}, true, {}},
 	{araya::service_id{"tools", 1}, true, {}},
+	// Optional: the LLM catalog `list_subagent_models` reads.
+	{araya::llm::llm_key.id, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
 static const araya::plugin_descriptor g_descriptor{"tool-subagent", g_deps, g_provs, &make_tool_subagent};

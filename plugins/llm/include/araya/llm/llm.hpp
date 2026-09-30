@@ -344,6 +344,14 @@ public:
 
 	std::optional<model_info> resolve_model(std::string_view provider, std::string_view model) const;
 
+	// A provider's advertised model catalog, in adapter-preferred order. Empty
+	// for an unknown provider or an adapter that advertises none. Advisory:
+	// absence must not turn into request rejection.
+	std::vector<model_info> list_models(std::string_view provider) const;
+
+	// A provider's display identity. Unknown providers fall back to {id, id}.
+	provider_info describe_provider(std::string_view provider) const;
+
 private:
 	struct route {
 		std::shared_ptr<llm_adapter> adapter;

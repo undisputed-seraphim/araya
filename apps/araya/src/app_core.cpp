@@ -21,6 +21,7 @@
 #include "araya/session/events.hpp"
 #include "araya/shell/shell.hpp"
 #include "araya/skill/skill.hpp"
+#include "araya/subagent-fork/subagent_fork.hpp"
 #include "araya/subagents/subagents.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/timer/timer.hpp"
@@ -254,7 +255,8 @@ constexpr command_entry g_commands[]{
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | "
 	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-skill | tool-web | "
-	 "subagents | tool-subagent | workflow | tool-workflow | console | beacon | watcher",
+	 "subagents | subagent-fork | tool-subagent | tool-subagent-fork | workflow | tool-workflow | console | beacon | "
+	 "watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
 	{"reload", "reload <component>", "retire and remount it", &cmd_reload},
@@ -372,7 +374,9 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::tool_workflow::plugin_descriptor();
 	if (name == "subagents")
 		return &araya::subagents::plugin_descriptor();
-	if (name == "tool-subagent")
+	if (name == "subagent-fork")
+		return &araya::subagent_fork::plugin_descriptor();
+	if (name == "tool-subagent" || name == "tool-subagent-fork")
 		return &araya::tool_subagent::plugin_descriptor();
 	if (name == "console")
 		return &araya::console_demo::console_descriptor();
@@ -501,7 +505,18 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// children) and the model-facing tools. The child route is inherited
 	// from the parent's latest request header unless configured here.
 	ctx.desired["subagents"] = desired_entry{&araya::subagents::plugin_descriptor(), {}};
+	// A second provider: forked children inherit the parent's conversation
+	// context (seeded with its completed-turn prefix).
+	ctx.desired["subagent-fork"] = desired_entry{&araya::subagent_fork::plugin_descriptor(), {}};
 	ctx.desired["tool-subagent"] = desired_entry{&araya::tool_subagent::plugin_descriptor(), {}};
+	// A second delegation tool: one-shot forks, so the model can spawn a child
+	// that already knows the parent's history.
+	ctx.desired["tool-subagent-fork"] = desired_entry{
+		&araya::tool_subagent::plugin_descriptor(),
+		{{"provider", "fork"},
+		 {"tool_name", "subagent_fork"},
+		 {"background_mode", "one-shot"},
+		 {"list_models", "false"}}};
 	// Workflow: an out-of-process JavaScript orchestration engine over the
 	// subagent seam. The engine mounts inert; the model-facing tool stays off
 	// until enabled (config enabled=true) because it needs a Node runtime.

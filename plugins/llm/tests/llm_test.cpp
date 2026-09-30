@@ -60,6 +60,15 @@ struct mock_adapter : llm_adapter {
 		for (auto const& chunk : canned)
 			co_await sink(chunk);
 	}
+
+	std::vector<model_info> list_models(std::string_view provider) override {
+		return {model_info{
+			.provider = std::string(provider), .model = "m1", .name = "Model One", .reasoning_efforts = {"low"}}};
+	}
+
+	provider_info describe_provider(std::string_view provider) override {
+		return provider_info{std::string(provider), "Mock Provider"};
+	}
 };
 
 std::shared_ptr<mock_adapter> g_adapter;
@@ -364,4 +373,27 @@ TEST_CASE("parse_url splits scheme, host, port, and path") {
 	CHECK_THROWS_AS(araya::llm::http::parse_url("api.example.com/v1"), std::invalid_argument);
 	CHECK_THROWS_AS(araya::llm::http::parse_url("ftp://api.example.com"), std::invalid_argument);
 	CHECK_THROWS_AS(araya::llm::http::parse_url("https://"), std::invalid_argument);
+}
+
+TEST_CASE("the service delegates the model catalog to the adapter") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_adapter = std::make_shared<mock_adapter>();
+		co_await rt.mount(h.llm_spec());
+		co_await rt.mount(h.spec(&g_adapter_desc));
+		co_await rt.wait_idle();
+		auto root_ctx = rt.root_context();
+		auto service = h.service(root_ctx);
+
+		auto models = service->list_models("mock");
+		REQUIRE(models.size() == 1);
+		CHECK(models[0].model == "m1");
+		CHECK(models[0].name == "Model One");
+		CHECK(models[0].reasoning_efforts == std::vector<std::string>{"low"});
+		CHECK(service->describe_provider("mock").name == "Mock Provider");
+
+		// Unknown providers are empty/identity, never an error.
+		CHECK(service->list_models("absent").empty());
+		CHECK(service->describe_provider("absent").name == "absent");
+	});
 }

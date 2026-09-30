@@ -48,6 +48,10 @@ struct capabilities {
 	bool depth_limit = true;
 	bool agent_options = true;
 	bool output_schema = true;
+	// Whether a child starts from the parent's conversation context (the fork
+	// provider) rather than fresh (spawn). Informational: the service does not
+	// gate on it, but the tool layer can describe the inheritance.
+	bool inherits_parent_context = false;
 };
 
 // What a caller asks for when delegating. `parent` is the calling session

@@ -94,6 +94,20 @@ std::optional<model_info> llm_service::resolve_model(std::string_view provider, 
 	return found->second.adapter->resolve_model(provider, model);
 }
 
+std::vector<model_info> llm_service::list_models(std::string_view provider) const {
+	auto const found = routes_.find(provider);
+	if (found == routes_.end())
+		return {};
+	return found->second.adapter->list_models(provider);
+}
+
+provider_info llm_service::describe_provider(std::string_view provider) const {
+	auto const found = routes_.find(provider);
+	if (found == routes_.end())
+		return provider_info{std::string(provider), std::string(provider)};
+	return found->second.adapter->describe_provider(provider);
+}
+
 std::vector<model_info> llm_adapter::list_models(std::string_view) { return {}; }
 
 model_info llm_adapter::resolve_model(std::string_view provider, std::string_view model) {

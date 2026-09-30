@@ -45,6 +45,7 @@ target_link_libraries(araya_app PRIVATE
     araya::session
     araya::shell
     araya::skill
+    araya::subagent-fork
     araya::subagents
     araya::timer
     araya::tool-ask-user
