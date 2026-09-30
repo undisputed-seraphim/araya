@@ -3,6 +3,8 @@
 #include "araya/config.hpp"
 #include "araya/effects.hpp"
 #include "araya/jobs/jobs.hpp"
+#include "araya/sandbox-policy/sandbox_policy.hpp"
+#include "araya/sandbox/sandbox.hpp"
 #include "araya/session/store.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/tools/tools.hpp"
@@ -97,6 +99,9 @@ struct shell_result {
 	int exit_code = 0;
 	int signal = 0;
 	std::string error;
+	// The confined launch could not install its confinement (fail closed);
+	// the command never ran.
+	bool sandbox_unavailable = false;
 };
 
 // Shared kill state: the timeout watcher and the caller's stop callback
@@ -248,21 +253,34 @@ araya::task<void> run_background(
 	std::size_t max_output,
 	std::string command,
 	std::string workdir,
+	std::optional<araya::sandbox::confined> sandbox,
 	std::shared_ptr<bg_state> state,
 	std::function<void(araya::jobs::job_outcome)> settle) {
 	readable_pipe out(executor);
 	readable_pipe err(executor);
+	bool const confined = sandbox && sandbox->active;
 	try {
-		state->process.emplace(
-			executor,
-			std::move(shell),
-			std::initializer_list<std::string>{"-c", std::move(command)},
-			bp::process_stdio{.in = nullptr, .out = out, .err = err},
-			bp::process_start_dir(bp::filesystem::path(std::move(workdir))));
+		if (confined)
+			state->process.emplace(
+				executor,
+				std::move(shell),
+				std::initializer_list<std::string>{"-c", std::move(command)},
+				bp::process_stdio{.in = nullptr, .out = out, .err = err},
+				bp::process_start_dir(bp::filesystem::path(std::move(workdir))),
+				std::move(sandbox->init));
+		else
+			state->process.emplace(
+				executor,
+				std::move(shell),
+				std::initializer_list<std::string>{"-c", std::move(command)},
+				bp::process_stdio{.in = nullptr, .out = out, .err = err},
+				bp::process_start_dir(bp::filesystem::path(std::move(workdir))));
 	} catch (std::exception const& e) {
 		state->alive = false;
-		settle(araya::jobs::job_outcome{
-			araya::jobs::job_status::failed, std::string("failed to launch command: ") + e.what(), {}});
+		std::string const detail =
+			confined ? std::string("SANDBOX_UNAVAILABLE: confinement could not be applied: ") + e.what()
+					 : std::string("failed to launch command: ") + e.what();
+		settle(araya::jobs::job_outcome{araya::jobs::job_status::failed, detail, {}});
 		co_return;
 	}
 	state->pid = static_cast<long>(state->process->id());
@@ -282,6 +300,14 @@ araya::task<void> run_background(
 	}
 	auto const raw = state->process->native_exit_code();
 	state->process.reset();
+	// A confinement denial is policy, not a command bug: surface the marker in
+	// the job output. (A signal death never counts.)
+	if (confined && WIFEXITED(raw) && WEXITSTATUS(raw) != 0 &&
+		araya::sandbox::matches_denial(WEXITSTATUS(raw), state->stderr_text, sandbox->denial_signature)) {
+		if (!state->stderr_text.empty() && state->stderr_text.back() != '\n')
+			state->stderr_text += '\n';
+		state->stderr_text += araya::sandbox::denial_marker(sandbox->mode);
+	}
 	if (state->requested_cancel.load()) {
 		std::string detail = WIFSIGNALED(raw) ? "signal: " + std::to_string(WTERMSIG(raw)) : "killed before exit";
 		settle(araya::jobs::job_outcome{araya::jobs::job_status::killed, std::move(detail), {}});
@@ -301,21 +327,35 @@ awaitable<shell_result> run_shell(
 	shell_config config,
 	std::string command,
 	std::string workdir,
-	std::stop_token stop) {
+	std::stop_token stop,
+	std::optional<araya::sandbox::confined> sandbox) {
 	shell_result result;
 	readable_pipe out(executor);
 	readable_pipe err(executor);
+	bool const confined = sandbox && sandbox->active;
 
 	std::optional<bp::process> process;
 	try {
-		process.emplace(
-			executor,
-			config.shell,
-			std::initializer_list<std::string>{"-c", std::move(command)},
-			bp::process_stdio{.in = nullptr, .out = out, .err = err},
-			bp::process_start_dir(bp::filesystem::path(workdir)));
+		if (confined)
+			process.emplace(
+				executor,
+				config.shell,
+				std::initializer_list<std::string>{"-c", std::move(command)},
+				bp::process_stdio{.in = nullptr, .out = out, .err = err},
+				bp::process_start_dir(bp::filesystem::path(workdir)),
+				std::move(sandbox->init));
+		else
+			process.emplace(
+				executor,
+				config.shell,
+				std::initializer_list<std::string>{"-c", std::move(command)},
+				bp::process_stdio{.in = nullptr, .out = out, .err = err},
+				bp::process_start_dir(bp::filesystem::path(workdir)));
 	} catch (std::exception const& e) {
 		result.error = e.what();
+		// A confined spawn that fails before exec could not install its
+		// confinement; report it as unavailable rather than a command error.
+		result.sandbox_unavailable = confined;
 		co_return result;
 	}
 	result.launched = true;
@@ -388,6 +428,8 @@ araya::task<tool_result> handle_bash(
 	std::shared_ptr<araya::jobs::jobs_service> jobs,
 	std::shared_ptr<std::vector<std::weak_ptr<bg_state>>> live,
 	shell_config config,
+	std::shared_ptr<araya::sandbox::sandbox_provider> sandbox,
+	std::shared_ptr<araya::sandbox_policy::sandbox_policy_service> policy,
 	tool_context const& ctx) {
 	auto const* args = ctx.arguments.if_object();
 	auto command = args ? araya::util::json::get_string(*args, "command") : std::string{};
@@ -412,6 +454,22 @@ araya::task<tool_result> handle_bash(
 	std::error_code ec;
 	if (!std::filesystem::is_directory(workdir, ec))
 		co_return text_result("Error: workdir is not a directory: " + workdir, true);
+
+	// The sandbox workspace root is the session cwd (the project boundary),
+	// not the per-call workdir. Resolve the policy and build the confinement
+	// once; a confining mode with no usable backend fails closed.
+	std::string workspace_root = std::filesystem::current_path().string();
+	if (auto s = store->get(araya::session::session_id{ctx.session}); s && s->header().cwd)
+		workspace_root = *s->header().cwd;
+
+	std::optional<araya::sandbox::confined> confinement;
+	if (sandbox && policy) {
+		try {
+			confinement = sandbox->confine(policy->resolve(workspace_root));
+		} catch (araya::sandbox::sandbox_unavailable const& e) {
+			co_return text_result(std::string("Error: SANDBOX_UNAVAILABLE: ") + e.what(), true);
+		}
+	}
 
 	if (auto timeout = args ? araya::util::json::opt_int(*args, "timeoutMs") : std::nullopt) {
 		if (*timeout <= 0)
@@ -443,7 +501,7 @@ araya::task<tool_result> handle_bash(
 				.owner_session = ctx.session.empty() ? std::nullopt : std::optional<std::string>{ctx.session},
 				.output_limit_bytes = std::optional<std::size_t>{max_output},
 				.run =
-					[executor, shell, max_output, command, workdir, state](
+					[executor, shell, max_output, command, workdir, confinement, state](
 						std::function<void(araya::jobs::job_outcome)> settle) {
 						araya::jobs::job_handle handle{
 							.cancel =
@@ -455,7 +513,8 @@ araya::task<tool_result> handle_bash(
 						};
 						boost::asio::co_spawn(
 							executor,
-							run_background(executor, shell, max_output, command, workdir, state, std::move(settle)),
+							run_background(
+								executor, shell, max_output, command, workdir, confinement, state, std::move(settle)),
 							boost::asio::detached);
 						return handle;
 					},
@@ -466,9 +525,13 @@ araya::task<tool_result> handle_bash(
 		co_return text_result("started background job " + job_id);
 	}
 
-	auto result = co_await run_shell(executor, config, std::move(command), std::move(workdir), ctx.stop);
-	if (!result.launched)
+	auto result = co_await run_shell(executor, config, std::move(command), std::move(workdir), ctx.stop, confinement);
+	if (!result.launched) {
+		if (result.sandbox_unavailable)
+			co_return text_result(
+				"Error: SANDBOX_UNAVAILABLE: sandbox confinement could not be applied; the command did not run", true);
 		co_return text_result("Error: failed to launch command: " + result.error, true);
+	}
 	if (result.aborted)
 		co_return text_result("Error: command aborted", true);
 	if (!result.error.empty())
@@ -484,6 +547,12 @@ araya::task<tool_result> handle_bash(
 		body = "(no output)";
 
 	std::vector<std::string> markers;
+	// Escalation hook: with an approval channel, a denied call could offer a
+	// one-shot approved wider-mode retry here (the model's sandbox_permissions
+	// + justification resolved before re-running confined). Deferred.
+	if (confinement && confinement->active && result.exit_code != 0 &&
+		araya::sandbox::matches_denial(result.exit_code, result.stderr_text, confinement->denial_signature))
+		markers.push_back(araya::sandbox::denial_marker(confinement->mode));
 	if (result.stdout_dropped > 0 || result.stderr_dropped > 0)
 		markers.push_back(truncation_notice(result.stdout_dropped + result.stderr_dropped));
 	if (!result.stdout_spill.empty())
@@ -519,6 +588,14 @@ struct shell_plugin : araya::plugin {
 		auto jobs = ctx.find<araya::jobs::jobs_service>(araya::jobs::jobs_key)
 						.transform([](auto lease) { return lease.shared(); })
 						.value_or(nullptr);
+		// Optional confinement: when both are mounted, bash runs confined under
+		// the resolved policy. Without them the tool is unconstrained.
+		auto sandbox = ctx.find<araya::sandbox::sandbox_provider>(araya::sandbox::sandbox_key)
+						   .transform([](auto lease) { return lease.shared(); })
+						   .value_or(nullptr);
+		auto policy = ctx.find<araya::sandbox_policy::sandbox_policy_service>(araya::sandbox_policy::sandbox_policy_key)
+						  .transform([](auto lease) { return lease.shared(); })
+						  .value_or(nullptr);
 		auto executor = ctx.executor();
 		auto config = config_;
 
@@ -587,8 +664,8 @@ struct shell_plugin : araya::plugin {
 					{"type", "object"},
 					{"properties", std::move(properties)},
 					{"required", boost::json::array{"command"}}}},
-			[executor, store, jobs, live, config](tool_context const& call) {
-				return handle_bash(executor, store, jobs, live, config, call);
+			[executor, store, jobs, live, config, sandbox, policy](tool_context const& call) {
+				return handle_bash(executor, store, jobs, live, config, sandbox, policy, call);
 			});
 		co_return;
 	}
@@ -608,6 +685,10 @@ static const araya::dependency_spec g_shell_deps[]{
 	// Optional: background `run_in_background` needs the jobs registry, but
 	// foreground bash works without it.
 	{araya::service_id{"jobs", 1}, false, {}},
+	// Optional: the confinement provider and its policy. With both mounted,
+	// bash runs confined; without them it runs unconstrained.
+	{araya::sandbox::sandbox_key.id, false, {}},
+	{araya::sandbox_policy::sandbox_policy_key.id, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_shell_provs{};
 static const araya::plugin_descriptor g_descriptor{"shell", g_shell_deps, g_shell_provs, &make_shell};

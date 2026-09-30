@@ -3,6 +3,8 @@
 #include "araya/jobs/jobs.hpp"
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
+#include "araya/sandbox-policy/sandbox_policy.hpp"
+#include "araya/sandbox/sandbox.hpp"
 #include "araya/session/store.hpp"
 #include "araya/shell/shell.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
@@ -19,6 +21,7 @@
 #include <boost/system/error_code.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -44,21 +47,33 @@ struct harness : araya_test::plugin_harness {
 		return spec(&araya::shell::plugin_descriptor(), std::move(cfg));
 	}
 	araya::component_spec jobs_spec() { return spec(&araya::jobs::plugin_descriptor()); }
+	araya::component_spec sandbox_spec() { return spec(&araya::sandbox::plugin_descriptor()); }
+	araya::component_spec policy_spec(std::string mode, std::string root) {
+		return spec(
+			&araya::sandbox_policy::plugin_descriptor(),
+			{{"mode", std::move(mode)}, {"workspace_root", std::move(root)}});
+	}
 };
 
 struct rig {
 	std::shared_ptr<tools_service> tools;
 	std::shared_ptr<araya::jobs::jobs_service> jobs;
+	std::shared_ptr<araya::sandbox::sandbox_provider> sandbox;
 	std::string session = "s1";
 	araya::task<void> mount(
 		araya::runtime& rt,
 		harness& h,
 		std::filesystem::path const& cwd,
 		bool with_jobs = false,
-		araya::plugin_config shell_cfg = {}) {
+		araya::plugin_config shell_cfg = {},
+		std::optional<std::string> sandbox_mode = std::nullopt) {
 		co_await rt.mount(h.session_spec());
 		co_await rt.mount(h.prompt_spec());
 		co_await rt.mount(h.tools_spec());
+		if (sandbox_mode) {
+			co_await rt.mount(h.sandbox_spec());
+			co_await rt.mount(h.policy_spec(*sandbox_mode, cwd.string()));
+		}
 		if (with_jobs)
 			co_await rt.mount(h.jobs_spec());
 		co_await rt.mount(h.shell_spec(std::move(shell_cfg)));
@@ -66,6 +81,8 @@ struct rig {
 		auto root = rt.root_context();
 		auto store = root.require<araya::session::session_store>(araya::session::sessions_key).shared();
 		tools = root.require<tools_service>(tools_key).shared();
+		if (sandbox_mode)
+			sandbox = root.require<araya::sandbox::sandbox_provider>(araya::sandbox::sandbox_key).shared();
 		if (with_jobs) {
 			jobs = root.require<araya::jobs::jobs_service>(araya::jobs::jobs_key).shared();
 			jobs->attach_controller(root, "test");
@@ -227,6 +244,73 @@ TEST_CASE("bash spills truncated output to a file") {
 		CHECK(buffer.str() == "abcdefghijklmnopqrstuvwxyz");
 		std::error_code ec;
 		std::filesystem::remove(path, ec);
+	});
+}
+
+TEST_CASE("bash confines writes under workspace-write and reports a denial") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		auto workspace = std::filesystem::temp_directory_path() / ("araya-sbx-ws-" + std::to_string(::getpid()));
+		std::filesystem::create_directories(workspace);
+		auto cleanup = [&] {
+			std::error_code ec;
+			std::filesystem::remove_all(workspace, ec);
+		};
+
+		rig r;
+		co_await r.mount(rt, h, workspace, /*with_jobs=*/false, {}, std::string{"workspace-write"});
+		if (!r.sandbox || !r.sandbox->available()) {
+			cleanup();
+			SUCCEED("landlock is unavailable");
+			co_return;
+		}
+
+		// A write inside the workspace succeeds.
+		auto inside = co_await r.call("printf x > inside.txt");
+		REQUIRE(inside.has_value());
+		CHECK_FALSE(inside->is_error);
+		CHECK(std::filesystem::exists(workspace / "inside.txt"));
+
+		// A write under the home directory (writable by the user, outside the
+		// workspace) is denied by the sandbox and marked.
+		auto const* home = std::getenv("HOME");
+		REQUIRE(home != nullptr);
+		auto denied_path = std::filesystem::path(home) / ("araya-sbx-denied-" + std::to_string(::getpid()));
+		auto denied = co_await r.call("printf x > " + denied_path.string());
+		REQUIRE(denied.has_value());
+		CHECK_FALSE(denied->is_error);
+		CHECK(text_of(*denied).find("[sandbox: file access denied under workspace-write mode]") != std::string::npos);
+		CHECK_FALSE(std::filesystem::exists(denied_path));
+
+		cleanup();
+	});
+}
+
+TEST_CASE("bash denies writes to the workspace under read-only") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		auto workspace = std::filesystem::temp_directory_path() / ("araya-sbx-ro-" + std::to_string(::getpid()));
+		std::filesystem::create_directories(workspace);
+		auto cleanup = [&] {
+			std::error_code ec;
+			std::filesystem::remove_all(workspace, ec);
+		};
+
+		rig r;
+		co_await r.mount(rt, h, workspace, /*with_jobs=*/false, {}, std::string{"read-only"});
+		if (!r.sandbox || !r.sandbox->available()) {
+			cleanup();
+			SUCCEED("landlock is unavailable");
+			co_return;
+		}
+
+		auto out = co_await r.call("printf x > blocked.txt");
+		REQUIRE(out.has_value());
+		CHECK_FALSE(out->is_error);
+		CHECK(text_of(*out).find("[sandbox: file access denied under read-only mode]") != std::string::npos);
+		CHECK_FALSE(std::filesystem::exists(workspace / "blocked.txt"));
+
+		cleanup();
 	});
 }
 

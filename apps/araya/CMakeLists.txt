@@ -40,6 +40,8 @@ target_link_libraries(araya_app PRIVATE
     araya::llm-openai
     araya::logger
     araya::persistence
+    araya::sandbox
+    araya::sandbox-policy
     araya::session
     araya::shell
     araya::skill

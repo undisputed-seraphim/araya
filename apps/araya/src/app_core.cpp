@@ -16,6 +16,8 @@
 #include "araya/llm/llm.hpp"
 #include "araya/logger/logger.hpp"
 #include "araya/persistence/persistence.hpp"
+#include "araya/sandbox-policy/sandbox_policy.hpp"
+#include "araya/sandbox/sandbox.hpp"
 #include "araya/session/events.hpp"
 #include "araya/shell/shell.hpp"
 #include "araya/skill/skill.hpp"
@@ -250,7 +252,7 @@ constexpr command_entry g_commands[]{
 	 "load <component> [json config]",
 	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
-	 "goal-round-driver | tool-goal | jobs | "
+	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | "
 	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-skill | tool-web | "
 	 "subagents | tool-subagent | workflow | tool-workflow | console | beacon | watcher",
 	 &cmd_load},
@@ -340,6 +342,10 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::goal_round_driver::plugin_descriptor();
 	if (name == "jobs")
 		return &araya::jobs::plugin_descriptor();
+	if (name == "sandbox")
+		return &araya::sandbox::plugin_descriptor();
+	if (name == "sandbox-policy")
+		return &araya::sandbox_policy::plugin_descriptor();
 	if (name == "skill")
 		return &araya::skill::plugin_descriptor();
 	if (name == "shell")
@@ -444,7 +450,9 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 		// The standard coding-agent persona (the harness's `standard`
 		// preset). The environment variable still wins when set.
 		prompt_config["persona_prefix"] = "You are a coding agent powered by the {{model}} model.";
-		prompt_config["persona_suffix"] = "Your working directory is {{cwd}}.";
+		prompt_config["persona_suffix"] =
+			"Your working directory is {{cwd}}. Your bash tool runs under a file sandbox — a `[sandbox: file access "
+			"denied …]` result is policy, not a command bug.";
 	}
 	ctx.desired["system-prompt"] = desired_entry{&araya::system_prompt::plugin_descriptor(), std::move(prompt_config)};
 	// Workspace instructions (AGENTS.md) as an agent context producer.
@@ -475,6 +483,11 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// shell resolves relative workdirs against the session cwd; its
 	// run_in_background path registers with the jobs registry.
 	ctx.desired["coreutil"] = desired_entry{&araya::coreutil::plugin_descriptor(), {}};
+	// File-effect confinement: the Landlock provider and its policy. Mounted
+	// before `shell` so the tool picks them up at load; default workspace-write.
+	ctx.desired["sandbox"] = desired_entry{&araya::sandbox::plugin_descriptor(), {}};
+	ctx.desired["sandbox-policy"] =
+		desired_entry{&araya::sandbox_policy::plugin_descriptor(), {{"mode", "workspace-write"}}};
 	ctx.desired["shell"] = desired_entry{&araya::shell::plugin_descriptor(), {}};
 	// The read-before-write/edit policy: an event-only gate the coreutil
 	// executor consults. Without it the fs tools are unconstrained.

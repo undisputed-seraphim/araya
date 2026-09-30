@@ -7,6 +7,7 @@
 # path registers with.
 araya_add_plugin(shell
     SOURCES src/shell.cpp
-    DEPS araya::session araya::tools araya::jobs Boost::process Boost::filesystem
+    DEPS araya::session araya::tools araya::jobs araya::sandbox araya::sandbox-policy
+         Boost::process Boost::filesystem
     TEST tests/shell_test.cpp
 )

@@ -12,6 +12,7 @@ include(cmake/Format.cmake)
 include(cmake/Warnings.cmake)
 include(cmake/Testing.cmake)
 include(cmake/Plugin.cmake)
+include(cmake/Landlock.cmake)
 
 option(ARAYA_ENFORCE_INVARIANTS
     "Check engine invariants even in release builds (violations throw)"
