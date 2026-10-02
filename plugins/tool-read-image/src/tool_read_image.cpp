@@ -30,6 +30,8 @@ using araya::attachment::attachments_key;
 using araya::session::session_id;
 using araya::session::session_store;
 using araya::session::sessions_key;
+using araya::tools::error_result;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -37,12 +39,6 @@ using araya::tools::tools_key;
 using araya::tools::tools_service;
 
 constexpr std::size_t max_image_bytes = 10 * 1024 * 1024;
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
-}
-
-tool_result error_result(std::string text) { return text_result(std::move(text), true); }
 
 std::string base64_encode(std::string const& data) {
 	static char const* table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

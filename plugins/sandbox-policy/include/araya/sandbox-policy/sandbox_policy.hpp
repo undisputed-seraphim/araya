@@ -22,11 +22,13 @@ public:
 		: default_mode_(default_mode)
 		, fallback_root_(std::move(fallback_root)) {}
 
-	// The deployment default mode a session starts from.
-	araya::sandbox::sandbox_mode default_mode() const noexcept { return default_mode_; }
+	// The deployment default mode a session starts from. Reserved API: only
+	// the tests read it; resolve() is what callers use.
+	[[maybe_unused]] araya::sandbox::sandbox_mode default_mode() const noexcept { return default_mode_; }
 
-	// The root used when the calling session carries no cwd.
-	std::string const& fallback_root() const noexcept { return fallback_root_; }
+	// The root used when the calling session carries no cwd. Reserved API:
+	// resolve() consumes it directly.
+	[[maybe_unused]] std::string const& fallback_root() const noexcept { return fallback_root_; }
 
 	// Resolve the policy for one call: the deployment default mode, rooted at
 	// the calling session's workspace (`workspace_root`, empty to use the

@@ -2,6 +2,7 @@
 
 #include "araya/config.hpp"
 #include "araya/plugin_context.hpp"
+#include "araya/util/string.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -21,6 +22,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
+using araya::util::string::trim;
+
 constexpr araya::config_key<std::string> custom_dirs_key{"custom_skill_dirs"};
 
 // Ranks decide duplicate-name winners (lower wins) and scan order. The
@@ -34,14 +37,6 @@ struct skill_root {
 	std::string source;
 	int rank = 0;
 };
-
-std::string trim(std::string_view text) {
-	auto const first = text.find_first_not_of(" \t\r\n");
-	if (first == std::string_view::npos)
-		return {};
-	auto const last = text.find_last_not_of(" \t\r\n");
-	return std::string(text.substr(first, last - first + 1));
-}
 
 std::string strip_quotes(std::string value) {
 	if (value.size() >= 2 &&

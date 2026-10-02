@@ -25,11 +25,6 @@ namespace {
 
 constexpr araya::config_key<std::uint64_t> max_concurrent_key{"max_concurrent_jobs_per_owner"};
 
-std::int64_t now_ms() {
-	using namespace std::chrono;
-	return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-}
-
 // One live wait: settlement (or teardown) cancels the timer, which resumes the
 // waiter coroutine with operation_aborted; the timer expiring naturally is the
 // timeout.
@@ -85,7 +80,7 @@ public:
 		job->label = spec.label;
 		job->output_limit_bytes = spec.output_limit_bytes;
 		job->owner_session = spec.owner_session;
-		job->started_at_ms = now_ms();
+		job->started_at_ms = araya::session::now_ms();
 		job->id = spec.kind + "-" + std::to_string(++counters_[spec.kind]);
 		job->in_store = true;
 		store_.emplace(job->id, job);
@@ -340,7 +335,7 @@ private:
 		job->status = outcome.status;
 		job->detail = std::move(outcome.detail);
 		job->output = std::move(outcome.output);
-		job->finished_at_ms = now_ms();
+		job->finished_at_ms = araya::session::now_ms();
 		if (!job->waiters.empty())
 			job->reported = true;
 		release_waiters(*job);

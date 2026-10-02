@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -24,6 +23,8 @@
 namespace araya::tool_web {
 namespace {
 
+using araya::tools::error_result;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -55,12 +56,6 @@ tool_web_config parse_config(araya::plugin_config const& config) {
 		out.max_queries = static_cast<std::size_t>(*value);
 	return out;
 }
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
-}
-
-tool_result error_result(std::string text) { return text_result(std::move(text), true); }
 
 std::string render_fetch(araya::web::fetch_result const& result) {
 	std::string text = "Fetched " + result.url + " (HTTP " + std::to_string(result.status) + ")\n\n";

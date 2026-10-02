@@ -7,13 +7,16 @@
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/task.hpp"
 
+#include <boost/json/array.hpp>
 #include <boost/json/value.hpp>
 
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The tool registry: schemas, per-scope visibility, and execution. Tool
@@ -52,6 +55,16 @@ struct tool_result {
 	boost::json::value content;
 	bool is_error = false;
 };
+
+// The common single-text-block result and its error counterpart. Every tool
+// plugin would otherwise inline the same three lines.
+inline tool_result text_result(std::string text, bool is_error = false) {
+	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
+}
+
+inline tool_result error_result(std::string text) { return text_result(std::move(text), true); }
+
+inline tool_result error_result(std::exception const& e) { return error_result(std::string("Error: ") + e.what()); }
 
 using tool_handler = std::function<araya::task<tool_result>(tool_context const&)>;
 

@@ -1,11 +1,14 @@
 #pragma once
 
+#include "araya/util/string.hpp"
+
 #include <boost/json/value.hpp>
 
 #include <chrono>
 #include <compare>
 #include <cstdint>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -123,6 +126,19 @@ bool is_builtin_surface_type(std::string_view type) noexcept;
 inline std::int64_t now_ms() noexcept {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
 		.count();
+}
+
+// A run-unique opaque id: the wall clock plus 64 random bits, rendered as
+// `<prefix><hex16(now)><separator><hex16(random)>`. The old per-store counter
+// restarted at 0 every process and collided with a persisted file of the same
+// name across runs; these survive restarts and never reuse a name.
+inline std::string mint_id(std::string_view prefix, std::string_view separator) {
+	std::random_device device;
+	std::uint64_t random = (static_cast<std::uint64_t>(device()) << 32) ^ device();
+	auto const stamp = static_cast<std::uint64_t>(now_ms());
+	random ^= stamp << 16;
+	return std::string(prefix) + araya::util::string::hex16(stamp) + std::string(separator) +
+		   araya::util::string::hex16(random);
 }
 
 } // namespace araya::session

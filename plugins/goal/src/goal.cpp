@@ -1,11 +1,12 @@
 #include "araya/goal/goal.hpp"
+#include "araya/util/json.hpp"
+#include "araya/util/string.hpp"
 
 #include <boost/json.hpp>
 
 #include <algorithm>
 #include <cstdint>
-#include <random>
-#include <set>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -27,52 +28,12 @@ std::optional<goal_phase> phase_of(std::string_view name) {
 	return std::nullopt;
 }
 
-std::string mint_goal_id() {
-	auto hex16 = [](std::uint64_t value) {
-		static constexpr char digits[] = "0123456789abcdef";
-		std::string out(16, '0');
-		for (int i = 15; i >= 0; --i) {
-			out[static_cast<std::size_t>(i)] = digits[value & 0xF];
-			value >>= 4;
-		}
-		return out;
-	};
-	std::random_device device;
-	std::uint64_t random = (static_cast<std::uint64_t>(device()) << 32) ^ device();
-	random ^= static_cast<std::uint64_t>(araya::session::now_ms()) << 16;
-	return "goal-" + hex16(static_cast<std::uint64_t>(araya::session::now_ms())) + "-" + hex16(random);
-}
+std::string mint_goal_id() { return araya::session::mint_id("goal-", "-"); }
 
-std::string trim(std::string_view text) {
-	auto first = text.find_first_not_of(" \t\r\n");
-	if (first == std::string_view::npos)
-		return {};
-	auto last = text.find_last_not_of(" \t\r\n");
-	return std::string(text.substr(first, last - first + 1));
-}
-
-std::optional<std::uint64_t> as_uint(boost::json::value const& node) {
-	if (node.is_uint64())
-		return node.as_uint64();
-	if (node.is_int64() && node.as_int64() >= 0)
-		return static_cast<std::uint64_t>(node.as_int64());
-	return std::nullopt;
-}
-
-std::optional<std::int64_t> as_int(boost::json::value const& node) {
-	if (node.is_int64())
-		return node.as_int64();
-	if (node.is_uint64())
-		return static_cast<std::int64_t>(node.as_uint64());
-	return std::nullopt;
-}
-
-std::optional<std::string> string_field(boost::json::object const& object, std::string_view key) {
-	auto it = object.find(key);
-	if (it == object.end() || !it->value().is_string())
-		return std::nullopt;
-	return std::string(it->value().as_string());
-}
+using araya::util::json::opt_int;
+using araya::util::json::opt_string;
+using araya::util::json::opt_uint;
+using araya::util::string::trim;
 
 // The operation an `goal/change` event records.
 enum class operation_kind : std::uint8_t {
@@ -116,18 +77,18 @@ struct decoded_change {
 
 goal_snapshot decode_snapshot(boost::json::object const& object) {
 	goal_snapshot goal;
-	auto id = string_field(object, "id");
-	auto objective = string_field(object, "objective");
+	auto id = opt_string(object, "id");
+	auto objective = opt_string(object, "objective");
 	auto revision = object.if_contains("revision");
 	auto max_rounds = object.if_contains("maxGoalRounds");
-	auto phase_name = string_field(object, "phase");
+	auto phase_name = opt_string(object, "phase");
 	if (!id || id->empty())
 		throw std::runtime_error("goal change goal.id must be a non-empty string");
 	if (!objective || trim(*objective).empty() || *objective != trim(*objective))
 		throw std::runtime_error("goal change goal.objective must be non-empty and normalized");
-	if (!revision || !as_uint(*revision) || *as_uint(*revision) < 1)
+	if (!revision || !opt_uint(*revision) || *opt_uint(*revision) < 1)
 		throw std::runtime_error("goal change goal.revision must be a positive integer");
-	if (!max_rounds || !as_uint(*max_rounds) || *as_uint(*max_rounds) < 1)
+	if (!max_rounds || !opt_uint(*max_rounds) || *opt_uint(*max_rounds) < 1)
 		throw std::runtime_error("goal change goal.maxGoalRounds must be a positive integer");
 	if (!phase_name)
 		throw std::runtime_error("goal change goal.phase is invalid");
@@ -136,16 +97,16 @@ goal_snapshot decode_snapshot(boost::json::object const& object) {
 		throw std::runtime_error("goal change goal.phase is invalid");
 	goal.id = *id;
 	goal.objective = *objective;
-	goal.revision = *as_uint(*revision);
-	goal.max_goal_rounds = *as_uint(*max_rounds);
+	goal.revision = *opt_uint(*revision);
+	goal.max_goal_rounds = *opt_uint(*max_rounds);
 	goal.phase = *phase;
 	if (*phase == goal_phase::blocked) {
 		auto blocked = object.if_contains("blockedReason");
 		auto const* reason = blocked ? blocked->if_object() : nullptr;
 		if (!reason)
 			throw std::runtime_error("goal change goal.blockedReason must be present while blocked");
-		auto code = string_field(*reason, "code");
-		auto message = string_field(*reason, "message");
+		auto code = opt_string(*reason, "code");
+		auto message = opt_string(*reason, "message");
 		if (!code || code->empty() || !message || trim(*message).empty())
 			throw std::runtime_error("goal change goal.blockedReason is invalid");
 		goal.blocked_reason = goal_block_reason{*code, trim(*message)};
@@ -157,12 +118,12 @@ decoded_change decode_change(boost::json::value const& data) {
 	auto const* object = data.if_object();
 	if (!object)
 		throw std::runtime_error("goal change must be a JSON object");
-	if (string_field(*object, "kind") != "goal/change")
+	if (opt_string(*object, "kind") != "goal/change")
 		throw std::runtime_error("goal change has an invalid kind");
 	auto version = object->if_contains("version");
-	if (!version || !as_uint(*version) || *as_uint(*version) != 1)
+	if (!version || !opt_uint(*version) || *opt_uint(*version) != 1)
 		throw std::runtime_error("unsupported goal change version");
-	auto operation_name_value = string_field(*object, "operation");
+	auto operation_name_value = opt_string(*object, "operation");
 	if (!operation_name_value)
 		throw std::runtime_error("goal change operation is invalid");
 	auto operation = operation_of(*operation_name_value);
@@ -176,15 +137,15 @@ decoded_change decode_change(boost::json::value const& data) {
 		auto const* ref = cleared ? cleared->if_object() : nullptr;
 		if (!ref)
 			throw std::runtime_error("goal clear change lacks a cleared ref");
-		auto id = string_field(*ref, "id");
+		auto id = opt_string(*ref, "id");
 		auto revision = ref->if_contains("revision");
-		if (!id || id->empty() || !revision || !as_uint(*revision) || *as_uint(*revision) < 1)
+		if (!id || id->empty() || !revision || !opt_uint(*revision) || *opt_uint(*revision) < 1)
 			throw std::runtime_error("goal clear change ref is invalid");
-		change.cleared = goal_ref{*id, *as_uint(*revision)};
+		change.cleared = goal_ref{*id, *opt_uint(*revision)};
 		auto cleared_at = object->if_contains("clearedAt");
-		if (!cleared_at || !as_int(*cleared_at) || *as_int(*cleared_at) < 0)
+		if (!cleared_at || !opt_int(*cleared_at) || *opt_int(*cleared_at) < 0)
 			throw std::runtime_error("goal clear change clearedAt is invalid");
-		change.cleared_at = *as_int(*cleared_at);
+		change.cleared_at = *opt_int(*cleared_at);
 		return change;
 	}
 
@@ -195,17 +156,17 @@ decoded_change decode_change(boost::json::value const& data) {
 	auto rounds = object->if_contains("roundsStarted");
 	auto created = object->if_contains("createdAt");
 	auto updated = object->if_contains("updatedAt");
-	if (!rounds || !as_uint(*rounds))
+	if (!rounds || !opt_uint(*rounds))
 		throw std::runtime_error("goal change roundsStarted is invalid");
-	if (!created || !as_int(*created) || *as_int(*created) < 0)
+	if (!created || !opt_int(*created) || *opt_int(*created) < 0)
 		throw std::runtime_error("goal change createdAt is invalid");
-	if (!updated || !as_int(*updated) || *as_int(*updated) < 0)
+	if (!updated || !opt_int(*updated) || *opt_int(*updated) < 0)
 		throw std::runtime_error("goal change updatedAt is invalid");
-	if (*as_int(*updated) < *as_int(*created))
+	if (*opt_int(*updated) < *opt_int(*created))
 		throw std::runtime_error("goal change updatedAt cannot precede createdAt");
-	change.rounds_started = *as_uint(*rounds);
-	change.created_at = *as_int(*created);
-	change.updated_at = *as_int(*updated);
+	change.rounds_started = *opt_uint(*rounds);
+	change.created_at = *opt_int(*created);
+	change.updated_at = *opt_int(*updated);
 	return change;
 }
 
@@ -288,17 +249,17 @@ void apply_change(goal_projection_state& state, decoded_change const& change) {
 
 // Apply one goal-sourced user message (round admission).
 void apply_round(goal_projection_state& state, boost::json::object const& source) {
-	auto goal_id = string_field(source, "goalId");
+	auto goal_id = opt_string(source, "goalId");
 	auto revision = source.if_contains("revision");
 	auto round = source.if_contains("round");
-	if (!goal_id || goal_id->empty() || !revision || !as_uint(*revision) || !round || !as_uint(*round) ||
-		*as_uint(*round) < 1)
+	if (!goal_id || goal_id->empty() || !revision || !opt_uint(*revision) || !round || !opt_uint(*round) ||
+		*opt_uint(*round) < 1)
 		throw std::runtime_error("goal message source is invalid");
 	if (!state.current || state.current->phase != goal_phase::active || *goal_id != state.current->id ||
-		*as_uint(*revision) != state.current->revision || *as_uint(*round) != state.rounds_started + 1 ||
-		*as_uint(*round) > state.current->max_goal_rounds)
+		*opt_uint(*revision) != state.current->revision || *opt_uint(*round) != state.rounds_started + 1 ||
+		*opt_uint(*round) > state.current->max_goal_rounds)
 		throw std::runtime_error("goal round is not the next admitted round of the active goal");
-	state.rounds_started = *as_uint(*round);
+	state.rounds_started = *opt_uint(*round);
 }
 
 boost::json::value snapshot_json(goal_snapshot const& goal) {
@@ -369,7 +330,7 @@ araya::session::event_projection<goal_projection_state> goal_projection() {
 						return;
 					auto source = object->if_contains("source");
 					auto const* source_object = source ? source->if_object() : nullptr;
-					if (!source_object || string_field(*source_object, "kind") != "goal")
+					if (!source_object || opt_string(*source_object, "kind") != "goal")
 						return;
 					try {
 						apply_round(state, *source_object);
@@ -468,7 +429,7 @@ void goal_service::commit_change(
 	auto const& state = expect_state(session);
 	goal_changed_msg message;
 	message.session = session;
-	message.operation = string_field(change.as_object(), "operation").value_or("clear");
+	message.operation = opt_string(change.as_object(), "operation").value_or("clear");
 	if (state.current) {
 		message.ref = goal_ref{state.current->id, state.current->revision};
 		message.goal = view_of(state, activation);

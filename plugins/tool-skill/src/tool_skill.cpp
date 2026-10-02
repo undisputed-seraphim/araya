@@ -32,65 +32,21 @@ using araya::skill::skill_definition;
 using araya::skill::skill_summary;
 using araya::skill::skills_key;
 using araya::skill::skills_service;
+using araya::tools::error_result;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
 using araya::tools::tools_key;
 using araya::tools::tools_service;
-
-std::string escape_text(std::string_view value) {
-	std::string out;
-	out.reserve(value.size());
-	for (char const c : value) {
-		switch (c) {
-		case '&':
-			out += "&amp;";
-			break;
-		case '<':
-			out += "&lt;";
-			break;
-		case '>':
-			out += "&gt;";
-			break;
-		default:
-			out.push_back(c);
-		}
-	}
-	return out;
-}
-
-std::string escape_attr(std::string_view value) {
-	std::string out;
-	out.reserve(value.size());
-	for (char const c : value) {
-		switch (c) {
-		case '&':
-			out += "&amp;";
-			break;
-		case '"':
-			out += "&quot;";
-			break;
-		case '<':
-			out += "&lt;";
-			break;
-		default:
-			out.push_back(c);
-		}
-	}
-	return out;
-}
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
-}
-
-tool_result error_result(std::string text) { return text_result(std::move(text), true); }
+using araya::util::string::xml_attr_escape;
+using araya::util::string::xml_escape;
 
 // The canonical model-facing skill render, shared by the loader result.
 std::string render_skill_content(skill_definition const& skill) {
 	std::string base = std::filesystem::path(skill.summary.path).parent_path().string();
-	std::string text = "<skill_content name=\"" + escape_attr(skill.summary.name) + "\">\n<skill_resources>\n";
-	text += "Base directory for this skill: " + escape_text(base) + "\n";
+	std::string text = "<skill_content name=\"" + xml_attr_escape(skill.summary.name) + "\">\n<skill_resources>\n";
+	text += "Base directory for this skill: " + xml_escape(base) + "\n";
 	text += "Resolve relative paths mentioned by this skill against the base directory before using them. Load "
 			"referenced resources only as needed.\n";
 	text += "</skill_resources>\n\n<skill_instructions>\n";
@@ -116,9 +72,9 @@ std::string render_catalog(std::vector<skill_summary> const& skills) {
 			"session:\n\n";
 	text += "<available_skills>\n";
 	for (auto const* skill : visible) {
-		text += "- `" + skill->name + "`: " + escape_text(skill->description);
+		text += "- `" + skill->name + "`: " + xml_escape(skill->description);
 		if (skill->when_to_use && !skill->when_to_use->empty())
-			text += " Use when: " + escape_text(*skill->when_to_use);
+			text += " Use when: " + xml_escape(*skill->when_to_use);
 		text += "\n";
 	}
 	text += "</available_skills>\n\n";

@@ -228,8 +228,9 @@ public:
 	// Awaits until no drive is running for the session.
 	araya::task<void> when_idle(araya::session::session_id const& session);
 
-	// The ids of every entered session at delegation depth zero.
-	std::vector<araya::session::session_id> roots() const;
+	// The ids of every entered session at delegation depth zero. Reserved
+	// API: no in-tree caller yet (the TUI enumerates sessions directly).
+	[[maybe_unused]] std::vector<araya::session::session_id> roots() const;
 
 	// -- reads --
 

@@ -11,18 +11,17 @@
 #include <boost/json/object.hpp>
 #include <boost/json/value.hpp>
 
-#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace araya::tool_subagent {
 namespace {
 
 using namespace araya::subagents;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -35,10 +34,6 @@ constexpr araya::config_key<std::string> child_provider_key{"child_provider"};
 constexpr araya::config_key<std::string> child_model_key{"child_model"};
 constexpr araya::config_key<std::string> reasoning_effort_key{"reasoning_effort"};
 constexpr araya::config_key<bool> list_models_key{"list_models"};
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
-}
 
 struct subagent_config {
 	std::string provider = "spawn";

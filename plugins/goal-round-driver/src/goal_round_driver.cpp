@@ -6,7 +6,6 @@
 #include "araya/goal/goal.hpp"
 #include "araya/llm/bridge.hpp"
 #include "araya/session/events.hpp"
-#include "araya/session/store.hpp"
 #include "araya/util/json.hpp"
 
 #include <boost/asio/co_spawn.hpp>

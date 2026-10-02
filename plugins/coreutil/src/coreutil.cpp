@@ -37,6 +37,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
+using araya::tools::error_result;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -96,12 +98,6 @@ bool is_enabled(coreutil_config const& config, std::string_view name) {
 }
 
 // -- shared helpers --------------------------------------------------------
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
-}
-
-tool_result error_result(std::string text) { return text_result(std::move(text), true); }
 
 fs::path resolve_path(araya::session::session_store& store, std::string const& session, std::string_view raw) {
 	fs::path path{std::string(raw)};

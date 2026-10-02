@@ -15,7 +15,6 @@
 #include <exception>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,7 +47,6 @@ void record(session& target, std::string type, boost::json::value data) {
 
 struct workflow_service::run_state {
 	std::string id;
-	std::string name;
 	std::uint64_t agents_started = 0;
 	std::uint64_t max_total = 0;
 	std::uint64_t next_seq = 0;
@@ -113,7 +111,6 @@ araya::task<result> workflow_service::run_impl(start_request request, progress_s
 
 	auto state = std::make_shared<run_state>();
 	state->id = "workflow-" + std::to_string(next_run_++);
-	state->name = name;
 	state->max_total = request.max_total_agents ? *request.max_total_agents : config_.max_total_agents;
 	state->run_stop = std::make_shared<std::stop_source>();
 	try {

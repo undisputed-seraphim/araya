@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <random>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -92,19 +91,7 @@ session_id session_store::mint_id() {
 	// per-store counter restarted at 0 every process, which collided with
 	// a persisted file of the same name across runs; ids now survive
 	// restarts and never reuse a name.
-	auto hex16 = [](std::uint64_t value) {
-		static constexpr char digits[] = "0123456789abcdef";
-		std::string out(16, '0');
-		for (int i = 15; i >= 0; --i) {
-			out[static_cast<std::size_t>(i)] = digits[value & 0xF];
-			value >>= 4;
-		}
-		return out;
-	};
-	std::random_device device;
-	std::uint64_t random = (static_cast<std::uint64_t>(device()) << 32) ^ device();
-	random ^= static_cast<std::uint64_t>(now_ms()) << 16;
-	return session_id{"ses_" + hex16(static_cast<std::uint64_t>(now_ms())) + "_" + hex16(random)};
+	return session_id{araya::session::mint_id("ses_", "_")};
 }
 
 std::vector<session_id> session_store::list() const {

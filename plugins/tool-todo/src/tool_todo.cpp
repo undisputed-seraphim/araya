@@ -5,6 +5,7 @@
 #include "araya/session/store.hpp"
 #include "araya/tools/tools.hpp"
 #include "araya/util/json.hpp"
+#include "araya/util/string.hpp"
 
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
@@ -13,7 +14,6 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,11 +29,14 @@ using araya::session::session_header;
 using araya::session::session_id;
 using araya::session::session_store;
 using araya::session::sessions_key;
+using araya::tools::error_result;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
 using araya::tools::tools_key;
 using araya::tools::tools_service;
+using araya::util::string::trim;
 
 constexpr araya::config_key<bool> allow_parallel_key{"allow_parallel_in_progress"};
 
@@ -60,20 +63,6 @@ struct todos_impl : todos_service {
 		return **state;
 	}
 };
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
-}
-
-tool_result error_result(std::string text) { return text_result(std::move(text), true); }
-
-std::string trim(std::string_view text) {
-	auto const first = text.find_first_not_of(" \t\r\n");
-	if (first == std::string_view::npos)
-		return {};
-	auto const last = text.find_last_not_of(" \t\r\n");
-	return std::string(text.substr(first, last - first + 1));
-}
 
 std::string describe(bool allow_parallel) {
 	std::string text =

@@ -3,6 +3,7 @@
 #include "araya/agent-loop/agent.hpp"
 #include "araya/config.hpp"
 #include "araya/session/session_types.hpp"
+#include "araya/util/string.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -24,6 +25,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
+using araya::util::string::trim;
+
 constexpr araya::config_key<std::uint64_t> max_bytes_key{"max_bytes"};
 constexpr araya::config_key<std::uint64_t> max_source_bytes_key{"max_source_bytes"};
 constexpr araya::config_key<std::string> root_markers_key{"project_root_markers"};
@@ -42,14 +45,6 @@ struct config {
 	std::vector<std::string> candidates{"AGENTS.md", "CLAUDE.md"};
 	std::vector<std::string> local_candidates{"AGENTS.local.md", "CLAUDE.local.md"};
 };
-
-std::string trim(std::string_view text) {
-	auto const first = text.find_first_not_of(" \t\r\n");
-	if (first == std::string_view::npos)
-		return {};
-	auto const last = text.find_last_not_of(" \t\r\n");
-	return std::string(text.substr(first, last - first + 1));
-}
 
 std::vector<std::string> split_csv(std::string_view text) {
 	std::vector<std::string> out;

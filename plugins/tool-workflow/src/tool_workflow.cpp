@@ -12,7 +12,6 @@
 #include <boost/json/value.hpp>
 
 #include <memory>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -21,6 +20,7 @@
 namespace araya::tool_workflow {
 namespace {
 
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -47,10 +47,6 @@ tool_workflow_config parse_config(araya::plugin_config const& config) {
 	if (auto value = view.try_get(max_result_key))
 		out.max_result_chars = *value;
 	return out;
-}
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
 }
 
 // The script-authoring contract, embedded in the tool description (ported from

@@ -24,6 +24,56 @@ inline boost::json::object const* as_object(boost::json::value const& value) { r
 
 inline boost::json::array const* as_array(boost::json::value const& value) { return value.if_array(); }
 
+// Value-level accessors: absent (null) or wrong-typed reads as the neutral
+// value. These are the primitive forms; the object+key overloads below
+// delegate to them.
+inline std::string get_string(boost::json::value const& value) {
+	return value.is_string() ? std::string(value.as_string()) : std::string{};
+}
+
+inline std::optional<std::string> opt_string(boost::json::value const& value) {
+	return value.is_string() ? std::optional<std::string>(std::string(value.as_string())) : std::nullopt;
+}
+
+inline std::uint64_t get_uint(boost::json::value const& value) {
+	if (value.is_uint64())
+		return value.as_uint64();
+	if (value.is_int64() && value.as_int64() >= 0)
+		return static_cast<std::uint64_t>(value.as_int64());
+	return 0;
+}
+
+inline std::optional<std::uint64_t> opt_uint(boost::json::value const& value) {
+	if (value.is_uint64())
+		return value.as_uint64();
+	if (value.is_int64() && value.as_int64() >= 0)
+		return static_cast<std::uint64_t>(value.as_int64());
+	return std::nullopt;
+}
+
+inline std::int64_t get_int(boost::json::value const& value) {
+	if (value.is_int64())
+		return value.as_int64();
+	if (value.is_uint64() && value.as_uint64() <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+		return static_cast<std::int64_t>(value.as_uint64());
+	return 0;
+}
+
+inline std::optional<std::int64_t> opt_int(boost::json::value const& value) {
+	if (value.is_int64())
+		return value.as_int64();
+	if (value.is_uint64() && value.as_uint64() <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+		return static_cast<std::int64_t>(value.as_uint64());
+	return std::nullopt;
+}
+
+inline bool get_bool(boost::json::value const& value) { return value.is_bool() && value.as_bool(); }
+
+inline std::optional<bool> opt_bool(boost::json::value const& value) {
+	return value.is_bool() ? std::optional<bool>(value.as_bool()) : std::nullopt;
+}
+
+// Object+key accessors.
 inline boost::json::object const* get_object(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
 	return node ? node->if_object() : nullptr;
@@ -36,66 +86,42 @@ inline boost::json::array const* get_array(boost::json::object const& object, st
 
 inline std::string get_string(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
-	return node && node->is_string() ? std::string(node->as_string()) : std::string{};
+	return node ? get_string(*node) : std::string{};
 }
 
 inline std::optional<std::string> opt_string(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
-	return node && node->is_string() ? std::optional<std::string>(std::string(node->as_string())) : std::nullopt;
+	return node ? opt_string(*node) : std::nullopt;
 }
 
 inline std::uint64_t get_uint(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
-	if (!node)
-		return 0;
-	if (node->is_uint64())
-		return node->as_uint64();
-	if (node->is_int64() && node->as_int64() >= 0)
-		return static_cast<std::uint64_t>(node->as_int64());
-	return 0;
+	return node ? get_uint(*node) : 0;
 }
 
 inline std::optional<std::uint64_t> opt_uint(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
-	if (!node)
-		return std::nullopt;
-	if (node->is_uint64())
-		return node->as_uint64();
-	if (node->is_int64() && node->as_int64() >= 0)
-		return static_cast<std::uint64_t>(node->as_int64());
-	return std::nullopt;
+	return node ? opt_uint(*node) : std::nullopt;
 }
 
 inline std::int64_t get_int(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
-	if (!node)
-		return 0;
-	if (node->is_int64())
-		return node->as_int64();
-	if (node->is_uint64() && node->as_uint64() <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
-		return static_cast<std::int64_t>(node->as_uint64());
-	return 0;
+	return node ? get_int(*node) : 0;
 }
 
 inline std::optional<std::int64_t> opt_int(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
-	if (!node)
-		return std::nullopt;
-	if (node->is_int64())
-		return node->as_int64();
-	if (node->is_uint64() && node->as_uint64() <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
-		return static_cast<std::int64_t>(node->as_uint64());
-	return std::nullopt;
+	return node ? opt_int(*node) : std::nullopt;
 }
 
 inline bool get_bool(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
-	return node && node->is_bool() && node->as_bool();
+	return node ? get_bool(*node) : false;
 }
 
 inline std::optional<bool> opt_bool(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
-	return node && node->is_bool() ? std::optional<bool>(node->as_bool()) : std::nullopt;
+	return node ? opt_bool(*node) : std::nullopt;
 }
 
 } // namespace araya::util::json

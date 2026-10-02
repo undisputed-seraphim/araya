@@ -22,7 +22,6 @@
 #include <span>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace araya::tool_jobs {
 namespace {
@@ -34,6 +33,8 @@ using araya::jobs::jobs_service;
 using araya::session::session_id;
 using araya::session::session_store;
 using araya::session::sessions_key;
+using araya::tools::error_result;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -63,12 +64,6 @@ std::optional<std::string> owner_of(tool_context const& ctx) {
 		return std::nullopt;
 	return ctx.session;
 }
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
-}
-
-tool_result error_result(std::string text) { return text_result(std::move(text), true); }
 
 std::string status_line(job_snapshot const& snapshot) {
 	std::string text = "[status: ";

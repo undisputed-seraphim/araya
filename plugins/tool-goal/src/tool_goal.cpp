@@ -24,6 +24,7 @@ namespace {
 using araya::session::session_id;
 using araya::session::session_store;
 using araya::session::sessions_key;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -45,12 +46,6 @@ struct execution {
 	std::uint64_t open_turn_start_seq = 0;
 };
 
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
-}
-
-std::string_view phase_name(araya::goal::goal_phase phase) { return araya::goal::goal_phase_name(phase); }
-
 // Validate and detach the cmp tool's goal value.
 boost::json::value goal_value(std::optional<goal_view> const& goal) {
 	if (!goal)
@@ -59,7 +54,7 @@ boost::json::value goal_value(std::optional<goal_view> const& goal) {
 	value["id"] = goal->id;
 	value["revision"] = goal->revision;
 	value["objective"] = goal->objective;
-	value["phase"] = std::string(phase_name(goal->phase));
+	value["phase"] = std::string(araya::goal::goal_phase_name(goal->phase));
 	value["roundsStarted"] = goal->rounds_started;
 	value["maxGoalRounds"] = goal->max_goal_rounds;
 	if (goal->blocked_reason) {

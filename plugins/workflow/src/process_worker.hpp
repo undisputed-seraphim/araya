@@ -31,8 +31,9 @@ public:
 	araya::task<void> pump(std::function<void(boost::json::value)> on_message) override;
 	void kill() override;
 
-	// The captured stderr tail, for a failure diagnostic.
-	std::string const& stderr_tail() const noexcept { return stderr_tail_; }
+	// The captured stderr tail, for a failure diagnostic. Reserved API: the
+	// worker reports failures through the protocol, so no caller reads it yet.
+	[[maybe_unused]] std::string const& stderr_tail() const noexcept { return stderr_tail_; }
 
 private:
 	araya::task<void> do_write();

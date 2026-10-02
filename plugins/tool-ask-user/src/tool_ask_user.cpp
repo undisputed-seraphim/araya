@@ -15,11 +15,12 @@
 #include <span>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace araya::tool_ask_user {
 namespace {
 
+using araya::tools::error_result;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -31,12 +32,6 @@ using araya::user_questions::question;
 using araya::user_questions::question_option;
 using araya::user_questions::user_questions_key;
 using araya::user_questions::user_questions_service;
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
-}
-
-tool_result error_result(std::string text) { return text_result(std::move(text), true); }
 
 boost::json::value question_schema() {
 	boost::json::object option;

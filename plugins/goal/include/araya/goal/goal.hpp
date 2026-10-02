@@ -96,7 +96,9 @@ enum class goal_error_code : std::uint8_t {
 	invalid_transition,
 };
 
-char const* goal_error_name(goal_error_code code) noexcept;
+// Reserved API: maps a rejection code to its stable name; no in-tree caller
+// yet (the model-facing tool serializes the code verbatim).
+[[maybe_unused]] char const* goal_error_name(goal_error_code code) noexcept;
 
 // The domain boundary's rejection error.
 class goal_error : public std::runtime_error {
@@ -171,10 +173,13 @@ public:
 	// Remove process-local continuation authority without touching phase.
 	std::optional<goal_view> disarm(araya::session::session_id const& session);
 	goal_activation activation(araya::session::session_id const& session) const;
-	// Drop all process-local state for a disposed session.
-	void forget(araya::session::session_id const& session);
+	// Drop all process-local state for a disposed session. Reserved API: the
+	// session/disposed hook is not yet wired to call this.
+	[[maybe_unused]] void forget(araya::session::session_id const& session);
 
-	goal_projection_state const* state_of(araya::session::session_id const& session) const;
+	// Reserved API: the goal view is exposed through get(); no caller needs
+	// the raw projection state externally yet.
+	[[maybe_unused]] goal_projection_state const* state_of(araya::session::session_id const& session) const;
 
 private:
 	goal_view commit_snapshot(

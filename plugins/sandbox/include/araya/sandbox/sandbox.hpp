@@ -108,8 +108,9 @@ public:
 	// Whether this host can confine at all (a runtime probe, cached).
 	virtual bool available() const noexcept = 0;
 
-	// Why confinement is unusable, for the fail-closed diagnostic.
-	virtual std::string const& unavailable_reason() const noexcept = 0;
+	// Why confinement is unusable, for the fail-closed diagnostic. Reserved
+	// API: the shell surfaces the thrown sandbox_unavailable message instead.
+	[[maybe_unused]] virtual std::string const& unavailable_reason() const noexcept = 0;
 
 	// Build the confinement for one call. `danger-full-access` returns an
 	// inactive result; a confining mode with no usable backend throws

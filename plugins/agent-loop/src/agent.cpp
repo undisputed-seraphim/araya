@@ -47,6 +47,7 @@ using araya::llm_bridge::to_llm_message;
 using araya::llm_bridge::tool_result_data;
 using araya::llm_bridge::user_message_data;
 using araya::session::session;
+using araya::tools::error_result;
 using araya::tools::tool_context;
 using araya::tools::tool_result;
 
@@ -163,10 +164,6 @@ boost::json::value tool_call_data(std::uint64_t turn, std::uint64_t step, tool_c
 		{"name", call.name},
 		{"arguments", call.arguments},
 	};
-}
-
-tool_result error_result(std::string message) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(message)}}}, true};
 }
 
 std::vector<tool_call_block> tool_calls_of(std::vector<content_block> const& blocks) {
@@ -1041,7 +1038,7 @@ araya::task<void> agent_service::when_idle(araya::session::session_id const& ses
 	}
 }
 
-std::vector<araya::session::session_id> agent_service::roots() const {
+[[maybe_unused]] std::vector<araya::session::session_id> agent_service::roots() const {
 	std::vector<araya::session::session_id> out;
 	for (auto const& id : store_->list()) {
 		auto session = store_->get(id);

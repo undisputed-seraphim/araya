@@ -37,7 +37,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <string_view>
 #include <utility>
 
 #include <sys/wait.h>
@@ -47,6 +46,7 @@ namespace {
 
 namespace bp = boost::process::v2;
 namespace fs = std::filesystem;
+using araya::tools::text_result;
 using araya::tools::tool_context;
 using araya::tools::tool_definition;
 using araya::tools::tool_result;
@@ -412,10 +412,6 @@ awaitable<shell_result> run_shell(
 	else if (WIFSIGNALED(raw))
 		result.signal = WTERMSIG(raw);
 	co_return result;
-}
-
-tool_result text_result(std::string text, bool is_error = false) {
-	return tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, is_error};
 }
 
 std::string truncation_notice(std::size_t dropped) {

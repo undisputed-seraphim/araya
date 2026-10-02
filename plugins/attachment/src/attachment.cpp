@@ -13,7 +13,6 @@
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 
 namespace araya::attachment {
 namespace {
