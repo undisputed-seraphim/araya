@@ -1,6 +1,7 @@
 #include "araya/agent-loop/agent.hpp"
 #include "araya/agent-loop/events.hpp"
 #include "araya/agent-loop/inbox.hpp"
+#include "araya/config.hpp"
 #include "araya/session/events.hpp"
 
 #include <boost/json/object.hpp>
@@ -14,6 +15,11 @@
 namespace araya::agent {
 namespace {
 
+// Deployment policy: report a max-token termination as a completed turn
+// rather than a distinct `max_tokens` status (the harness's SDK-server
+// `maxTokensAsSuccess`, applied at the loop since we have no separate server).
+constexpr araya::config_key<bool> max_tokens_as_success_key{"max_tokens_as_success"};
+
 boost::json::value lifecycle_source(araya::session::session const& session) {
 	return boost::json::object{{"kind", session.header().is_seeded ? "resume" : "startup"}};
 }
@@ -24,6 +30,12 @@ boost::json::value lifecycle_source(araya::session::session const& session) {
 // projections, and the session lifecycle listeners that create and dispose
 // drivers.
 struct agent_plugin : araya::plugin {
+	explicit agent_plugin(araya::plugin_config config) {
+		araya::plugin_config_view const view(config);
+		if (auto value = view.try_get(max_tokens_as_success_key))
+			max_tokens_as_success_ = *value;
+	}
+
 	araya::task<void> apply(araya::plugin_context& ctx) override {
 		auto llm = ctx.require<araya::llm::llm_service>(araya::llm::llm_key).shared();
 		auto store = ctx.require<araya::session::session_store>(araya::session::sessions_key).shared();
@@ -58,7 +70,8 @@ struct agent_plugin : araya::plugin {
 			std::move(prompts),
 			std::move(tools),
 			std::move(inbox),
-			std::move(turn_boundary));
+			std::move(turn_boundary),
+			max_tokens_as_success_);
 
 		// Lifecycle: a session acquires a driver when it is announced and
 		// loses it when it is disposed. Both listeners are owned by this
@@ -79,9 +92,14 @@ struct agent_plugin : araya::plugin {
 		ctx.provide(agent_key, std::move(service));
 		co_return;
 	}
+
+private:
+	bool max_tokens_as_success_ = false;
 };
 
-std::unique_ptr<araya::plugin> make_agent(araya::plugin_config const&) { return std::make_unique<agent_plugin>(); }
+std::unique_ptr<araya::plugin> make_agent(araya::plugin_config const& config) {
+	return std::make_unique<agent_plugin>(config);
+}
 
 static const araya::dependency_spec g_agent_deps[]{
 	{araya::service_id{"llm", 1}, true, {}},

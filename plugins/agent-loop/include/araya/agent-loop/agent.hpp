@@ -184,7 +184,8 @@ public:
 		std::shared_ptr<araya::system_prompt::system_prompt_service> prompts,
 		std::shared_ptr<araya::tools::tools_service> tools,
 		araya::session::projection_state<inbox_state> inbox,
-		araya::session::projection_state<turn_state> turn_boundary);
+		araya::session::projection_state<turn_state> turn_boundary,
+		bool max_tokens_as_success = false);
 
 	// -- lifecycle (the plugin wires these to the store's events) --
 
@@ -291,6 +292,14 @@ private:
 
 	araya::system_prompt::prompt_assembly
 	assemble_prompt(araya::session::session& session, drive_options const& options);
+	// The route's advertised call defaults (max tokens, temperature, reasoning
+	// effort), filling each field the drive left unset.
+	struct call_defaults {
+		std::optional<std::uint64_t> max_tokens;
+		std::optional<double> temperature;
+		std::string reasoning_effort;
+	};
+	call_defaults effective_call(drive_options const& options) const;
 	boost::json::value
 	build_header(drive_options const& options, araya::system_prompt::prompt_assembly const& prompt) const;
 	araya::llm::generate_options build_generate(
@@ -314,6 +323,7 @@ private:
 	std::map<araya::session::session_id, state_ptr> states_;
 	std::vector<std::pair<std::uint64_t, context_producer>> context_producers_;
 	std::uint64_t next_context_producer_id_ = 1;
+	bool max_tokens_as_success_ = false;
 };
 
 inline constexpr araya::service_key<agent_service> agent_key{"agent", 1};

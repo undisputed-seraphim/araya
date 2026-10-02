@@ -4,6 +4,7 @@
 #include "araya/plugin.hpp"
 
 #include <chrono>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,8 @@ struct openai_model {
 	std::string name; // display name; defaults to the id
 	std::uint64_t context_window = 0;
 	std::uint64_t default_max_tokens = 0;
+	std::optional<double> default_temperature;
+	std::optional<std::string> default_reasoning_effort;
 	std::vector<std::string> reasoning_efforts;
 	bool supports_image = false;
 };

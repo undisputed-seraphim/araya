@@ -73,6 +73,16 @@ inline std::optional<bool> opt_bool(boost::json::value const& value) {
 	return value.is_bool() ? std::optional<bool>(value.as_bool()) : std::nullopt;
 }
 
+inline std::optional<double> opt_double(boost::json::value const& value) {
+	if (value.is_double())
+		return value.as_double();
+	if (value.is_int64())
+		return static_cast<double>(value.as_int64());
+	if (value.is_uint64())
+		return static_cast<double>(value.as_uint64());
+	return std::nullopt;
+}
+
 // Object+key accessors.
 inline boost::json::object const* get_object(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
@@ -122,6 +132,11 @@ inline bool get_bool(boost::json::object const& object, std::string_view key) {
 inline std::optional<bool> opt_bool(boost::json::object const& object, std::string_view key) {
 	auto const* node = object.if_contains(key);
 	return node ? opt_bool(*node) : std::nullopt;
+}
+
+inline std::optional<double> opt_double(boost::json::object const& object, std::string_view key) {
+	auto const* node = object.if_contains(key);
+	return node ? opt_double(*node) : std::nullopt;
 }
 
 } // namespace araya::util::json

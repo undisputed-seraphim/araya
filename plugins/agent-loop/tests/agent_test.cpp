@@ -47,6 +47,11 @@ struct scripted_adapter : llm_adapter {
 	mutable std::size_t calls = 0;
 	mutable std::vector<generate_options> seen;
 
+	// Advertised call defaults (the adapter-defaults resolution path).
+	std::uint64_t default_max_tokens = 0;
+	std::optional<double> default_temperature;
+	std::optional<std::string> default_reasoning_effort;
+
 	araya::task<void> stream(generate_options const& options, chunk_sink const& sink) override {
 		seen.push_back(options);
 		auto index = calls++;
@@ -65,6 +70,17 @@ struct scripted_adapter : llm_adapter {
 			co_await sink(finish_chunk{
 				finish_chunk::reason::aborted, llm_failure{llm_error_code::aborted, "cancelled"}, std::nullopt});
 		}
+	}
+
+	model_info resolve_model(std::string_view provider, std::string_view model) override {
+		model_info info;
+		info.provider = std::string(provider);
+		info.model = std::string(model);
+		info.name = std::string(model);
+		info.default_max_tokens = default_max_tokens;
+		info.default_temperature = default_temperature;
+		info.default_reasoning_effort = default_reasoning_effort;
+		return info;
 	}
 };
 
@@ -993,5 +1009,83 @@ TEST_CASE("a changed context message is re-injected and survives restore") {
 		co_await r.agent->followup(id, tagged("n3", "third"), mock_exec());
 		co_await r.agent->when_idle(id);
 		CHECK(user_texts(*restored) == std::vector<std::string>{"one", "first", "two", "second", "third"});
+	});
+}
+
+TEST_CASE("adapter call defaults fill an unset request") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("hi")}};
+		g_scripted->default_max_tokens = 4096;
+		g_scripted->default_temperature = 0.3;
+		g_scripted->default_reasoning_effort = "high";
+		rig r{h};
+		co_await r.mount(rt);
+
+		auto options = options_for("hello");
+		(void)co_await r.agent->run(options);
+		REQUIRE(g_scripted->seen.size() == 1);
+		auto const& call = g_scripted->seen.front();
+		REQUIRE(call.max_tokens.has_value());
+		CHECK(*call.max_tokens == 4096);
+		REQUIRE(call.temperature.has_value());
+		CHECK(*call.temperature == 0.3);
+		CHECK(call.reasoning_effort == "high");
+	});
+}
+
+TEST_CASE("an explicit request value wins over the adapter default") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("hi")}};
+		g_scripted->default_max_tokens = 4096;
+		g_scripted->default_temperature = 0.3;
+		g_scripted->default_reasoning_effort = "high";
+		rig r{h};
+		co_await r.mount(rt);
+
+		auto options = options_for("hello");
+		options.max_tokens = 128;
+		options.temperature = 0.9;
+		options.reasoning_effort = "low";
+		(void)co_await r.agent->run(options);
+		REQUIRE(g_scripted->seen.size() == 1);
+		auto const& call = g_scripted->seen.front();
+		REQUIRE(call.max_tokens.has_value());
+		CHECK(*call.max_tokens == 128);
+		REQUIRE(call.temperature.has_value());
+		CHECK(*call.temperature == 0.9);
+		CHECK(call.reasoning_effort == "low");
+	});
+}
+
+TEST_CASE("max_tokens_as_success reports a ceiling finish as completed") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{max_tokens_stream("partial")}};
+		rig r{h};
+		co_await r.mount(rt, {{"max_tokens_as_success", "true"}});
+
+		auto outcome = co_await r.agent->run(options_for("hello"));
+		CHECK(outcome.status == run_status::completed);
+		auto const* end = find_data(*r.session, "turn/end");
+		REQUIRE(end);
+		CHECK(end->at("reason").as_string() == "completed");
+	});
+}
+
+TEST_CASE("a ceiling finish is max_tokens without max_tokens_as_success") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{max_tokens_stream("partial")}};
+		rig r{h};
+		co_await r.mount(rt);
+
+		auto outcome = co_await r.agent->run(options_for("hello"));
+		CHECK(outcome.status == run_status::max_tokens);
 	});
 }

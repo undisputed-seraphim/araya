@@ -37,6 +37,8 @@ araya::llm::model_info to_model_info(openai_model const& model, std::string_view
 	info.name = model.name;
 	info.context_window = model.context_window;
 	info.default_max_tokens = model.default_max_tokens;
+	info.default_temperature = model.default_temperature;
+	info.default_reasoning_effort = model.default_reasoning_effort;
 	info.reasoning_efforts = model.reasoning_efforts;
 	info.supports_image = model.supports_image;
 	return info;
@@ -78,6 +80,10 @@ openai_config load_config(araya::plugin_config const& config) {
 					model.context_window = *value;
 				if (auto value = json::opt_uint(*entry_object, "max_tokens"))
 					model.default_max_tokens = *value;
+				if (auto value = json::opt_double(*entry_object, "temperature"))
+					model.default_temperature = *value;
+				if (auto value = json::opt_string(*entry_object, "default_reasoning_effort"))
+					model.default_reasoning_effort = *value;
 				if (auto value = json::opt_bool(*entry_object, "supports_image"))
 					model.supports_image = *value;
 				if (auto const* efforts = json::get_array(*entry_object, "reasoning_efforts")) {

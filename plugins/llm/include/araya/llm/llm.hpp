@@ -169,7 +169,11 @@ struct model_info {
 	std::string model; // the exact id passed to generate_options.model
 	std::string name;  // display name; defaults to the id
 	std::uint64_t context_window = 0;
+	// Adapter-configured defaults materialized into a request when the driver
+	// leaves the matching field unset (the harness's adapter defaults).
 	std::uint64_t default_max_tokens = 0;
+	std::optional<double> default_temperature;
+	std::optional<std::string> default_reasoning_effort;
 	std::vector<std::string> reasoning_efforts;
 	// Whether the model accepts image input (routed through `read_image`).
 	bool supports_image = false;

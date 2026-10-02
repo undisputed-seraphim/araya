@@ -64,6 +64,21 @@ inline std::vector<stream_chunk> tool_stream(std::string name, std::string argum
 	};
 }
 
+// A complete text answer that terminates at the output ceiling.
+inline std::vector<stream_chunk> max_tokens_stream(std::string text) {
+	araya::llm::token_usage tokens;
+	tokens.input_tokens = 3;
+	tokens.output_tokens = 2;
+	return {
+		stream_chunk{araya::llm::block_start_chunk{0, araya::llm::content_block_type::text}},
+		stream_chunk{araya::llm::text_delta_chunk{0, text}},
+		stream_chunk{araya::llm::block_end_chunk{0, araya::llm::content_block{araya::llm::text_block{text}}}},
+		stream_chunk{araya::llm::usage_chunk{tokens}},
+		stream_chunk{
+			araya::llm::finish_chunk{araya::llm::finish_chunk::reason::max_tokens, std::nullopt, std::nullopt}},
+	};
+}
+
 // A terminal error finish carrying the given failure message.
 inline std::vector<stream_chunk> error_stream(std::string message) {
 	araya::llm::llm_failure failure{araya::llm::llm_error_code::server, std::move(message)};

@@ -184,8 +184,12 @@ struct step_commit {
 	std::vector<content_block> blocks;
 };
 
-step_commit
-commit_model_outcome(session& session, std::uint64_t turn, std::uint64_t step, step_accumulator& accumulator) {
+step_commit commit_model_outcome(
+	session& session,
+	std::uint64_t turn,
+	std::uint64_t step,
+	step_accumulator& accumulator,
+	bool max_tokens_as_success) {
 	auto const interrupted = accumulator.why == finish_chunk::reason::aborted;
 	step_commit commit;
 	commit.blocks = interrupted ? accumulator.delivered_blocks() : accumulator.closed;
@@ -217,7 +221,7 @@ commit_model_outcome(session& session, std::uint64_t turn, std::uint64_t step, s
 		// An error finish that carried no failure is still an error.
 		commit.terminal = run_status::error;
 	} else if (accumulator.why == finish_chunk::reason::max_tokens) {
-		commit.terminal = run_status::max_tokens;
+		commit.terminal = max_tokens_as_success ? run_status::completed : run_status::max_tokens;
 	}
 	return commit;
 }
@@ -332,7 +336,8 @@ agent_service::agent_service(
 	std::shared_ptr<araya::system_prompt::system_prompt_service> prompts,
 	std::shared_ptr<araya::tools::tools_service> tools,
 	araya::session::projection_state<inbox_state> inbox,
-	araya::session::projection_state<turn_state> turn_boundary)
+	araya::session::projection_state<turn_state> turn_boundary,
+	bool max_tokens_as_success)
 	: bus_(std::move(bus))
 	, scope_(std::move(scope))
 	, executor_(std::move(executor))
@@ -341,7 +346,8 @@ agent_service::agent_service(
 	, prompts_(std::move(prompts))
 	, tools_(std::move(tools))
 	, inbox_(std::move(inbox))
-	, turn_boundary_(std::move(turn_boundary)) {}
+	, turn_boundary_(std::move(turn_boundary))
+	, max_tokens_as_success_(max_tokens_as_success) {}
 
 agent_service::state_ptr agent_service::find(araya::session::session_id const& session) const {
 	auto it = states_.find(session);
@@ -744,7 +750,7 @@ araya::task<std::optional<run_status>> agent_service::run_step(
 	};
 	co_await llm_->stream(build_generate(state->exec, session, prompt), chunk_sink);
 
-	auto commit = commit_model_outcome(session, turn, step, accumulator);
+	auto commit = commit_model_outcome(session, turn, step, accumulator, max_tokens_as_success_);
 	if (commit.terminal) {
 		if (*commit.terminal == run_status::error)
 			state->last_outcome.failure = accumulator.failure;
@@ -812,17 +818,34 @@ araya::system_prompt::prompt_assembly agent_service::assemble_prompt(session& se
 	return prompts_->assemble(context);
 }
 
+agent_service::call_defaults agent_service::effective_call(drive_options const& options) const {
+	call_defaults out;
+	out.max_tokens = options.max_tokens;
+	out.temperature = options.temperature;
+	out.reasoning_effort = options.reasoning_effort;
+	if (auto model = llm_->resolve_model(options.provider, options.model)) {
+		if (!out.max_tokens && model->default_max_tokens > 0)
+			out.max_tokens = model->default_max_tokens;
+		if (!out.temperature && model->default_temperature)
+			out.temperature = model->default_temperature;
+		if (out.reasoning_effort.empty() && model->default_reasoning_effort)
+			out.reasoning_effort = *model->default_reasoning_effort;
+	}
+	return out;
+}
+
 boost::json::value
 agent_service::build_header(drive_options const& options, araya::system_prompt::prompt_assembly const& prompt) const {
+	auto const call = effective_call(options);
 	boost::json::object header;
 	header["provider"] = options.provider;
 	header["model"] = options.model;
-	if (!options.reasoning_effort.empty())
-		header["reasoning_effort"] = options.reasoning_effort;
-	if (options.max_tokens)
-		header["max_tokens"] = *options.max_tokens;
-	if (options.temperature)
-		header["temperature"] = *options.temperature;
+	if (!call.reasoning_effort.empty())
+		header["reasoning_effort"] = call.reasoning_effort;
+	if (call.max_tokens)
+		header["max_tokens"] = *call.max_tokens;
+	if (call.temperature)
+		header["temperature"] = *call.temperature;
 	boost::json::array tools;
 	for (auto const& tool : prompt.tools)
 		tools.emplace_back(tool.name);
@@ -835,12 +858,13 @@ araya::llm::generate_options agent_service::build_generate(
 	drive_options const& options,
 	session& session,
 	araya::system_prompt::prompt_assembly const& prompt) const {
+	auto const call = effective_call(options);
 	araya::llm::generate_options generate;
 	generate.provider = options.provider;
 	generate.model = options.model;
-	generate.reasoning_effort = options.reasoning_effort;
-	generate.temperature = options.temperature;
-	generate.max_tokens = options.max_tokens;
+	generate.reasoning_effort = call.reasoning_effort;
+	generate.temperature = call.temperature;
+	generate.max_tokens = call.max_tokens;
 	generate.session_id = session.id().value;
 	generate.stop_token = options.stop;
 	for (auto const& message : session.surface().messages())
