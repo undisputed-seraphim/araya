@@ -73,6 +73,11 @@ struct start_request {
 	// child reports its final answer by calling a scoped `structured_output`
 	// tool and the validated value lands in result.structure.
 	std::optional<boost::json::value> output_schema;
+	// Optional per-child persona, shadowing the deployment persona for this
+	// child only.
+	std::optional<std::string> persona;
+	// Optional per-child filter over the global tools the child inherits.
+	std::optional<araya::tools::tool_restriction> tool_filter;
 };
 
 // One settled (or rejected) delegation outcome.
@@ -168,12 +173,19 @@ private:
 		std::string model;
 		std::string reasoning_effort;
 		std::stop_token parent_stop;
+		// Scoped registrations for the child's composition (delegation
+		// context, persona, tool filter); released when the child is disposed.
+		std::vector<araya::registration> composition;
 	};
 
 	// Resolves route/depth, creates the child, and records it as a
 	// continuable child. Throws on unknown provider or depth overrun.
 	std::shared_ptr<araya::session::session>
 	create_child(std::string_view provider_name, start_request const& req, child_state& state);
+
+	// Installs the child's scoped composition through `view`, appending each
+	// registration to `state.composition`.
+	void apply_composition(araya::plugin_context& view, start_request const& req, child_state& state);
 
 	// Builds the settlement notice from a child's last outcome and written
 	// it through the shared inbox verbs.

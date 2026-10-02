@@ -161,3 +161,73 @@ TEST_CASE("invoke runs the visible handler; unknown tools return nullopt") {
 		CHECK_FALSE(missing.has_value());
 	});
 }
+
+TEST_CASE("restrict hides and refuses denied globals, leaving scoped tools alone") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h, rt};
+		co_await r.mount([](araya::plugin_context& ctx, tools_service& svc) {
+			svc.register_tool(ctx, {"read", "r", boost::json::object{}}, &echo_handler);
+			svc.register_tool(ctx, {"bash", "b", boost::json::object{}}, &echo_handler);
+			svc.register_tool(ctx, {"scoped", "s", boost::json::object{}}, &echo_handler, std::string("child"));
+			svc.restrict(ctx, tool_restriction{.deny = std::vector<std::string>{"bash"}}, std::string("child"));
+		});
+		auto const scope = std::string("child");
+		REQUIRE(r.tools->find("read", scope).has_value());
+		CHECK_FALSE(r.tools->find("bash", scope).has_value());
+		CHECK(r.tools->find("scoped", scope).has_value());
+		// The global view (no scope) is unaffected.
+		CHECK(r.tools->find("bash").has_value());
+		CHECK(r.tools->list(scope).size() == 2);
+		CHECK(r.tools->schemas(scope).size() == 2);
+		CHECK_FALSE((co_await r.tools->invoke("bash", tool_context{.name = "bash"}, scope)).has_value());
+		CHECK((co_await r.tools->invoke("read", tool_context{.name = "read"}, scope)).has_value());
+	});
+}
+
+TEST_CASE("restrict allow keeps only the named globals") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h, rt};
+		co_await r.mount([](araya::plugin_context& ctx, tools_service& svc) {
+			svc.register_tool(ctx, {"read", "r", boost::json::object{}}, &echo_handler);
+			svc.register_tool(ctx, {"bash", "b", boost::json::object{}}, &echo_handler);
+			svc.restrict(ctx, tool_restriction{.allow = std::vector<std::string>{"read"}}, std::string("child"));
+		});
+		auto const scope = std::string("child");
+		CHECK(r.tools->find("read", scope).has_value());
+		CHECK_FALSE(r.tools->find("bash", scope).has_value());
+	});
+}
+
+TEST_CASE("restrict rejects an empty filter, an unknown name, and an unscoped call") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h, rt};
+		co_await r.mount([](araya::plugin_context& ctx, tools_service& svc) {
+			svc.register_tool(ctx, {"read", "r", boost::json::object{}}, &echo_handler);
+			CHECK_THROWS_AS(svc.restrict(ctx, tool_restriction{}, std::string("child")), std::invalid_argument);
+			CHECK_THROWS_AS(
+				svc.restrict(ctx, tool_restriction{.deny = std::vector<std::string>{"ghost"}}, std::string("child")),
+				std::invalid_argument);
+			CHECK_THROWS_AS(
+				svc.restrict(ctx, tool_restriction{.deny = std::vector<std::string>{"read"}}), std::invalid_argument);
+		});
+	});
+}
+
+TEST_CASE("releasing a restriction lifts it") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h, rt};
+		araya::registration reg;
+		co_await r.mount([&](araya::plugin_context& ctx, tools_service& svc) {
+			svc.register_tool(ctx, {"bash", "b", boost::json::object{}}, &echo_handler);
+			reg = svc.restrict(ctx, tool_restriction{.deny = std::vector<std::string>{"bash"}}, std::string("child"));
+		});
+		auto const scope = std::string("child");
+		CHECK_FALSE(r.tools->find("bash", scope).has_value());
+		reg.release();
+		CHECK(r.tools->find("bash", scope).has_value());
+	});
+}

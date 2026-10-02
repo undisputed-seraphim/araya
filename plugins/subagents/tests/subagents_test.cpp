@@ -263,7 +263,12 @@ TEST_CASE("send_message steers a running child inside its current turn") {
 		auto child = r.store->get(araya::session::session_id{started.child});
 		REQUIRE(child);
 		CHECK(count_type(*child, "turn/start") == 1);
-		CHECK(user_texts(*child) == std::vector<std::string>{"first", "steer"});
+		// The first prompt carries the child's delegation-context snapshot, so
+		// the task inputs are the last two user messages.
+		auto texts = user_texts(*child);
+		REQUIRE(texts.size() >= 2);
+		CHECK(texts[texts.size() - 2] == "first");
+		CHECK(texts[texts.size() - 1] == "steer");
 	});
 }
 
@@ -383,5 +388,69 @@ TEST_CASE("consecutive structured children keep their own captures") {
 		REQUIRE(second.structure.has_value());
 		CHECK(first.structure->at("answer").as_int64() == 1);
 		CHECK(second.structure->at("answer").as_int64() == 2);
+	});
+}
+
+TEST_CASE("a child carries the delegation scope note and an optional persona") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		co_await r.mount(rt);
+		auto root = rt.root_context();
+		auto prompts =
+			root.require<araya::system_prompt::system_prompt_service>(araya::system_prompt::system_prompt_key).shared();
+
+		start_request req;
+		req.prompt = "hello";
+		req.parent = "parent";
+		req.provider = "mock";
+		req.model = "mock-model";
+		req.persona = "You are a narrow auditor.";
+		auto result = co_await r.subs->start_continuable("spawn", std::move(req));
+		REQUIRE_FALSE(result.is_error);
+		REQUIRE_FALSE(result.child.empty());
+
+		araya::system_prompt::assemble_context child_ctx;
+		child_ctx.scope = result.child;
+		auto assembly = prompts->assemble(child_ctx);
+		bool delegation = false;
+		bool persona = false;
+		for (auto const& context : assembly.contexts)
+			if (context.name == "subagent:delegation")
+				delegation = true;
+		for (auto const& section : assembly.sections)
+			if (section.name == "deployment:persona-prefix" && section.text == "You are a narrow auditor.")
+				persona = true;
+		CHECK(delegation);
+		CHECK(persona);
+
+		// The parent scope keeps the deployment persona, not the child's shadow.
+		araya::system_prompt::assemble_context parent_ctx;
+		parent_ctx.scope = std::string("parent");
+		bool parent_shadowed = false;
+		for (auto const& section : prompts->assemble(parent_ctx).sections)
+			if (section.name == "deployment:persona-prefix" && section.text == "You are a narrow auditor.")
+				parent_shadowed = true;
+		CHECK_FALSE(parent_shadowed);
+
+		r.subs->dispose_children();
+	});
+}
+
+TEST_CASE("a child tool filter naming an unknown global fails the run") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		co_await r.mount(rt);
+
+		start_request req;
+		req.prompt = "hello";
+		req.parent = "parent";
+		req.provider = "mock";
+		req.model = "mock-model";
+		req.tool_filter = araya::tools::tool_restriction{.deny = std::vector<std::string>{"ghost"}};
+		auto result = co_await r.subs->run("spawn", std::move(req));
+		CHECK(result.is_error);
+		CHECK(result.error.find("unknown tool") != std::string::npos);
 	});
 }

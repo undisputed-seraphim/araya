@@ -29,11 +29,11 @@ araya::registration tools_service::register_tool(
 }
 
 std::vector<tools_service::tool_entry const*> tools_service::visible(std::optional<std::string> const& scope) const {
-	// Globals first, then matching scoped entries shadow by name; the map
-	// keeps the result name-sorted.
+	// Globals first, filtered by the restrictions in scope, then matching
+	// scoped entries shadow by name; the map keeps the result name-sorted.
 	std::map<std::string, tool_entry const*> merged;
 	for (auto const& entry : tools_)
-		if (!entry.scope)
+		if (!entry.scope && admits(entry.definition.name, scope))
 			merged[entry.definition.name] = &entry;
 	for (auto const& entry : tools_)
 		if (entry.scope && scope && *scope == *entry.scope)
@@ -43,6 +43,46 @@ std::vector<tools_service::tool_entry const*> tools_service::visible(std::option
 	for (auto const& [name, entry] : merged)
 		out.push_back(entry);
 	return out;
+}
+
+bool tools_service::admits(std::string_view name, std::optional<std::string> const& scope) const {
+	for (auto const& entry : restrictions_) {
+		if (!entry.scope || !scope || *entry.scope != *scope)
+			continue;
+		if (entry.filter.allow &&
+			std::find(entry.filter.allow->begin(), entry.filter.allow->end(), name) == entry.filter.allow->end())
+			return false;
+		if (entry.filter.deny &&
+			std::find(entry.filter.deny->begin(), entry.filter.deny->end(), name) != entry.filter.deny->end())
+			return false;
+	}
+	return true;
+}
+
+araya::registration
+	tools_service::restrict(araya::plugin_context& caller, tool_restriction filter, std::optional<std::string> scope) {
+	if (!scope || scope->empty())
+		throw std::invalid_argument("tools: restrict requires a scope");
+	if (!filter.allow && !filter.deny)
+		throw std::invalid_argument("tools: restrict requires allow and/or deny");
+	auto const known = [this](std::string_view name) {
+		for (auto const& entry : tools_)
+			if (!entry.scope && entry.definition.name == name)
+				return true;
+		return false;
+	};
+	for (auto const* names : {&filter.allow, &filter.deny}) {
+		if (!*names)
+			continue;
+		for (auto const& name : **names)
+			if (!known(name))
+				throw std::invalid_argument("tools: restrict names unknown tool '" + name + "'");
+	}
+	auto const id = next_restriction_id_++;
+	return caller.effect([this, id, scope = std::move(scope), filter = std::move(filter)]() -> araya::cleanup_action {
+		restrictions_.push_back(restriction_entry{id, std::move(scope), std::move(filter)});
+		return [this, id] { std::erase_if(restrictions_, [id](restriction_entry const& e) { return e.id == id; }); };
+	});
 }
 
 std::optional<tool_definition>

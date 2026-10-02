@@ -67,6 +67,15 @@ result error_result(std::string message) {
 // keywords are ignored (permissive), matching the seam's "assert the subset"
 // posture; native constrained decoding is a later milestone.
 
+// The model-facing delegation-scope statement every in-process child carries.
+// A runtime-context contribution rather than a system-prompt section, so the
+// deployment's system prompt stays uniform across parents and children.
+constexpr std::string_view k_delegation_context =
+	"You are a delegated subagent: your permission scope was fixed when you were started and cannot be widened from "
+	"inside this session — operations that require approval are rejected automatically. When the task needs access "
+	"beyond that scope, do not retry the denied operation; state the limitation in your reply so the delegating "
+	"agent can handle it.";
+
 constexpr std::string_view k_structured_tool = "structured_output";
 
 constexpr std::string_view k_structured_instruction =
@@ -199,6 +208,15 @@ struct registration_guard {
 	~registration_guard() { reg.release(); }
 };
 
+// Releases a set of scoped registrations when a one-shot run's frame unwinds.
+struct composition_guard {
+	std::vector<araya::registration>* regs;
+	~composition_guard() {
+		for (auto& reg : *regs)
+			reg.release();
+	}
+};
+
 araya::tools::tool_definition structured_tool_def(boost::json::value const& schema) {
 	return araya::tools::tool_definition{
 		std::string(k_structured_tool),
@@ -286,6 +304,25 @@ std::shared_ptr<subagent_provider> subagents_service::find_provider(std::string_
 	return it == providers_.end() ? nullptr : it->second;
 }
 
+void subagents_service::apply_composition(araya::plugin_context& view, start_request const& req, child_state& state) {
+	if (prompts_) {
+		araya::system_prompt::prompt_context delegation;
+		delegation.name = "subagent:delegation";
+		delegation.order = araya::system_prompt::context_order("SUBAGENT_DELEGATION");
+		delegation.text = std::string(k_delegation_context);
+		state.composition.push_back(prompts_->context(view, std::move(delegation), state.id));
+	}
+	if (req.persona && !req.persona->empty() && prompts_) {
+		araya::system_prompt::prompt_section persona;
+		persona.name = std::string(araya::system_prompt::persona_prefix_section);
+		persona.order = araya::system_prompt::section_order("DEPLOYMENT_PERSONA_PREFIX");
+		persona.text = *req.persona;
+		state.composition.push_back(prompts_->section(view, std::move(persona), state.id));
+	}
+	if (req.tool_filter && tools_)
+		state.composition.push_back(tools_->restrict(view, *req.tool_filter, state.id));
+}
+
 std::shared_ptr<araya::session::session>
 subagents_service::create_child(std::string_view provider_name, start_request const& req, child_state& state) {
 	auto provider = find_provider(provider_name);
@@ -323,6 +360,11 @@ subagents_service::create_child(std::string_view provider_name, start_request co
 
 	auto child = provider->create_child(req, child_depth);
 	state.id = child->id().value;
+	// Install the child's scoped composition before its first prompt assembly.
+	if (context_factory_) {
+		auto view = context_factory_();
+		apply_composition(view, req, state);
+	}
 	return child;
 }
 
@@ -356,6 +398,9 @@ araya::task<result> subagents_service::run(std::string_view provider_name, start
 	} catch (std::exception const& e) {
 		co_return error_result(e.what());
 	}
+	// One-shot children are not retained, so their scoped composition is
+	// released when this run's frame unwinds.
+	composition_guard composition{&state.composition};
 
 	// A schema-bearing one-shot registers a child-scoped capture tool and
 	// instruction before the child's first step assembles its prompt.
@@ -442,7 +487,11 @@ araya::task<result> subagents_service::start_continuable(std::string_view provid
 	try {
 		co_await agent_->followup(child->id(), std::move(message), exec);
 	} catch (std::exception const& e) {
-		children_.erase(id);
+		if (auto it = children_.find(id); it != children_.end()) {
+			for (auto& reg : it->second.composition)
+				reg.release();
+			children_.erase(it);
+		}
 		co_return error_result(e.what());
 	}
 
@@ -561,8 +610,9 @@ araya::task<void> subagents_service::deliver_settlement(std::string child_id) {
 }
 
 void subagents_service::dispose_children() {
-	for (auto const& [id, state] : children_) {
-		(void)state;
+	for (auto& [id, state] : children_) {
+		for (auto& reg : state.composition)
+			reg.release();
 		store_->dispose(araya::session::session_id{id});
 	}
 	children_.clear();

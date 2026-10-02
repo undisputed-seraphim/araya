@@ -68,6 +68,16 @@ inline tool_result error_result(std::exception const& e) { return error_result(s
 
 using tool_handler = std::function<araya::task<tool_result>(tool_context const&)>;
 
+// A per-scope filter over the global tools a scope inherits. `allow` keeps
+// only the named globals; `deny` removes the named globals; when both are
+// set, a name must be allowed and not denied. Scoped registrations are never
+// filtered. Restrictions intersect and, like every registration, are owned by
+// the registering caller.
+struct tool_restriction {
+	std::optional<std::vector<std::string>> allow;
+	std::optional<std::vector<std::string>> deny;
+};
+
 class tools_service {
 public:
 	// Registers a tool; a duplicate name in the same scope throws. A
@@ -94,6 +104,15 @@ public:
 	// The schemas the system-prompt registry consumes for one scope.
 	std::vector<system_prompt::tool_schema> schemas(std::optional<std::string> const& scope) const;
 
+	// Restricts the global tools visible in `scope` (scoped registrations are
+	// unaffected). Requires a non-empty scope; an empty filter, or one naming
+	// an unknown global tool, throws. Restrictions intersect and are owned by
+	// `caller`.
+	araya::registration restrict(
+		araya::plugin_context& caller,
+		tool_restriction filter,
+		std::optional<std::string> scope = {});
+
 private:
 	struct tool_entry {
 		std::uint64_t id = 0;
@@ -101,12 +120,22 @@ private:
 		tool_definition definition;
 		tool_handler handler;
 	};
+	struct restriction_entry {
+		std::uint64_t id = 0;
+		std::optional<std::string> scope;
+		tool_restriction filter;
+	};
 
 	// Merged visible entries (scoped shadows global), name-ordered.
 	std::vector<tool_entry const*> visible(std::optional<std::string> const& scope) const;
 
+	// Whether every restriction in `scope` admits the global `name`.
+	bool admits(std::string_view name, std::optional<std::string> const& scope) const;
+
 	std::uint64_t next_id_ = 1;
 	std::vector<tool_entry> tools_;
+	std::uint64_t next_restriction_id_ = 1;
+	std::vector<restriction_entry> restrictions_;
 };
 
 inline constexpr araya::service_key<tools_service> tools_key{"tools", 1};

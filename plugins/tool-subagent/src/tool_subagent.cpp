@@ -16,6 +16,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace araya::tool_subagent {
 namespace {
@@ -99,6 +100,26 @@ araya::task<tool_result> subagent_handler(
 	req.model = cfg->child_model;
 	req.reasoning_effort = cfg->reasoning_effort;
 	req.max_depth = cfg->max_depth;
+	if (auto persona = araya::util::json::opt_string(*args, "persona"); persona && !persona->empty())
+		req.persona = std::move(*persona);
+	if (auto const* filter = araya::util::json::get_object(*args, "tool_filter")) {
+		auto string_array = [filter](std::string_view key) -> std::optional<std::vector<std::string>> {
+			auto const* array = araya::util::json::get_array(*filter, key);
+			if (!array)
+				return std::nullopt;
+			std::vector<std::string> out;
+			out.reserve(array->size());
+			for (auto const& value : *array)
+				if (value.is_string())
+					out.emplace_back(value.as_string());
+			return out;
+		};
+		araya::tools::tool_restriction restriction;
+		restriction.allow = string_array("allow");
+		restriction.deny = string_array("deny");
+		if (restriction.allow || restriction.deny)
+			req.tool_filter = std::move(restriction);
+	}
 
 	if (cfg->continuable) {
 		auto r = co_await subs->start_continuable(cfg->provider, std::move(req));
@@ -252,8 +273,33 @@ const tool_definition g_subagent_def{
 		 boost::json::object{
 			 {"description",
 			  boost::json::object{{"type", "string"}, {"description", "A short (3-5 word) description of the task."}}},
-			 {"prompt",
-			  boost::json::object{{"type", "string"}, {"description", "The task for the child to perform."}}}}},
+			 {"prompt", boost::json::object{{"type", "string"}, {"description", "The task for the child to perform."}}},
+			 {"persona",
+			  boost::json::object{
+				  {"type", "string"},
+				  {"description",
+				   "Optional persona text that shadows the deployment persona for this child only. Use it to give the "
+				   "child a narrow role; it does not change the child's permissions."}}},
+			 {"tool_filter",
+			  boost::json::object{
+				  {"type", "object"},
+				  {"additionalProperties", false},
+				  {"properties",
+				   boost::json::object{
+					   {"allow",
+						boost::json::object{
+							{"type", "array"},
+							{"items", boost::json::object{{"type", "string"}}},
+							{"description",
+							 "Global tool names the child may use; all others are hidden and refused."}}},
+					   {"deny",
+						boost::json::object{
+							{"type", "array"},
+							{"items", boost::json::object{{"type", "string"}}},
+							{"description", "Global tool names removed from the child's tool set."}}}}},
+				  {"description",
+				   "Optional filter over the global tools the child inherits (allow and/or deny). Scoped tools are "
+				   "unaffected."}}}}},
 		{"required", boost::json::array{"description", "prompt"}}},
 };
 
