@@ -201,6 +201,10 @@ private:
 		goal_activation activation);
 	goal_projection_state const& expect_state(araya::session::session_id const& session) const;
 	void expect_current(goal_projection_state const& state, goal_ref const& ref) const;
+	// The CAS prologue shared by every ref-targeted mutator: the session is
+	// live, its projection is healthy, and `ref` names the current revision.
+	goal_projection_state const&
+	expect_current_goal(araya::session::session_id const& session, goal_ref const& ref) const;
 	goal_activation activation_of(araya::session::session_id const& session) const;
 	void set_activation(araya::session::session_id const& session, goal_activation activation);
 	goal_view view_of(goal_projection_state const& state, goal_activation activation) const;

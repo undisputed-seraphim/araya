@@ -33,6 +33,16 @@ using araya::llm_bridge::message_source;
 using araya::llm_bridge::user_message_data;
 using araya::session::session_id;
 
+// Best-effort goal-service call: fencing/teardown must not take the driver
+// down when the goal projection is unhealthy.
+template <class Fn>
+void swallow(Fn&& fn) {
+	try {
+		fn();
+	} catch (...) {
+	}
+}
+
 // Render the complete goal-round instruction retained in session history (the
 // harness's one-block prompt).
 std::string render_goal_round_prompt(goal_view const& goal, std::uint64_t round) {
@@ -126,15 +136,14 @@ struct driver : std::enable_shared_from_this<driver> {
 		if (!goal || goal->phase != goal_phase::active || goal->activation != goal_activation::armed)
 			co_return;
 		if (goal->rounds_started >= goal->max_goal_rounds) {
-			try {
+			swallow([&] {
 				(void)goals->block(
 					session_id{session},
 					goal_ref{goal->id, goal->revision},
 					araya::goal::goal_block_reason{
 						"round-limit",
 						"Goal reached its configured limit of " + std::to_string(goal->max_goal_rounds) + " rounds."});
-			} catch (...) {
-			}
+			});
 			co_return;
 		}
 		auto const round = goal->rounds_started + 1;
@@ -145,10 +154,7 @@ struct driver : std::enable_shared_from_this<driver> {
 		try {
 			co_await agent->followup(session_id{session}, std::move(message), {});
 		} catch (...) {
-			try {
-				(void)goals->disarm(session_id{session});
-			} catch (...) {
-			}
+			swallow([&] { (void)goals->disarm(session_id{session}); });
 		}
 	}
 };
@@ -205,10 +211,7 @@ struct goal_round_driver_plugin : araya::plugin {
 			auto reason = object ? araya::util::json::get_string(*object, "reason") : std::string{};
 			if (reason != "error" && reason != "max_tokens")
 				return;
-			try {
-				(void)d->goals->disarm(message.id);
-			} catch (...) {
-			}
+			swallow([&] { (void)d->goals->disarm(message.id); });
 		});
 
 		// Fence the reservation at the pre-step: drop a round that no longer
@@ -254,10 +257,7 @@ struct goal_round_driver_plugin : araya::plugin {
 				d->stopping = true;
 				for (auto const& [session, state] : d->states) {
 					(void)state;
-					try {
-						(void)d->goals->disarm(session_id{session});
-					} catch (...) {
-					}
+					swallow([&] { (void)d->goals->disarm(session_id{session}); });
 				}
 			};
 		});

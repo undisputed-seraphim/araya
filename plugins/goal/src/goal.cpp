@@ -385,6 +385,14 @@ void goal_service::expect_current(goal_projection_state const& state, goal_ref c
 			goal_error_code::stale_revision);
 }
 
+goal_projection_state const&
+goal_service::expect_current_goal(araya::session::session_id const& session, goal_ref const& ref) const {
+	ensure_session(session);
+	auto const& state = expect_state(session);
+	expect_current(state, ref);
+	return state;
+}
+
 goal_activation goal_service::activation_of(araya::session::session_id const& session) const {
 	auto it = activations_.find(session);
 	return it == activations_.end() ? goal_activation::disarmed : it->second;
@@ -506,9 +514,7 @@ goal_view goal_service::edit(
 	goal_ref const& ref,
 	std::optional<std::string> objective,
 	std::optional<std::uint64_t> max_rounds) {
-	ensure_session(session);
-	auto const& state = expect_state(session);
-	expect_current(state, ref);
+	auto const& state = expect_current_goal(session, ref);
 	if (!objective && !max_rounds)
 		throw goal_error("goal edit requires objective and/or maxGoalRounds", goal_error_code::invalid_edit);
 	goal_snapshot goal = *state.current;
@@ -539,18 +545,14 @@ goal_snapshot with_phase(goal_snapshot current, goal_phase phase) {
 } // namespace
 
 goal_view goal_service::pause(araya::session::session_id const& session, goal_ref const& ref) {
-	ensure_session(session);
-	auto const& state = expect_state(session);
-	expect_current(state, ref);
+	auto const& state = expect_current_goal(session, ref);
 	if (state.current->phase != goal_phase::active)
 		throw goal_error("cannot pause goal from its phase", goal_error_code::invalid_transition);
 	return commit_current(session, "pause", with_phase(*state.current, goal_phase::paused), goal_activation::disarmed);
 }
 
 goal_view goal_service::resume(araya::session::session_id const& session, goal_ref const& ref) {
-	ensure_session(session);
-	auto const& state = expect_state(session);
-	expect_current(state, ref);
+	auto const& state = expect_current_goal(session, ref);
 	auto const& current = *state.current;
 	if (current.phase != goal_phase::active && current.phase != goal_phase::paused &&
 		current.phase != goal_phase::blocked)
@@ -563,9 +565,7 @@ goal_view goal_service::resume(araya::session::session_id const& session, goal_r
 }
 
 goal_view goal_service::complete(araya::session::session_id const& session, goal_ref const& ref) {
-	ensure_session(session);
-	auto const& state = expect_state(session);
-	expect_current(state, ref);
+	auto const& state = expect_current_goal(session, ref);
 	if (state.current->phase == goal_phase::complete)
 		throw goal_error("goal is already complete", goal_error_code::invalid_transition);
 	return commit_current(
@@ -574,9 +574,7 @@ goal_view goal_service::complete(araya::session::session_id const& session, goal
 
 goal_view
 goal_service::block(araya::session::session_id const& session, goal_ref const& ref, goal_block_reason reason) {
-	ensure_session(session);
-	auto const& state = expect_state(session);
-	expect_current(state, ref);
+	auto const& state = expect_current_goal(session, ref);
 	if (state.current->phase != goal_phase::active)
 		throw goal_error("cannot block goal from its phase", goal_error_code::invalid_transition);
 	auto code = trim(reason.code);
@@ -589,9 +587,7 @@ goal_service::block(araya::session::session_id const& session, goal_ref const& r
 }
 
 goal_ref goal_service::clear(araya::session::session_id const& session, goal_ref const& ref) {
-	ensure_session(session);
-	auto const& state = expect_state(session);
-	expect_current(state, ref);
+	auto const& state = expect_current_goal(session, ref);
 	goal_ref tombstone{state.current->id, state.current->revision + 1};
 	boost::json::object change;
 	change["kind"] = "goal/change";

@@ -163,6 +163,18 @@ std::string model_line(araya::llm::model_info const& info) {
 	return info.provider + "/" + info.model + " — " + (info.name.empty() ? info.model : info.name);
 }
 
+// Join one rendered line per item, newline-separated.
+template <class Range, class Render>
+std::string join_lines(Range const& items, Render&& render) {
+	std::string text;
+	for (auto const& item : items) {
+		if (!text.empty())
+			text += "\n";
+		text += render(item);
+	}
+	return text;
+}
+
 // The model-facing discovery tool: providers, a provider's advertised models,
 // or one exact model's reasoning efforts. Purely advisory (an adapter may
 // accept an unlisted model id).
@@ -177,14 +189,10 @@ araya::task<tool_result> list_models_handler(std::shared_ptr<araya::llm::llm_ser
 		auto providers = llm->providers();
 		if (providers.empty())
 			co_return text_result("(no LLM providers)");
-		std::string text;
-		for (auto const& id : providers) {
+		co_return text_result(join_lines(providers, [&](std::string const& id) {
 			auto info = llm->describe_provider(id);
-			if (!text.empty())
-				text += "\n";
-			text += id + " — " + (info.name.empty() ? id : info.name);
-		}
-		co_return text_result(std::move(text));
+			return id + " — " + (info.name.empty() ? id : info.name);
+		}));
 	}
 	if (provider->empty())
 		co_return text_result("Error: 'provider' must be non-empty", true);
@@ -193,13 +201,7 @@ araya::task<tool_result> list_models_handler(std::shared_ptr<araya::llm::llm_ser
 		auto models = llm->list_models(*provider);
 		if (models.empty())
 			co_return text_result("(no advertised models for " + *provider + ")");
-		std::string text;
-		for (auto const& info : models) {
-			if (!text.empty())
-				text += "\n";
-			text += model_line(info);
-		}
-		co_return text_result(std::move(text));
+		co_return text_result(join_lines(models, [](araya::llm::model_info const& info) { return model_line(info); }));
 	}
 	if (model->empty())
 		co_return text_result("Error: 'model' must be non-empty", true);
@@ -209,15 +211,10 @@ araya::task<tool_result> list_models_handler(std::shared_ptr<araya::llm::llm_ser
 		co_return text_result("Error: unknown model '" + *provider + "/" + *model + "'", true);
 	std::string text = model_line(*info);
 	text += "\nReasoning efforts:\n";
-	if (info->reasoning_efforts.empty()) {
+	if (info->reasoning_efforts.empty())
 		text += "(no advertised reasoning efforts)";
-	} else {
-		for (std::size_t index = 0; index < info->reasoning_efforts.size(); ++index) {
-			if (index != 0)
-				text += "\n";
-			text += info->reasoning_efforts[index];
-		}
-	}
+	else
+		text += join_lines(info->reasoning_efforts, [](std::string const& effort) { return effort; });
 	co_return text_result(std::move(text));
 }
 

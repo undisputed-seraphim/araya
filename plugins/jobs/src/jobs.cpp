@@ -191,27 +191,11 @@ public:
 	}
 
 	araya::registration on_job_done(araya::plugin_context& caller, job_done_listener listener) override {
-		auto token = next_listener_++;
-		listeners_.emplace(token, std::move(listener));
-		std::weak_ptr<job_registry> weak = weak_from_this();
-		return caller.effect([weak, token]() -> araya::cleanup_action {
-			return [weak, token] {
-				if (auto registry = weak.lock())
-					registry->listeners_.erase(token);
-			};
-		});
+		return add_listener(caller, listeners_, std::move(listener));
 	}
 
 	araya::registration on_jobs_changed(araya::plugin_context& caller, jobs_changed_listener listener) override {
-		auto token = next_listener_++;
-		changed_.emplace(token, std::move(listener));
-		std::weak_ptr<job_registry> weak = weak_from_this();
-		return caller.effect([weak, token]() -> araya::cleanup_action {
-			return [weak, token] {
-				if (auto registry = weak.lock())
-					registry->changed_.erase(token);
-			};
-		});
+		return add_listener(caller, changed_, std::move(listener));
 	}
 
 	araya::registration attach_controller(araya::plugin_context& caller, std::string name) override {
@@ -239,17 +223,7 @@ public:
 				++it;
 				continue;
 			}
-			if (!is_terminal(job->status)) {
-				job->reported = true;
-				job->in_store = false;
-				try {
-					if (job->cancel)
-						job->cancel("owner disposed");
-				} catch (...) {
-				}
-				job->status = job_status::stopping;
-				release_waiters(*job);
-			}
+			stop_job(*job, "owner disposed");
 			it = store_.erase(it);
 			removed = true;
 		}
@@ -260,23 +234,28 @@ public:
 	// Registry teardown: cancel live work and drop every record.
 	void shutdown() {
 		listeners_closed_ = true;
-		for (auto& [id, job] : store_) {
-			if (is_terminal(job->status))
-				continue;
-			job->reported = true;
-			job->in_store = false;
-			try {
-				if (job->cancel)
-					job->cancel("jobs service disposed");
-			} catch (...) {
-			}
-			job->status = job_status::stopping;
-			release_waiters(*job);
-		}
+		for (auto& [id, job] : store_)
+			stop_job(*job, "jobs service disposed");
 		store_.clear();
 	}
 
 private:
+	template <class Listener>
+	araya::registration
+	add_listener(araya::plugin_context& caller, std::map<std::uint64_t, Listener>& listeners, Listener listener) {
+		auto token = next_listener_++;
+		listeners.emplace(token, std::move(listener));
+		std::weak_ptr<job_registry> weak = weak_from_this();
+		auto* map = &listeners;
+		return caller.effect([weak, token, map]() -> araya::cleanup_action {
+			return [weak, token, map] {
+				// Dereference only once the registry is confirmed alive.
+				if (weak.lock())
+					map->erase(token);
+			};
+		});
+	}
+
 	std::shared_ptr<tracked_job> expect(job_id const& id) const {
 		auto found = store_.find(id);
 		if (found == store_.end())
@@ -312,6 +291,22 @@ private:
 		out.finished_at_ms = job.finished_at_ms;
 		out.reported = job.reported;
 		return out;
+	}
+
+	// Mark a live job stopped: report it, take it out of the store, cancel the
+	// producer best-effort, and wake its waiters. A no-op once terminal.
+	void stop_job(tracked_job& job, char const* reason) {
+		if (is_terminal(job.status))
+			return;
+		job.reported = true;
+		job.in_store = false;
+		try {
+			if (job.cancel)
+				job.cancel(reason);
+		} catch (...) {
+		}
+		job.status = job_status::stopping;
+		release_waiters(job);
 	}
 
 	void release_waiters(tracked_job& job) {

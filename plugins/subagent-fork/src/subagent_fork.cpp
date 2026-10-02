@@ -3,6 +3,7 @@
 #include "araya/config.hpp"
 #include "araya/plugin_context.hpp"
 #include "araya/session/store.hpp"
+#include "araya/subagents/detail/child.hpp"
 #include "araya/subagents/subagents.hpp"
 
 #include <cstdint>
@@ -52,13 +53,7 @@ public:
 		if (!parent)
 			throw std::invalid_argument("subagent-fork: unknown parent session '" + req.parent + "'");
 
-		create_session_options options;
-		options.origin = session_origin::subagent;
-		options.parent_session = session_id{req.parent};
-		options.delegation_depth = child_depth;
-		options.cwd = parent->header().cwd;
-		options.agent_preset = parent->header().agent_preset;
-
+		auto options = araya::subagents::detail::child_session_options(req.parent, child_depth, parent.get());
 		auto seed = completed_turn_prefix(*parent);
 		if (!seed.empty()) {
 			options.inherited_event_count = static_cast<session_log_offset>(seed.size());
@@ -66,10 +61,7 @@ public:
 			options.seed = std::move(seed);
 		}
 
-		auto child = store_->prepare(store_->mint_id(), std::move(options));
-		store_->enter(child);
-		store_->announce(*child);
-		return child;
+		return araya::subagents::detail::enter_child(*store_, std::move(options));
 	}
 
 private:

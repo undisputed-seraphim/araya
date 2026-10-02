@@ -257,6 +257,13 @@ private:
 
 	void kick(state_ptr const& state);
 	void on_drive_done(state_ptr const& state, std::exception_ptr ep);
+	// Complete every registered when_idle waiter. Resuming a waiter runs
+	// synchronously and may register a new one, so the caller's snapshot is
+	// cleared before any waiter runs.
+	void resume_waiters(state_ptr const& state);
+	// Resolve the session, ensure its driver state exists, and return it. The
+	// common prologue of followup/steer/inject.
+	araya::task<state_ptr> ensure_ready(araya::session::session_id const& session);
 	araya::task<void> drive(state_ptr state);
 	araya::task<bool> turn(state_ptr const& state);
 	araya::task<pre_step_msg> pre_step(

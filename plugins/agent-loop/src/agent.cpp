@@ -379,6 +379,15 @@ araya::task<void> agent_service::ensure(araya::session::session const& session, 
 	}
 }
 
+void agent_service::resume_waiters(state_ptr const& state) {
+	auto waiters = std::move(state->waiters);
+	state->waiters.clear();
+	for (auto& waiter : waiters) {
+		if (waiter && *waiter)
+			(*waiter)();
+	}
+}
+
 araya::task<void> agent_service::dispose(araya::session::session_id const& session) {
 	auto it = states_.find(session);
 	if (it == states_.end())
@@ -387,12 +396,7 @@ araya::task<void> agent_service::dispose(araya::session::session_id const& sessi
 	states_.erase(it);
 	if (state->running && state->abort)
 		state->abort->request_stop();
-	auto waiters = std::move(state->waiters);
-	state->waiters.clear();
-	for (auto& waiter : waiters) {
-		if (waiter && *waiter)
-			(*waiter)();
-	}
+	resume_waiters(state);
 	if (bus_)
 		co_await bus_->dispatch(agent_disposed_key, agent_disposed_msg{session}, state->realm_scope.get());
 }
@@ -401,12 +405,7 @@ void agent_service::shutdown() {
 	for (auto& [id, state] : states_) {
 		if (state->running && state->abort)
 			state->abort->request_stop();
-		auto waiters = std::move(state->waiters);
-		state->waiters.clear();
-		for (auto& waiter : waiters) {
-			if (waiter && *waiter)
-				(*waiter)();
-		}
+		resume_waiters(state);
 	}
 	states_.clear();
 }
@@ -556,12 +555,7 @@ void agent_service::on_drive_done(state_ptr const& state, std::exception_ptr ep)
 	// Completing a waiter resumes it synchronously, and that run may start a
 	// new drive (which registers a fresh waiter). Snapshot and clear first so
 	// the resumed work cannot be wiped by this completion.
-	auto waiters = std::move(state->waiters);
-	state->waiters.clear();
-	for (auto& waiter : waiters) {
-		if (waiter && *waiter)
-			(*waiter)();
-	}
+	resume_waiters(state);
 	if (state->wake_requested) {
 		state->wake_requested = false;
 		auto inbox = inbox_.state_of(state->session);
@@ -960,13 +954,17 @@ agent_service::run(run_options const& options, event_sink const& sink, araya::ll
 	co_return state->last_outcome;
 }
 
-araya::task<void>
-agent_service::followup(araya::session::session_id const& session, boost::json::value message, drive_options options) {
+araya::task<agent_service::state_ptr> agent_service::ensure_ready(araya::session::session_id const& session) {
 	auto s = store_->get(session);
 	if (!s)
 		throw std::invalid_argument("agent: no entered session '" + session.value + "'");
 	co_await ensure(*s, lifecycle_source(*s));
-	auto state = require(session);
+	co_return require(session);
+}
+
+araya::task<void>
+agent_service::followup(araya::session::session_id const& session, boost::json::value message, drive_options options) {
+	auto state = co_await ensure_ready(session);
 	merge_exec(state, options);
 	enqueue(state, inbox_target::next_turn, message);
 	kick(state);
@@ -974,22 +972,14 @@ agent_service::followup(araya::session::session_id const& session, boost::json::
 
 araya::task<void>
 agent_service::steer(araya::session::session_id const& session, boost::json::value message, drive_options options) {
-	auto s = store_->get(session);
-	if (!s)
-		throw std::invalid_argument("agent: no entered session '" + session.value + "'");
-	co_await ensure(*s, lifecycle_source(*s));
-	auto state = require(session);
+	auto state = co_await ensure_ready(session);
 	merge_exec(state, options);
 	enqueue(state, inbox_target::next_step, message);
 	kick(state);
 }
 
 araya::task<void> agent_service::inject(araya::session::session_id const& session, boost::json::value message) {
-	auto s = store_->get(session);
-	if (!s)
-		throw std::invalid_argument("agent: no entered session '" + session.value + "'");
-	co_await ensure(*s, lifecycle_source(*s));
-	auto state = require(session);
+	auto state = co_await ensure_ready(session);
 	enqueue(state, inbox_target::next_step, message);
 }
 

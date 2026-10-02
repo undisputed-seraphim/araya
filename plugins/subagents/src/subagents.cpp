@@ -1,6 +1,7 @@
 #include "araya/subagents/subagents.hpp"
 
 #include "araya/llm/bridge.hpp"
+#include "araya/subagents/detail/child.hpp"
 
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
@@ -41,18 +42,9 @@ public:
 	std::shared_ptr<araya::session::session>
 	create_child(start_request const& req, std::uint32_t child_depth) override {
 		using namespace araya::session;
-		create_session_options options;
-		options.origin = session_origin::subagent;
-		options.parent_session = session_id{req.parent};
-		options.delegation_depth = child_depth;
-		if (auto parent = store_->get(session_id{req.parent})) {
-			options.cwd = parent->header().cwd;
-			options.agent_preset = parent->header().agent_preset;
-		}
-		auto child = store_->prepare(store_->mint_id(), std::move(options));
-		store_->enter(child);
-		store_->announce(*child);
-		return child;
+		auto parent = store_->get(session_id{req.parent});
+		auto options = detail::child_session_options(req.parent, child_depth, parent.get());
+		return detail::enter_child(*store_, std::move(options));
 	}
 
 private:
