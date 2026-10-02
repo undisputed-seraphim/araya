@@ -16,45 +16,10 @@
 # only test-only dependencies. Plugin-specific find_package calls (OpenSSL)
 # stay in the plugin's own CMakeLists; Boost is found once at the root.
 #
-# araya_add_library is the same shape for first-party static libraries that
-# are not plugins (the app-layer demo components).
-function(araya_add_plugin stem)
-    cmake_parse_arguments(PLUGIN "" "TEST"
-        "SOURCES;DEPS;TESTS;TEST_DEPS;TEST_INCLUDES;TEST_LINK_OPTIONS" ${ARGN})
-
-    string(REPLACE "-" "_" target_stem "${stem}")
-    set(target "araya_${target_stem}")
-
-    add_library(${target} STATIC ${PLUGIN_SOURCES})
-    add_library(araya::${stem} ALIAS ${target})
-
-    set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_include_directories(${target} PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-    target_link_libraries(${target} PUBLIC ${PLUGIN_DEPS})
-    araya_enable_warnings(${target} WERROR)
-
-    if(ARAYA_TESTING)
-        set(_tests ${PLUGIN_TEST} ${PLUGIN_TESTS})
-        list(LENGTH _tests _test_count)
-        foreach(_test IN LISTS _tests)
-            get_filename_component(_base "${_test}" NAME_WE)
-            string(REGEX REPLACE "_test$" "" _base "${_base}")
-            if(_test_count EQUAL 1)
-                set(_test_target "${target}_tests")
-            else()
-                set(_test_target "${target}_${_base}_tests")
-            endif()
-            araya_add_test(${_test_target}
-                SOURCES "${_test}"
-                DEPS araya::${stem} ${PLUGIN_TEST_DEPS}
-                INCLUDES ${PLUGIN_TEST_INCLUDES}
-                LINK_OPTIONS ${PLUGIN_TEST_LINK_OPTIONS})
-        endforeach()
-    endif()
-endfunction()
-
-function(araya_add_library stem)
+# araya_add_library is the same library shape for first-party static libraries
+# that are not plugins (the app-layer demo components); both delegate to
+# _araya_add_static_lib so the target shape lives in one place.
+function(_araya_add_static_lib stem)
     cmake_parse_arguments(LIB "" "" "SOURCES;DEPS;INCLUDES" ${ARGN})
 
     string(REPLACE "-" "_" target_stem "${stem}")
@@ -72,4 +37,36 @@ function(araya_add_library stem)
     endif()
     target_link_libraries(${target} PUBLIC ${LIB_DEPS})
     araya_enable_warnings(${target} WERROR)
+endfunction()
+
+function(araya_add_library stem)
+    _araya_add_static_lib(${stem} ${ARGN})
+endfunction()
+
+function(araya_add_plugin stem)
+    cmake_parse_arguments(PLUGIN "" "TEST"
+        "SOURCES;DEPS;TESTS;TEST_DEPS;TEST_INCLUDES;TEST_LINK_OPTIONS" ${ARGN})
+
+    _araya_add_static_lib(${stem} SOURCES ${PLUGIN_SOURCES} DEPS ${PLUGIN_DEPS})
+
+    if(ARAYA_TESTING)
+        string(REPLACE "-" "_" target_stem "${stem}")
+        set(target "araya_${target_stem}")
+        set(_tests ${PLUGIN_TEST} ${PLUGIN_TESTS})
+        list(LENGTH _tests _test_count)
+        foreach(_test IN LISTS _tests)
+            get_filename_component(_base "${_test}" NAME_WE)
+            string(REGEX REPLACE "_test$" "" _base "${_base}")
+            if(_test_count EQUAL 1)
+                set(_test_target "${target}_tests")
+            else()
+                set(_test_target "${target}_${_base}_tests")
+            endif()
+            araya_add_test(${_test_target}
+                SOURCES "${_test}"
+                DEPS araya::${stem} ${PLUGIN_TEST_DEPS}
+                INCLUDES ${PLUGIN_TEST_INCLUDES}
+                LINK_OPTIONS ${PLUGIN_TEST_LINK_OPTIONS})
+        endforeach()
+    endif()
 endfunction()

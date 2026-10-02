@@ -47,6 +47,9 @@ if(ARAYA_BUILD_PLUGINS)
 else()
     find_package(Boost ${ARAYA_BOOST_MIN} REQUIRED COMPONENTS json)
 endif()
+# The process-spawning plugins (shell, workflow) share this link set; keep the
+# component list here rather than repeating it in each plugin's CMakeLists.
+set(ARAYA_BOOST_PROCESS_LIBS Boost::process Boost::filesystem)
 find_package(Threads REQUIRED)
 find_package(Catch2 3 QUIET)
 

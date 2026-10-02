@@ -8,6 +8,6 @@
 araya_add_plugin(shell
     SOURCES src/shell.cpp
     DEPS araya::session araya::tools araya::jobs araya::sandbox araya::sandbox-policy
-         Boost::process Boost::filesystem
+         ${ARAYA_BOOST_PROCESS_LIBS}
     TEST tests/shell_test.cpp
 )

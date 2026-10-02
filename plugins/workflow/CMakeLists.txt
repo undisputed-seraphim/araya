@@ -3,7 +3,7 @@
 # agents through the subagent seam.
 araya_add_plugin(workflow
     SOURCES src/workflow.cpp src/process_worker.cpp src/protocol.cpp src/worker_source.cpp src/plugin.cpp
-    DEPS araya::subagents Boost::process Boost::filesystem
+    DEPS araya::subagents ${ARAYA_BOOST_PROCESS_LIBS}
     TEST tests/workflow_test.cpp
     TEST_INCLUDES src
     TEST_DEPS araya::llm-mock
