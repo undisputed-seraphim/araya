@@ -572,8 +572,6 @@ araya::task<tool_result> handle_bash(
 		if (!body.empty() && body.back() != '\n')
 			body += '\n';
 		body += marker;
-		if (body.back() != '\n')
-			continue;
 	}
 	co_return text_result(std::move(body));
 }

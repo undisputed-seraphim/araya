@@ -228,9 +228,19 @@ public:
 		result.url = request.url;
 		result.status = response.status;
 		result.content_type = araya::llm::http::header_value(response.headers, "content-type");
-		// A non-2xx response is buffered by the client (on_body never ran).
-		std::string const raw = response.status >= 200 && response.status < 300 ? *body : response.body;
-		result.truncated = *truncated;
+		// A non-2xx response is buffered by the client (on_body never ran), so
+		// apply the cap here too and report the truncation.
+		std::string raw;
+		if (response.status >= 200 && response.status < 300) {
+			raw = *body;
+			result.truncated = *truncated;
+		} else {
+			raw = response.body;
+			if (raw.size() > cap) {
+				raw.resize(cap);
+				result.truncated = true;
+			}
+		}
 		result.text = is_html(result.content_type) ? strip_html(raw) : raw;
 		co_return result;
 	}
@@ -253,6 +263,8 @@ public:
 			http_request.headers.push_back({"authorization", "Bearer " + config_.search_api_key});
 
 		auto body = std::make_shared<std::string>();
+		auto truncated = std::make_shared<bool>(false);
+		std::size_t const cap = config_.fetch_max_bytes;
 		auto options = araya::llm::http::request_options{
 			.connect_timeout = std::chrono::milliseconds(config_.timeout_ms),
 			.idle_timeout = std::chrono::milliseconds(config_.timeout_ms),
@@ -260,8 +272,15 @@ public:
 		auto response = co_await araya::llm::http::stream_request(
 			executor_,
 			http_request,
-			[body](std::string_view chunk) -> araya::task<void> {
-				body->append(chunk.data(), chunk.size());
+			[body, truncated, cap](std::string_view chunk) -> araya::task<void> {
+				if (body->size() < cap) {
+					auto const keep = std::min<std::size_t>(chunk.size(), cap - body->size());
+					body->append(chunk.data(), keep);
+					if (keep < chunk.size())
+						*truncated = true;
+				} else if (!chunk.empty()) {
+					*truncated = true;
+				}
 				co_return;
 			},
 			options,
@@ -269,6 +288,8 @@ public:
 		if (response.status < 200 || response.status >= 300)
 			throw std::runtime_error(
 				"web search failed: HTTP " + std::to_string(response.status) + " " + response.reason);
+		if (*truncated)
+			throw std::runtime_error("web search response exceeded the size limit");
 
 		boost::system::error_code ec;
 		auto parsed = boost::json::parse(*body, ec);
