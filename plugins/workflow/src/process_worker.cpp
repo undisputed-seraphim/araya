@@ -44,11 +44,10 @@ process_worker::process_worker(
 	in_.emplace(executor_);
 	out_.emplace(executor_);
 	err_.emplace(executor_);
-	process_.emplace(
-		executor_,
-		exe,
-		std::initializer_list<std::string>{"--eval", std::move(source)},
-		bp::process_stdio{.in = *in_, .out = *out_, .err = *err_});
+	// A vector, not an initializer_list (whose elements are const, so the
+	// move would copy the whole script).
+	std::vector<std::string> args{"--eval", std::move(source)};
+	process_.emplace(executor_, exe, std::move(args), bp::process_stdio{.in = *in_, .out = *out_, .err = *err_});
 }
 
 process_worker::~process_worker() { kill(); }

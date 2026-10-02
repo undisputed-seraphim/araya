@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -127,7 +128,7 @@ std::optional<todo_list> canonicalize(boost::json::value const& arguments, bool 
 		return std::nullopt;
 	}
 	todo_list todos;
-	std::vector<std::string> seen;
+	std::unordered_set<std::string> seen;
 	std::size_t active = 0;
 	for (auto const& entry : *raw) {
 		auto const* item = entry.if_object();
@@ -146,11 +147,10 @@ std::optional<todo_list> canonicalize(boost::json::value const& arguments, bool 
 			error = "invalid todo: `status` must be pending, in_progress, or completed";
 			return std::nullopt;
 		}
-		if (std::find(seen.begin(), seen.end(), content) != seen.end()) {
+		if (!seen.insert(content).second) {
 			error = "invalid todos: duplicate content \"" + content + "\"";
 			return std::nullopt;
 		}
-		seen.push_back(content);
 		if (status == status_in_progress)
 			++active;
 		todos.push_back(todo_item{std::move(content), status});

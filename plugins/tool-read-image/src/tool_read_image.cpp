@@ -106,7 +106,8 @@ araya::task<tool_result> handle_read_image(
 	auto session = ctx.session.empty() ? nullptr : store->get(session_id{ctx.session});
 	if (session && session->header().cwd)
 		cwd = *session->header().cwd;
-	fs::path const target = fs::path(file_path).is_absolute() ? fs::path(file_path) : fs::path(cwd) / file_path;
+	fs::path const given{file_path};
+	fs::path const target = given.is_absolute() ? given : fs::path(cwd) / given;
 
 	// Route gate: only an image-capable model can use the result.
 	if (!session)

@@ -195,10 +195,8 @@ private:
 		std::string_view operation,
 		goal_snapshot const& goal,
 		goal_activation activation);
-	void commit_change(
-		araya::session::session_id const& session,
-		boost::json::value const& change,
-		goal_activation activation);
+	void
+	commit_change(araya::session::session_id const& session, boost::json::value change, goal_activation activation);
 	goal_projection_state const& expect_state(araya::session::session_id const& session) const;
 	void expect_current(goal_projection_state const& state, goal_ref const& ref) const;
 	// The CAS prologue shared by every ref-targeted mutator: the session is

@@ -148,20 +148,23 @@ std::string strip_html(std::string_view html) {
 		}
 		out.push_back(c);
 	}
-	std::string collapsed;
-	collapsed.reserve(out.size());
+	// Collapse whitespace runs in place (write <= read), avoiding a second
+	// full-size string.
+	std::size_t write = 0;
 	bool pending_space = false;
-	for (char const c : out) {
+	for (std::size_t read = 0; read < out.size(); ++read) {
+		char const c = out[read];
 		if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
 			pending_space = true;
 			continue;
 		}
-		if (pending_space && !collapsed.empty())
-			collapsed.push_back(' ');
+		if (pending_space && write > 0)
+			out[write++] = ' ';
 		pending_space = false;
-		collapsed.push_back(c);
+		out[write++] = c;
 	}
-	return collapsed;
+	out.resize(write);
+	return out;
 }
 
 std::optional<search_source> source_from_json(boost::json::value const& value) {

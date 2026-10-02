@@ -427,17 +427,18 @@ goal_view goal_service::view_of(goal_projection_state const& state, goal_activat
 
 void goal_service::commit_change(
 	araya::session::session_id const& session,
-	boost::json::value const& change,
+	boost::json::value change,
 	goal_activation activation) {
 	auto session_ptr = store_->get(session);
 	if (!session_ptr)
 		throw goal_error("agent is not a live session '" + session.value + "'", goal_error_code::agent_not_live);
 	set_activation(session, activation);
-	session_ptr->append(std::string(k_goal_change_event), change);
+	auto operation = opt_string(change.as_object(), "operation").value_or("clear");
+	session_ptr->append(std::string(k_goal_change_event), std::move(change));
 	auto const& state = expect_state(session);
 	goal_changed_msg message;
 	message.session = session;
-	message.operation = opt_string(change.as_object(), "operation").value_or("clear");
+	message.operation = std::move(operation);
 	if (state.current) {
 		message.ref = goal_ref{state.current->id, state.current->revision};
 		message.goal = view_of(state, activation);

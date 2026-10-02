@@ -33,24 +33,32 @@ frame_decoder::frame_decoder(std::size_t max_bytes)
 std::vector<boost::json::value> frame_decoder::feed(std::string_view bytes) {
 	buffer_.append(bytes);
 	std::vector<boost::json::value> messages;
+	// Consume from a running offset and compact the buffer once at the end:
+	// erasing per frame would front-shift the remaining bytes repeatedly.
+	auto const* data = reinterpret_cast<unsigned char const*>(buffer_.data());
+	std::size_t consumed = 0;
 	for (;;) {
-		if (buffer_.size() < 4)
+		auto const available = buffer_.size() - consumed;
+		if (available < 4)
 			break;
-		auto const* data = reinterpret_cast<unsigned char const*>(buffer_.data());
-		auto const length = (static_cast<std::uint32_t>(data[0]) << 24) | (static_cast<std::uint32_t>(data[1]) << 16) |
-							(static_cast<std::uint32_t>(data[2]) << 8) | static_cast<std::uint32_t>(data[3]);
+		auto const* header = data + consumed;
+		auto const length = (static_cast<std::uint32_t>(header[0]) << 24) |
+							(static_cast<std::uint32_t>(header[1]) << 16) |
+							(static_cast<std::uint32_t>(header[2]) << 8) | static_cast<std::uint32_t>(header[3]);
 		if (length > max_bytes_)
 			throw std::runtime_error("workflow: control frame exceeds the configured limit");
-		if (buffer_.size() < 4 + static_cast<std::size_t>(length))
+		if (available < 4 + static_cast<std::size_t>(length))
 			break;
-		auto const payload = buffer_.substr(4, length);
-		buffer_.erase(0, 4 + length);
+		auto const payload = buffer_.substr(consumed + 4, length);
+		consumed += 4 + static_cast<std::size_t>(length);
 		boost::system::error_code ec;
 		auto parsed = boost::json::parse(payload, ec);
 		if (ec)
 			throw std::runtime_error("workflow: malformed control frame: " + ec.message());
 		messages.push_back(std::move(parsed));
 	}
+	if (consumed > 0)
+		buffer_.erase(0, consumed);
 	return messages;
 }
 

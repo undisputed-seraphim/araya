@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -256,11 +257,10 @@ public:
 		});
 
 		std::vector<skill_summary> out;
-		std::vector<std::string> seen;
+		std::unordered_set<std::string> seen;
 		for (auto& candidate : candidates) {
-			if (std::find(seen.begin(), seen.end(), candidate.summary.name) != seen.end())
+			if (!seen.insert(candidate.summary.name).second)
 				continue;
-			seen.push_back(candidate.summary.name);
 			out.push_back(std::move(candidate.summary));
 		}
 		std::sort(

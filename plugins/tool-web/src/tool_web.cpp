@@ -17,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -117,26 +118,26 @@ handle_search(std::shared_ptr<web_service> web, tool_web_config config, tool_con
 		co_return error_result("Error: no web search provider is configured");
 
 	std::vector<std::string> queries;
+	std::unordered_set<std::string> query_seen;
 	for (auto const& entry : *raw) {
 		if (!entry.is_string() || entry.as_string().empty())
 			co_return error_result("Error: each query must be a non-empty string");
 		std::string query{entry.as_string()};
-		if (std::find(queries.begin(), queries.end(), query) == queries.end())
+		if (query_seen.insert(query).second)
 			queries.push_back(std::move(query));
 	}
 
 	search_result merged;
 	bool truncated = false;
-	std::vector<std::string> seen;
+	std::unordered_set<std::string> seen;
 	try {
 		for (auto const& query : queries) {
 			auto result = co_await web->search(search_request{query, config.max_results}, ctx.stop);
 			if (result.truncated)
 				truncated = true;
 			for (auto& source : result.sources) {
-				if (std::find(seen.begin(), seen.end(), source.url) != seen.end())
+				if (!seen.insert(source.url).second)
 					continue;
-				seen.push_back(source.url);
 				if (merged.sources.size() >= config.max_results) {
 					truncated = true;
 					continue;

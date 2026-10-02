@@ -259,12 +259,15 @@ araya::task<void> run_background(
 	readable_pipe out(executor);
 	readable_pipe err(executor);
 	bool const confined = sandbox && sandbox->active;
+	// A vector, not an initializer_list: elements of an initializer_list are
+	// const, so `std::move` there would copy the whole command.
+	std::vector<std::string> args{"-c", std::move(command)};
 	try {
 		if (confined)
 			state->process.emplace(
 				executor,
 				std::move(shell),
-				std::initializer_list<std::string>{"-c", std::move(command)},
+				std::move(args),
 				bp::process_stdio{.in = nullptr, .out = out, .err = err},
 				bp::process_start_dir(bp::filesystem::path(std::move(workdir))),
 				std::move(sandbox->init));
@@ -272,7 +275,7 @@ araya::task<void> run_background(
 			state->process.emplace(
 				executor,
 				std::move(shell),
-				std::initializer_list<std::string>{"-c", std::move(command)},
+				std::move(args),
 				bp::process_stdio{.in = nullptr, .out = out, .err = err},
 				bp::process_start_dir(bp::filesystem::path(std::move(workdir))));
 	} catch (std::exception const& e) {
@@ -335,12 +338,15 @@ awaitable<shell_result> run_shell(
 	bool const confined = sandbox && sandbox->active;
 
 	std::optional<bp::process> process;
+	// A vector, not an initializer_list (whose elements are const, so the
+	// move would copy the whole command).
+	std::vector<std::string> args{"-c", std::move(command)};
 	try {
 		if (confined)
 			process.emplace(
 				executor,
 				config.shell,
-				std::initializer_list<std::string>{"-c", std::move(command)},
+				std::move(args),
 				bp::process_stdio{.in = nullptr, .out = out, .err = err},
 				bp::process_start_dir(bp::filesystem::path(workdir)),
 				std::move(sandbox->init));
@@ -348,7 +354,7 @@ awaitable<shell_result> run_shell(
 			process.emplace(
 				executor,
 				config.shell,
-				std::initializer_list<std::string>{"-c", std::move(command)},
+				std::move(args),
 				bp::process_stdio{.in = nullptr, .out = out, .err = err},
 				bp::process_start_dir(bp::filesystem::path(workdir)));
 	} catch (std::exception const& e) {

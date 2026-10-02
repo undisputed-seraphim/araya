@@ -566,6 +566,12 @@ struct command_result {
 
 // Run a shell command synchronously and capture its stdout up to `cap` bytes.
 // The command string is built entirely from shell_quote'd arguments.
+//
+// NOTE: popen blocks the calling strand (and this runs inside the grep
+// coroutine), so a slow ripgrep stalls other sessions on the same executor.
+// Converting to the async Boost.Process path plugins/shell uses is the fix;
+// it is deferred because it changes the tool-call shape rather than just
+// moving bytes.
 command_result run_command(std::string const& command, std::size_t cap) {
 	command_result result;
 	FILE* pipe = ::popen(command.c_str(), "r");

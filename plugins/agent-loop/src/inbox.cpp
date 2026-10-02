@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <limits>
-#include <set>
+#include <unordered_set>
 #include <utility>
 
 namespace araya::agent {
@@ -70,14 +70,19 @@ boost::json::value inbox_claim_data(inbox_target target, std::int64_t count) {
 	return inbox_splice_data(target, 0, count);
 }
 
-std::string inbox_message_id(boost::json::value const& message) {
+std::string_view inbox_message_id_view(boost::json::value const& message) {
 	auto const* object = message.if_object();
 	if (!object)
 		return {};
 	auto it = object->find("id");
 	if (it == object->end() || !it->value().is_string())
 		return {};
-	return std::string(it->value().as_string());
+	return it->value().as_string();
+}
+
+std::string inbox_message_id(boost::json::value const& message) {
+	auto const id = inbox_message_id_view(message);
+	return id.empty() ? std::string{} : std::string(id);
 }
 
 inbox_mutation make_inbox_splice(
@@ -143,10 +148,19 @@ void apply_inbox_splice(inbox_state& state, boost::json::value const& data) {
 
 	queue->erase(queue->begin() + start, queue->begin() + start + removed);
 
+	auto inserted_it = object->find("inserted");
+	if (inserted_it == object->end() || !inserted_it->value().is_array())
+		return;
+	auto const& inserted = inserted_it->value().as_array();
+	if (inserted.empty())
+		return;
+
 	// Insertions are checked against the ids still present in either queue
 	// (and against earlier insertions) so the cross-queue uniqueness
-	// invariant survives a misbehaving producer.
-	std::set<std::string> ids;
+	// invariant survives a misbehaving producer. The set is built only when
+	// there is something to insert: claim/remove events skip it entirely.
+	std::unordered_set<std::string> ids;
+	ids.reserve(state.next_turn.size() + state.next_step.size() + inserted.size());
 	for (auto const& message : state.next_turn) {
 		auto id = inbox_message_id(message);
 		if (!id.empty())
@@ -158,12 +172,8 @@ void apply_inbox_splice(inbox_state& state, boost::json::value const& data) {
 			ids.insert(std::move(id));
 	}
 
-	auto inserted_it = object->find("inserted");
-	if (inserted_it == object->end() || !inserted_it->value().is_array())
-		return;
-
 	auto at = queue->begin() + start;
-	for (auto const& message : inserted_it->value().as_array()) {
+	for (auto const& message : inserted) {
 		auto id = inbox_message_id(message);
 		if (id.empty() || ids.contains(id))
 			continue;

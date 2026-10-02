@@ -193,11 +193,14 @@ struct goal_round_driver_plugin : araya::plugin {
 			auto inbox = d->agent->inbox(message.session);
 			if (!inbox)
 				return;
-			auto id = araya::agent::inbox_message_id(message.message);
+			auto id = araya::agent::inbox_message_id_view(message.message);
 			bool next_turn = false;
-			for (auto const& queued : inbox->next_turn)
-				if (araya::agent::inbox_message_id(queued) == id)
+			for (auto const& queued : inbox->next_turn) {
+				if (araya::agent::inbox_message_id_view(queued) == id) {
 					next_turn = true;
+					break;
+				}
+			}
 			if (next_turn)
 				d->state_of(message.session.value)->competing = true;
 		});

@@ -100,4 +100,7 @@ araya::session::event_projection<inbox_state> inbox_projection();
 // The message id a queue entry carries ("" when absent or malformed).
 std::string inbox_message_id(boost::json::value const& message);
 
+// The id without allocating; empty when absent or not a string.
+std::string_view inbox_message_id_view(boost::json::value const& message);
+
 } // namespace araya::agent
