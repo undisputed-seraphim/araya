@@ -281,6 +281,7 @@ private:
 		std::uint64_t step,
 		araya::system_prompt::prompt_assembly const& prompt,
 		std::vector<boost::json::value> const& messages,
+		bool starts_request_series,
 		event_sink const& sink);
 	araya::task<bool> execute_tools(
 		state_ptr const& state,
@@ -306,10 +307,17 @@ private:
 		drive_options const& options,
 		araya::session::session& session,
 		araya::system_prompt::prompt_assembly const& prompt) const;
-	void commit_system_prompt(araya::session::session& session, std::string const& rendered);
+	// Reconciles the agent-loop system prompt with the surface: append on an
+	// in-history continuation, replace-in-place (normalize to one head) when
+	// the route is not in-history, a new series starts, or the prompt clears.
+	void commit_system_prompt(
+		araya::session::session& session,
+		std::string const& rendered,
+		bool in_history,
+		bool starts_series);
 	void append_user_messages(araya::session::session& session, std::vector<boost::json::value> const& messages);
-	void append_request_header(araya::session::session& session, boost::json::value const& header);
-	void append_request_context(araya::session::session& session, drive_options const& options);
+	void append_request_header(araya::session::session& session, boost::json::value const& header, bool starts_series);
+	void append_request_context(araya::session::session& session, drive_options const& options, bool in_history);
 
 	std::shared_ptr<araya::event_bus> bus_;
 	std::shared_ptr<araya::context> scope_;

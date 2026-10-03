@@ -51,6 +51,7 @@ struct scripted_adapter : llm_adapter {
 	std::uint64_t default_max_tokens = 0;
 	std::optional<double> default_temperature;
 	std::optional<std::string> default_reasoning_effort;
+	std::optional<std::string> system_prompt_update;
 
 	araya::task<void> stream(generate_options const& options, chunk_sink const& sink) override {
 		seen.push_back(options);
@@ -80,6 +81,7 @@ struct scripted_adapter : llm_adapter {
 		info.default_max_tokens = default_max_tokens;
 		info.default_temperature = default_temperature;
 		info.default_reasoning_effort = default_reasoning_effort;
+		info.system_prompt_update = system_prompt_update;
 		return info;
 	}
 };
@@ -101,6 +103,31 @@ std::unique_ptr<araya::plugin> make_adapter(araya::plugin_config const&) { retur
 static const araya::dependency_spec g_llm_dep[]{{araya::service_id{"llm", 1}, true, {}}};
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
 static const araya::plugin_descriptor g_adapter_desc{"adapter", g_llm_dep, g_no_provs, &make_adapter};
+
+// A pre-step probe: when armed, it marks the step's first attempt as starting
+// a new request series.
+bool g_force_series = false;
+
+struct pre_step_plugin : araya::plugin {
+	araya::task<void> apply(araya::plugin_context& ctx) override {
+		ctx.on(
+			araya::agent::pre_step_key,
+			[](araya::agent::pre_step_msg msg, araya::waterfall_continuation<araya::agent::pre_step_msg> next)
+				-> araya::task<araya::agent::pre_step_msg> {
+				if (g_force_series && msg.step == 1)
+					msg.starts_request_series = true;
+				co_return co_await next(std::move(msg));
+			});
+		co_return;
+	}
+};
+
+std::unique_ptr<araya::plugin> make_pre_step(araya::plugin_config const&) {
+	return std::make_unique<pre_step_plugin>();
+}
+
+static constexpr std::span<araya::dependency_spec const> g_pre_deps{};
+static const araya::plugin_descriptor g_pre_desc{"pre-step-probe", g_pre_deps, g_no_provs, &make_pre_step};
 
 // -- the harness ------------------------------------------------------------
 
@@ -496,12 +523,76 @@ TEST_CASE("the prompt registry commits one effective system node") {
 		CHECK(count_type(*r.session, "system/message") == 1);
 		CHECK(count_type(*r.session, "surface/replace") == 0);
 
-		// A changed prompt appends a new in-history system node.
+		// A changed prompt on a non-in-history route normalizes the head in
+		// place rather than stacking a second system node.
 		r.prompts->set_persona_prefix("be terse");
 		co_await r.agent->run(options_for("three"), {});
+		CHECK(count_type(*r.session, "system/message") == 1);
+		CHECK(count_type(*r.session, "surface/replace") == 1);
+		CHECK(surface_roles(*r.session).front() == "system");
+		std::size_t systems = 0;
+		for (auto const& message : r.session->surface().messages())
+			if (message.role == araya::session::message_role::system)
+				++systems;
+		CHECK(systems == 1);
+	});
+}
+
+TEST_CASE("an in-history route appends changed system prompts") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->system_prompt_update = "in-history";
+		g_scripted->script = {{text_stream("hi")}, {text_stream("hi again")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+		r.prompts->set_persona_prefix("be helpful");
+
+		auto first = co_await r.agent->run(options_for("first"), {});
+		CHECK(first.status == run_status::completed);
+		CHECK(count_type(*r.session, "system/message") == 1);
+
+		// A capable continuing series appends the changed prompt after the
+		// cached prefix instead of rewriting the head.
+		r.prompts->set_persona_prefix("be terse");
+		co_await r.agent->run(options_for("second"), {});
 		CHECK(count_type(*r.session, "system/message") == 2);
 		CHECK(count_type(*r.session, "surface/replace") == 0);
-		CHECK(surface_roles(*r.session).front() == "system");
+
+		// The route capability is recorded on the request context.
+		auto const* context = find_data(*r.session, "request/context");
+		REQUIRE(context);
+		CHECK(context->at("systemPromptUpdate").as_string() == "in-history");
+	});
+}
+
+TEST_CASE("a pre-step listener can start a request series") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{text_stream("hi")}, {text_stream("hi again")}};
+		g_force_series = false;
+		rig r{h};
+		co_await r.mount(rt);
+		co_await rt.mount(r.h.spec(&g_pre_desc));
+		co_await rt.wait_idle();
+		r.prompts->set_persona_prefix("be helpful");
+
+		(void)co_await r.agent->run(options_for("first"), {});
+		g_force_series = true;
+		(void)co_await r.agent->run(options_for("second"), {});
+		g_force_series = false;
+
+		// The header is unchanged, so the boundary lands as an explicit series.
+		bool series = false;
+		for (auto const& event : r.session->log()) {
+			auto const* object = event.data.if_object();
+			auto const* reason = object ? object->if_contains("reason") : nullptr;
+			if (event.type == "request/header" && reason && reason->is_string() && reason->as_string() == "series")
+				series = true;
+		}
+		CHECK(series);
 	});
 }
 

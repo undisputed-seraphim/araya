@@ -24,6 +24,11 @@ public:
 	// (a message event, or the 'surface/replace' event that last rewrote it).
 	std::vector<session_seq> const& source_seqs() const noexcept { return source_seqs_; }
 
+	// The content generation: bumped whenever a replacement changes the
+	// surface (never on a plain append). A request that observes a change
+	// since its last request starts a new request series.
+	std::uint64_t generation() const noexcept { return generation_; }
+
 	// Folds one appended event's message into the surface.
 	void push(session_seq source_seq, session_message msg);
 
@@ -41,6 +46,7 @@ public:
 private:
 	std::vector<session_message> messages_;
 	std::vector<session_seq> source_seqs_;
+	std::uint64_t generation_ = 0;
 };
 
 // What folding one event does to the surface. Registered projections

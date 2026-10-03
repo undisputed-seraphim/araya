@@ -404,7 +404,7 @@ TEST_CASE("a stream that ends without [DONE] finishes as stream_closed") {
 TEST_CASE("load_config parses per-model call defaults") {
 	auto config = load_config(
 		{{"config",
-		  R"({"models":{"m":{"context_window":128000,"max_tokens":16384,"temperature":0.2,"default_reasoning_effort":"high"}}})"}});
+		  R"({"models":{"m":{"context_window":128000,"max_tokens":16384,"temperature":0.2,"default_reasoning_effort":"high","systemPromptUpdate":"in-history"}}})"}});
 	REQUIRE(config.models.size() == 1);
 	auto const& model = config.models.front();
 	CHECK(model.context_window == 128000);
@@ -413,4 +413,6 @@ TEST_CASE("load_config parses per-model call defaults") {
 	CHECK(*model.default_temperature == 0.2);
 	REQUIRE(model.default_reasoning_effort.has_value());
 	CHECK(*model.default_reasoning_effort == "high");
+	REQUIRE(model.system_prompt_update.has_value());
+	CHECK(*model.system_prompt_update == "in-history");
 }

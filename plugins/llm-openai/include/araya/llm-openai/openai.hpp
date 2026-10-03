@@ -34,6 +34,7 @@ struct openai_model {
 	std::uint64_t default_max_tokens = 0;
 	std::optional<double> default_temperature;
 	std::optional<std::string> default_reasoning_effort;
+	std::optional<std::string> system_prompt_update;
 	std::vector<std::string> reasoning_efforts;
 	bool supports_image = false;
 };

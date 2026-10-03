@@ -174,6 +174,11 @@ struct model_info {
 	std::uint64_t default_max_tokens = 0;
 	std::optional<double> default_temperature;
 	std::optional<std::string> default_reasoning_effort;
+	// The route's system-prompt update capability. `"in-history"` means a later
+	// `system/message` is read as the effective prompt (an update after the
+	// cached conversation prefix); absent means the prompt is a single leading
+	// message.
+	std::optional<std::string> system_prompt_update;
 	std::vector<std::string> reasoning_efforts;
 	// Whether the model accepts image input (routed through `read_image`).
 	bool supports_image = false;

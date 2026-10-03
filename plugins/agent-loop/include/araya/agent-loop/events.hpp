@@ -92,7 +92,9 @@ struct pre_step_msg {
 	std::stop_token stop;
 	bool reject = false;
 	std::vector<boost::json::value> messages;
-	// Parsed but inert until the request-series work lands.
+	// A listener may set this on the turn's first step to start a fresh
+	// request series: the loop then normalizes the system prompt and does not
+	// reuse the cached conversation prefix.
 	bool starts_request_series = false;
 };
 

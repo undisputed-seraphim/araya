@@ -454,10 +454,12 @@ TEST_CASE("surface/replace re-places the substitute at the removed span's positi
 		s->append("user/message", message("m0", "user", boost::json::array{})); // seq 0
 		s->append("user/message", message("m1", "user", boost::json::array{})); // seq 1
 		s->append("user/message", message("m2", "user", boost::json::array{})); // seq 2
+		CHECK(s->surface().generation() == 0);									// appends never bump the generation
 
 		// The middle node is rewritten in place: [m0, mX, m2], not [m0, m2, mX].
 		auto const replace_seq =
 			s->append("surface/replace", replace_event(1, 2, message("mX", "user", boost::json::array{})));
+		CHECK(s->surface().generation() == 1); // a replacement does
 		REQUIRE(s->surface().messages().size() == 3);
 		CHECK(s->surface().messages()[0].id == "m0");
 		CHECK(s->surface().messages()[1].id == "mX");

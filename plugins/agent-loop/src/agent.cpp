@@ -325,6 +325,10 @@ struct agent_service::agent_state {
 	std::shared_ptr<std::stop_callback<std::function<void()>>> stop_bridge;
 	std::vector<std::shared_ptr<std::move_only_function<void()>>> waiters;
 	run_outcome last_outcome;
+	// The tool-name set and surface generation at the last logged request;
+	// a change in either starts a new request series.
+	std::vector<std::string> last_tools;
+	std::uint64_t request_surface_generation = 0;
 };
 
 agent_service::agent_service(
@@ -619,7 +623,8 @@ araya::task<bool> agent_service::turn(state_ptr const& state) {
 			session->append("step/start", boost::json::value{{"turn", turn_no}, {"step", step}});
 			std::optional<run_status> exit;
 			try {
-				exit = co_await run_step(state, *session, turn_no, step, assembly, decision.messages, sink);
+				exit = co_await run_step(
+					state, *session, turn_no, step, assembly, decision.messages, decision.starts_request_series, sink);
 			} catch (...) {
 				session->append("step/end", boost::json::value{{"turn", turn_no}, {"step", step}});
 				throw;
@@ -731,14 +736,31 @@ araya::task<std::optional<run_status>> agent_service::run_step(
 	std::uint64_t step,
 	araya::system_prompt::prompt_assembly const& prompt,
 	std::vector<boost::json::value> const& messages,
+	bool starts_request_series,
 	event_sink const& sink) {
+	// The route's system-prompt capability and the facts that start a new
+	// request series: a pre-step listener declared one, the surface was
+	// rewritten since the last request, or the tool set changed.
+	bool const in_history = [&] {
+		auto model = llm_->resolve_model(state->exec.provider, state->exec.model);
+		return model && model->system_prompt_update && *model->system_prompt_update == "in-history";
+	}();
+	std::vector<std::string> tool_names;
+	tool_names.reserve(prompt.tools.size());
+	for (auto const& tool : prompt.tools)
+		tool_names.push_back(tool.name);
+	bool const starts_series = starts_request_series || state->last_tools != tool_names ||
+							   state->request_surface_generation != session.surface().generation();
+
 	// The pre-stream half: project the prompt, admit the claimed batch,
 	// and record the request header/context - in the harness's step order,
 	// the system node folds before the admitted user messages.
-	commit_system_prompt(session, araya::system_prompt::render_prompt(prompt));
+	commit_system_prompt(session, araya::system_prompt::render_prompt(prompt), in_history, starts_series);
 	append_user_messages(session, messages);
-	append_request_header(session, build_header(state->exec, prompt));
-	append_request_context(session, state->exec);
+	append_request_header(session, build_header(state->exec, prompt), starts_series);
+	append_request_context(session, state->exec, in_history);
+	state->last_tools = std::move(tool_names);
+	state->request_surface_generation = session.surface().generation();
 
 	step_accumulator accumulator;
 	araya::llm::chunk_sink chunk_sink = [&](stream_chunk const& chunk) -> araya::task<void> {
@@ -874,23 +896,68 @@ araya::llm::generate_options agent_service::build_generate(
 	return generate;
 }
 
-void agent_service::commit_system_prompt(session& session, std::string const& rendered) {
-	if (rendered.empty())
-		return; // no effective prompt: never write an empty system message
-	// Append only when the effective agent-loop prompt changed. A change
-	// mid-session lands after the cached history (the harness's in-history
-	// update); an unchanged prompt adds nothing.
-	std::optional<std::string> previous;
-	for (auto it = session.surface().messages().rbegin(); it != session.surface().messages().rend(); ++it) {
-		if (it->role == araya::session::message_role::system && it->source_plugin == "agent-loop") {
-			previous = araya::llm_bridge::message_text(*it);
-			break;
+void agent_service::commit_system_prompt(
+	session& session,
+	std::string const& rendered,
+	bool in_history,
+	bool starts_series) {
+	// The surviving agent-loop system nodes in surface order (source seq,
+	// text). A rewrite's node keeps the seq of the 'surface/replace' event
+	// that produced it, so a later rewrite targets it again.
+	std::vector<std::pair<araya::session::session_seq, std::string>> nodes;
+	{
+		auto const& messages = session.surface().messages();
+		auto const& seqs = session.surface().source_seqs();
+		for (std::size_t i = 0; i < messages.size(); ++i) {
+			if (messages[i].role != araya::session::message_role::system)
+				continue;
+			if (!messages[i].source_plugin || *messages[i].source_plugin != "agent-loop")
+				continue;
+			nodes.emplace_back(seqs[i], araya::llm_bridge::message_text(messages[i]));
 		}
 	}
-	if (previous && *previous == rendered)
+	auto append_prompt = [&](std::string const& text) {
+		session.append(
+			"system/message", system_message_data("s" + std::to_string(session.log().size()), "agent-loop", text));
+	};
+	// A surface/replace carries the bare message (not the system/message
+	// envelope) under `message`.
+	auto system_payload = [&](std::string const& text) {
+		return boost::json::object{
+			{"id", "s" + std::to_string(session.log().size())},
+			{"role", "system"},
+			{"content", boost::json::array{{{"type", "text"}, {"text", text}}}},
+			{"source", boost::json::object{{"kind", "plugin"}, {"plugin", "agent-loop"}}}};
+	};
+	auto rewrite_node = [&](araya::session::session_seq target, std::optional<std::string> const& text) {
+		// The event seqs ride the wire as signed int64 (the store validates
+		// is_int64), though session_seq is unsigned.
+		auto const start = static_cast<std::int64_t>(target);
+		boost::json::object event{{"start_seq", start}, {"end_seq", start + 1}};
+		if (text)
+			event["message"] = system_payload(*text);
+		session.append("surface/replace", std::move(event));
+	};
+
+	if (nodes.empty()) {
+		if (!rendered.empty())
+			append_prompt(rendered);
 		return;
-	session.append(
-		"system/message", system_message_data("s" + std::to_string(session.log().size()), "agent-loop", rendered));
+	}
+	// The first prompt reserves the head; a capable continuing series appends
+	// the changed prompt after the cached history; an incapable route, a new
+	// series, or a cleared prompt instead normalizes the surface to one head.
+	if (!in_history || starts_series || rendered.empty()) {
+		for (std::size_t i = 1; i < nodes.size(); ++i)
+			rewrite_node(nodes[i].first, std::nullopt);
+		if (rendered.empty())
+			rewrite_node(nodes.front().first, std::nullopt);
+		else if (nodes.front().second != rendered)
+			rewrite_node(nodes.front().first, rendered);
+		return;
+	}
+	if (nodes.back().second != rendered)
+		append_prompt(rendered);
 }
 
 void agent_service::append_user_messages(session& session, std::vector<boost::json::value> const& messages) {
@@ -898,7 +965,7 @@ void agent_service::append_user_messages(session& session, std::vector<boost::js
 		session.append("user/message", message);
 }
 
-void agent_service::append_request_header(session& session, boost::json::value const& header) {
+void agent_service::append_request_header(session& session, boost::json::value const& header, bool starts_series) {
 	std::optional<boost::json::value> last;
 	for (auto it = session.log().rbegin(); it != session.log().rend(); ++it) {
 		if (it->type == "request/header") {
@@ -912,17 +979,24 @@ void agent_service::append_request_header(session& session, boost::json::value c
 		auto const* found = object ? object->if_contains("header") : nullptr;
 		changed = !found || *found != header;
 	}
-	if (changed)
-		session.append(
-			"request/header", boost::json::value{{"header", header}, {"reason", last ? "change" : "initial"}});
+	if (changed) {
+		boost::json::object data{{"header", header}, {"reason", last ? "change" : "initial"}};
+		if (last && starts_series)
+			data["startsSeries"] = true;
+		session.append("request/header", std::move(data));
+	} else if (starts_series) {
+		session.append("request/header", boost::json::value{{"header", header}, {"reason", "series"}});
+	}
 }
 
-void agent_service::append_request_context(session& session, drive_options const& options) {
+void agent_service::append_request_context(session& session, drive_options const& options, bool in_history) {
 	boost::json::object context;
 	context["provider"] = options.provider;
 	context["model"] = options.model;
 	if (auto model = llm_->resolve_model(options.provider, options.model); model && model->context_window > 0)
 		context["contextWindow"] = model->context_window;
+	if (in_history)
+		context["systemPromptUpdate"] = "in-history";
 
 	std::optional<boost::json::value> last;
 	for (auto it = session.log().rbegin(); it != session.log().rend(); ++it) {

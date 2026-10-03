@@ -44,6 +44,8 @@ void session_surface::replace(
 	}
 	messages_.resize(write);
 	source_seqs_.resize(write);
+	if (insert_at || msg)
+		++generation_;
 	if (msg) {
 		auto const at = insert_at.value_or(messages_.size());
 		messages_.insert(messages_.begin() + static_cast<std::ptrdiff_t>(at), std::move(*msg));
