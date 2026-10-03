@@ -64,6 +64,10 @@ struct app_context {
 	// Path to the llm-openai config JSON (the --llm-config flag or the
 	// ARAYA_LLM_CONFIG environment variable); empty means no adapter.
 	std::string llm_config;
+	// The logger plugin's level word (error|warn|info|debug), from
+	// --log-level / ARAYA_LOG_LEVEL. The file sink itself is installed by
+	// the entry point before boot (see log_setup.hpp).
+	std::string log_level = "info";
 	// The surface's transient-stream sink; the commands forward model
 	// content/reasoning deltas here. Empty disables streaming.
 	stream_callback stream_hook;

@@ -443,7 +443,8 @@ std::string cwd_branch_line(std::string const& cwd) {
 }
 
 araya::task<void> boot(app_context& ctx, line_sink const& out) {
-	ctx.desired["logger"] = desired_entry{&araya::logger::plugin_descriptor(), {{"name", "araya"}, {"level", "info"}}};
+	ctx.desired["logger"] =
+		desired_entry{&araya::logger::plugin_descriptor(), {{"name", "araya"}, {"level", ctx.log_level}}};
 	ctx.desired["timer"] = desired_entry{&araya::timer::plugin_descriptor(), {}};
 	ctx.desired["session"] = desired_entry{&araya::session::plugin_descriptor(), {}};
 	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", "araya-sessions"}}};

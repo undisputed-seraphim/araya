@@ -283,7 +283,7 @@ console's intended successor: the same desired tree boots on a background engine
 while the UI renders live state, and the UI only ever reads immutable snapshots, so the
 engine's strand discipline stays entirely on the engine side. Logs go to `araya-tui.log`
 (pre-created file-sink loggers the logger service adopts by name), keeping quill's output
-off the canvas.
+off the canvas; see [Logging](#logging).
 
 The UI has two phases. It opens on the entry screen - the `araya` wordmark over a prompt
 box, a tip line, and a status bar - and switches to the session screen on the first
@@ -314,6 +314,25 @@ Requires a terminal; Ctrl+D quits (the `quit` command works too), and Ctrl+C is 
 per TUI convention. Component state uses unicode glyphs (`●` active, `◐` transitioning,
 `✗` failed, `○` retired); `ARAYA_TUI_ASCII=1` switches the glyphs, markers, prompt accent
 bar, and exit wordmark to an ASCII tier for terminals whose fonts misrender them.
+
+### Logging
+
+The `logger` plugin wraps [quill](https://github.com/odygrd/quill) and provides the
+`logger` service. Both entry points pre-create the app's known logger names
+(`araya`, `console`, `watcher`, `main`, `timer`) with a rotating file sink before the
+tree boots, so the service adopts them by name:
+
+- The file is `./araya-tui.log` (override with `--log-file <path>` or `ARAYA_LOG_FILE`),
+  rotating at 5 MiB and keeping three backups. `araya-tui.log*` is gitignored.
+- `araya tui` writes the file only, so nothing lands on the FTXUI canvas. `araya run`
+  writes the file always and mirrors to stdout only when stdout is a terminal, so script
+  output and log records do not interleave (the ctests capture only script output).
+- The level defaults to `info`; set `--log-level error|warn|info|debug` (or
+  `ARAYA_LOG_LEVEL`) at any position, or the runtime `/log level <lvl>` command. An
+  unknown level is rejected before boot.
+
+Every known logger is flushed and quill's backend is stopped on exit, so records are not
+lost at process end.
 
 ## License
 

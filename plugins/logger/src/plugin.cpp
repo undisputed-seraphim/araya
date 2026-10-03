@@ -10,18 +10,10 @@
 namespace araya {
 
 // The word-valued log level, parsed through the config customization
-// point: unknown spellings fall back to info, exactly as before.
+// point; unknown spellings fall back to info (the plugin default).
 template <>
 struct config_parser<logger::log_level> {
-	static std::optional<logger::log_level> parse(std::string_view text) {
-		if (text == "error")
-			return logger::log_level::error;
-		if (text == "warn")
-			return logger::log_level::warn;
-		if (text == "debug")
-			return logger::log_level::debug;
-		return logger::log_level::info;
-	}
+	static std::optional<logger::log_level> parse(std::string_view text) { return logger::parse_level(text); }
 };
 
 } // namespace araya

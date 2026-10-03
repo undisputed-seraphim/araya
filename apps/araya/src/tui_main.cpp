@@ -2,17 +2,13 @@
 #include "tui_view.hpp"
 
 #include "demo_plugins.hpp"
+#include "log_setup.hpp"
 
 #include <ftxui/component/screen_interactive.hpp>
-
-#include <quill/Backend.h>
-#include <quill/Frontend.h>
-#include <quill/sinks/RotatingFileSink.h>
 
 #include <unistd.h>
 
 #include <cstdlib>
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -48,25 +44,23 @@ void print_session_summary(std::string_view title, std::string_view id) {
 
 } // namespace
 
-int tui_main(std::string session) {
+int tui_main(std::string session, araya::app::log_settings logs) {
 	if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
 		std::cerr << "araya tui needs a terminal (interactive only)\n";
 		return 2;
 	}
 
 	// The logger service adopts pre-created quill loggers by name, so
-	// pre-create the known ones with a file sink - nothing writes over
-	// the FTXUI canvas.
-	quill::Backend::start();
-	for (auto const* name : {"araya", "console", "watcher", "main", "timer"}) {
-		quill::RotatingFileSinkConfig sink_config;
-		(void)quill::Frontend::create_or_get_logger(
-			name, std::make_shared<quill::RotatingFileSink>(std::filesystem::path{"araya-tui.log"}, sink_config));
-	}
+	// pre-create the known ones with a rotating file sink - nothing writes
+	// over the FTXUI canvas, so the console sink stays off.
+	logs.console = false;
+	logs = araya::app::resolve_log_settings(std::move(logs));
+	araya::app::install_log_sinks(logs);
 
 	araya::console_demo::init_demo_state(std::make_shared<araya::console_demo::demo_state>());
 
 	araya::tui::shared_state sh;
+	sh.log_level = logs.level;
 	auto screen = ftxui::ScreenInteractive::Fullscreen();
 	sh.wake = [&screen] { screen.PostEvent(ftxui::Event::Custom); };
 
@@ -105,6 +99,6 @@ int tui_main(std::string session) {
 	if (snap && !snap->session.empty() && snap->session != "no session")
 		print_session_summary(snap->title, snap->session);
 
-	quill::Backend::stop();
+	araya::app::shutdown_logging();
 	return 0;
 }

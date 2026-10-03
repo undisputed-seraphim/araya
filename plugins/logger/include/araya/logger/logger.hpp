@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <format>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -19,6 +20,10 @@ namespace araya::logger {
 // Debug/Info/Warning/Error; quill's frontend performs the gating, so a
 // filtered call costs one branch before the queue push.
 enum class log_level : std::uint8_t { error, warn, info, debug };
+
+// Parses a level word ("error"|"warn"|"info"|"debug"); nullopt on an
+// unknown spelling. Shared by the config parser and flag/env handling.
+std::optional<log_level> parse_level(std::string_view word);
 
 class logger_service;
 

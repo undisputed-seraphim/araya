@@ -9,6 +9,7 @@ add_executable(araya_app
     src/commands_goal.cpp
     src/commands_llm.cpp
     src/commands_session.cpp
+    src/log_setup.cpp
     src/main.cpp
     src/run_main.cpp
     src/tui_entry.cpp
@@ -106,9 +107,11 @@ if(ARAYA_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/demo/prompt.txt)
     set_tests_properties(prompt_cycle PROPERTIES TIMEOUT 60)
 
-    # The pure input-routing helpers (no plugins, no app library).
+    # The pure input-routing helpers and the logging setup (no plugins, no
+    # app library). log_setup links the logger plugin for quill/parse_level.
     araya_add_test(araya_app_tests
-        SOURCES tests/route_test.cpp
+        SOURCES tests/route_test.cpp tests/log_setup_test.cpp src/log_setup.cpp
         INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/src
+        DEPS araya::logger
     )
 endif()

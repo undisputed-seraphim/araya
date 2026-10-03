@@ -10,6 +10,18 @@
 
 namespace araya::logger {
 
+std::optional<log_level> parse_level(std::string_view word) {
+	if (word == "error")
+		return log_level::error;
+	if (word == "warn")
+		return log_level::warn;
+	if (word == "info")
+		return log_level::info;
+	if (word == "debug")
+		return log_level::debug;
+	return std::nullopt;
+}
+
 namespace {
 
 quill::LogLevel to_quill(log_level level) noexcept {

@@ -1,11 +1,14 @@
 #include "app_core.hpp"
 
 #include "demo_plugins.hpp"
+#include "log_setup.hpp"
 
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/use_awaitable.hpp>
+
+#include <unistd.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -103,7 +106,7 @@ araya::task<void> run(araya::app::app_context& ctx, std::string script_path) {
 
 } // namespace
 
-int run_main(int argc, char** argv) {
+int run_main(int argc, char** argv, araya::app::log_settings logs) {
 	// argv[0] is "run"; the script path follows (--llm-config <path>
 	// selects the llm-openai config; ARAYA_LLM_CONFIG is the fallback).
 	std::string script;
@@ -133,9 +136,18 @@ int run_main(int argc, char** argv) {
 
 	araya::console_demo::init_demo_state(std::make_shared<araya::console_demo::demo_state>());
 
+	// Headless logging: the file sink always, plus a console mirror only when
+	// stdout is a terminal, so script output is not interleaved with records
+	// (and the ctests, which are not TTYs, capture only the script's output).
+	logs = araya::app::resolve_log_settings(std::move(logs));
+	logs.console = isatty(STDOUT_FILENO) != 0;
+	araya::app::install_log_sinks(logs);
+
 	araya::app::app_context ctx;
 	ctx.llm_config = std::move(llm_config);
+	ctx.log_level = logs.level;
 	boost::asio::co_spawn(ctx.io, run(ctx, std::move(script)), boost::asio::detached);
 	ctx.io.run();
+	araya::app::shutdown_logging();
 	return 0;
 }
