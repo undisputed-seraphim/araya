@@ -176,7 +176,7 @@ TEST_CASE("continuable start settles into the parent session") {
 		REQUIRE(children.size() == 1);
 		CHECK(children[0].id == result.child);
 		CHECK(children[0].label == "task");
-		CHECK(children[0].running == false);
+		CHECK(children[0].status == child_status::idle);
 		CHECK(children[0].stop_reason == "completed");
 
 		// The settlement carries the child's output.
@@ -188,6 +188,43 @@ TEST_CASE("continuable start settles into the parent session") {
 		}();
 		REQUIRE(settlement != nullptr);
 		CHECK(boost::json::serialize(*settlement).find("echo: work") != std::string::npos);
+	});
+}
+
+TEST_CASE("list_descendants walks the tree with depth annotations") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		co_await r.mount(rt, {{"max_depth", "2"}});
+
+		auto request = [](std::string const& parent, std::string prompt) {
+			start_request req;
+			req.prompt = std::move(prompt);
+			req.parent = parent;
+			req.provider = "mock";
+			req.model = "mock-model";
+			return req;
+		};
+		auto child = co_await r.subs->start_continuable("spawn", request("parent", "child"));
+		REQUIRE_FALSE(child.is_error);
+		auto grand = co_await r.subs->start_continuable("spawn", request(child.child, "grand"));
+		REQUIRE_FALSE(grand.is_error);
+
+		auto direct = r.subs->list_children("parent");
+		REQUIRE(direct.size() == 1);
+		CHECK(direct[0].id == child.child);
+
+		auto tree = r.subs->list_descendants("parent");
+		REQUIRE(tree.size() == 2);
+		CHECK(tree[0].id == child.child);
+		CHECK(tree[0].parent == "parent");
+		CHECK(tree[0].depth == 1);
+		CHECK(tree[1].id == grand.child);
+		CHECK(tree[1].parent == child.child);
+		CHECK(tree[1].depth == 2);
+
+		CHECK(r.subs->list_descendants("nobody").empty());
+		r.subs->dispose_children();
 	});
 }
 

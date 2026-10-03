@@ -94,15 +94,23 @@ struct result {
 	std::optional<boost::json::value> structure;
 };
 
+// Live status of one continuable child, mirroring the model-facing control
+// surface: `running` has a turn in flight, `idle` has a live driver between
+// turns, `ready` has no live driver but remains resumable.
+enum class child_status { running, idle, ready };
+
 // Observe-only view of one continuable child.
 struct child_info {
 	std::string id;
 	std::string parent;
 	std::string label;
 	std::string provider;
-	bool running = false;
+	child_status status = child_status::ready;
 	std::size_t pending = 0;
 	std::string stop_reason;
+	// Depth below the queried root: 1 for the root's direct children, set only
+	// by `list_descendants` (0 elsewhere).
+	std::uint32_t depth = 0;
 };
 
 // A child-creation backend. Spawn opens a fresh session; a future fork
@@ -155,6 +163,9 @@ public:
 	araya::task<result> send_message(std::string const& child, std::string text);
 	bool interrupt(std::string const& child);
 	std::vector<child_info> list_children(std::optional<std::string> const& parent = {}) const;
+	// Every continuable child below `root` (excluding it), stable pre-order,
+	// each annotated with its direct-parent id and depth.
+	std::vector<child_info> list_descendants(std::string const& root) const;
 
 	// A child's driver went idle: deliver its settlement to the parent.
 	// Wired by the plugin to the agent's idle transition.
@@ -191,6 +202,10 @@ private:
 	// it through the shared inbox verbs.
 	araya::task<void> deliver_settlement(std::string child_id);
 	std::optional<std::string> inherit_route(std::string const& parent, std::string_view key) const;
+
+	// Projects one recorded child into its observe-only view (live status,
+	// pending inbox, last stop reason), depth 0.
+	child_info describe(std::string const& id) const;
 
 	boost::asio::any_io_executor executor_;
 	std::shared_ptr<araya::session::session_store> store_;

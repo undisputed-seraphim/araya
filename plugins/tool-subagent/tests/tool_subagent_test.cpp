@@ -79,7 +79,7 @@ std::string text_of(tool_result const& result) {
 
 } // namespace
 
-TEST_CASE("tool-subagent registers the delegation and control tools") {
+TEST_CASE("tool-subagent registers the delegation tool and model discovery") {
 	harness h;
 	h.run([&](araya::runtime& rt) -> araya::task<void> {
 		rig r;
@@ -92,10 +92,12 @@ TEST_CASE("tool-subagent registers the delegation and control tools") {
 			return false;
 		};
 		CHECK(has("subagent"));
-		CHECK(has("send_message"));
-		CHECK(has("interrupt_agent"));
-		CHECK(has("list_agents"));
 		CHECK(has("list_subagent_models"));
+		// The shared control tools live in araya::tool-subagent-control, not
+		// here, so several delegation instances never collide.
+		CHECK_FALSE(has("send_message"));
+		CHECK_FALSE(has("interrupt_agent"));
+		CHECK_FALSE(has("list_agents"));
 	});
 }
 
@@ -183,7 +185,7 @@ TEST_CASE("one-shot subagent tool returns the child output") {
 	});
 }
 
-TEST_CASE("continuable subagent tool starts a child and list_agents sees it") {
+TEST_CASE("continuable subagent tool starts a durable child") {
 	harness h;
 	h.run([&](araya::runtime& rt) -> araya::task<void> {
 		rig r;
@@ -200,13 +202,6 @@ TEST_CASE("continuable subagent tool starts a child and list_agents sees it") {
 		REQUIRE(started.has_value());
 		CHECK_FALSE(started->is_error);
 		CHECK(text_of(*started).find("subagent started") != std::string::npos);
-
-		// The child is created immediately; the background turn settles
-		// after the harness drains the io_context.
-		auto listed = co_await r.tools->invoke(
-			"list_agents", tool_context{.call_id = "c2", .name = "list_agents", .session = "parent"});
-		REQUIRE(listed.has_value());
-		CHECK(text_of(*listed).find("running") != std::string::npos);
 	});
 }
 

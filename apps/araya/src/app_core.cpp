@@ -30,6 +30,7 @@
 #include "araya/tool-jobs/tool_jobs.hpp"
 #include "araya/tool-read-image/tool_read_image.hpp"
 #include "araya/tool-skill/tool_skill.hpp"
+#include "araya/tool-subagent-control/tool_subagent_control.hpp"
 #include "araya/tool-subagent/tool_subagent.hpp"
 #include "araya/tool-todo/tool_todo.hpp"
 #include "araya/tool-web/tool_web.hpp"
@@ -255,7 +256,8 @@ constexpr command_entry g_commands[]{
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | "
 	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-skill | tool-web | "
-	 "subagents | subagent-fork | tool-subagent | tool-subagent-fork | workflow | tool-workflow | console | beacon | "
+	 "subagents | subagent-fork | tool-subagent | tool-subagent-fork | tool-subagent-control | workflow | "
+	 "tool-workflow | console | beacon | "
 	 "watcher",
 	 &cmd_load},
 	{"unload", "unload <component>", "retire it (watch the cascade)", &cmd_unload},
@@ -378,6 +380,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::subagent_fork::plugin_descriptor();
 	if (name == "tool-subagent" || name == "tool-subagent-fork")
 		return &araya::tool_subagent::plugin_descriptor();
+	if (name == "tool-subagent-control")
+		return &araya::tool_subagent_control::plugin_descriptor();
 	if (name == "console")
 		return &araya::console_demo::console_descriptor();
 	if (name == "beacon")
@@ -517,6 +521,10 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 		 {"tool_name", "subagent_fork"},
 		 {"background_mode", "one-shot"},
 		 {"list_models", "false"}}};
+	// The shared continuable-child control tools: mounted once for every
+	// delegation tool, so `send_message`/`interrupt_agent`/`list_agents`
+	// never collide across instances.
+	ctx.desired["tool-subagent-control"] = desired_entry{&araya::tool_subagent_control::plugin_descriptor(), {}};
 	// Workflow: an out-of-process JavaScript orchestration engine over the
 	// subagent seam. The engine mounts inert; the model-facing tool stays off
 	// until enabled (config enabled=true) because it needs a Node runtime.

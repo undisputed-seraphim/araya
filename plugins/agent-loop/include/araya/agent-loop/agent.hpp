@@ -226,6 +226,10 @@ public:
 
 	agent_status status(araya::session::session_id const& session) const;
 
+	// Whether a live driver currently exists for the session. A session that
+	// exists only in the store (never entered, or disposed) is not live.
+	bool live(araya::session::session_id const& session) const;
+
 	// Awaits until no drive is running for the session.
 	araya::task<void> when_idle(araya::session::session_id const& session);
 

@@ -138,48 +138,6 @@ araya::task<tool_result> subagent_handler(
 	co_return text_result(std::move(text));
 }
 
-araya::task<tool_result> send_message_handler(std::shared_ptr<subagents_service> subs, tool_context const& ctx) {
-	auto const* args = ctx.arguments.if_object();
-	auto id = args ? araya::util::json::get_string(*args, "id") : std::string{};
-	auto message = args ? araya::util::json::get_string(*args, "message") : std::string{};
-	if (id.empty() || message.empty())
-		co_return text_result("Error: send_message requires 'id' and 'message'", true);
-	auto r = co_await subs->send_message(id, std::move(message));
-	if (r.is_error)
-		co_return text_result("Error: " + r.error, true);
-	co_return text_result("message " + r.stop_reason + " to " + id);
-}
-
-araya::task<tool_result> interrupt_handler(std::shared_ptr<subagents_service> subs, tool_context const& ctx) {
-	auto const* args = ctx.arguments.if_object();
-	auto id = args ? araya::util::json::get_string(*args, "id") : std::string{};
-	if (id.empty())
-		co_return text_result("Error: interrupt_agent requires 'id'", true);
-	if (!subs->interrupt(id))
-		co_return text_result("no running turn for " + id);
-	co_return text_result("interrupted " + id);
-}
-
-araya::task<tool_result> list_handler(std::shared_ptr<subagents_service> subs, tool_context const&) {
-	auto children = subs->list_children();
-	if (children.empty())
-		co_return text_result("no child agents");
-	std::string text;
-	for (auto const& child : children) {
-		if (!text.empty())
-			text += "\n";
-		text += child.id;
-		if (!child.label.empty())
-			text += " (" + child.label + ")";
-		text += child.running ? " running" : " idle";
-		if (child.pending > 0)
-			text += ", " + std::to_string(child.pending) + " queued";
-		if (!child.stop_reason.empty())
-			text += ", last " + child.stop_reason;
-	}
-	co_return text_result(std::move(text));
-}
-
 std::string model_line(araya::llm::model_info const& info) {
 	return info.provider + "/" + info.model + " — " + (info.name.empty() ? info.model : info.name);
 }
@@ -303,36 +261,6 @@ const tool_definition g_subagent_def{
 		{"required", boost::json::array{"description", "prompt"}}},
 };
 
-const tool_definition g_send_def{
-	"send_message",
-	"Send a message to a continuable child agent started by subagent. If the child is idle it starts "
-	"a turn; if it is already working the message is delivered to it at its next step.",
-	boost::json::value{
-		{"type", "object"},
-		{"properties",
-		 boost::json::object{
-			 {"id", boost::json::object{{"type", "string"}, {"description", "The child id returned by subagent."}}},
-			 {"message", boost::json::object{{"type", "string"}, {"description", "The message to send."}}}}},
-		{"required", boost::json::array{"id", "message"}}},
-};
-
-const tool_definition g_interrupt_def{
-	"interrupt_agent",
-	"Stop a running child agent's current turn. The child stays alive and keeps any queued messages.",
-	boost::json::value{
-		{"type", "object"},
-		{"properties",
-		 boost::json::object{
-			 {"id", boost::json::object{{"type", "string"}, {"description", "The child id to interrupt."}}}}},
-		{"required", boost::json::array{"id"}}},
-};
-
-const tool_definition g_list_def{
-	"list_agents",
-	"List the child agents this session started, with whether each is running and how many messages are queued.",
-	boost::json::value{{"type", "object"}, {"properties", boost::json::object{}}},
-};
-
 struct tool_subagent_plugin : araya::plugin {
 	explicit tool_subagent_plugin(araya::plugin_config config)
 		: config_(parse_config(config)) {}
@@ -362,12 +290,6 @@ struct tool_subagent_plugin : araya::plugin {
 			ctx,
 			tool_definition{config_.tool_name, g_subagent_def.description, g_subagent_def.parameters},
 			[subs, cfg](tool_context const& call) { return subagent_handler(subs, cfg, call); });
-
-		tools->register_tool(
-			ctx, g_send_def, [subs](tool_context const& call) { return send_message_handler(subs, call); });
-		tools->register_tool(
-			ctx, g_interrupt_def, [subs](tool_context const& call) { return interrupt_handler(subs, call); });
-		tools->register_tool(ctx, g_list_def, [subs](tool_context const& call) { return list_handler(subs, call); });
 
 		// Optional catalog discovery: registered by the one instance that owns
 		// it, only when the llm service is mounted.

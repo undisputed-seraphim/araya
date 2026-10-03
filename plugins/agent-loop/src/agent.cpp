@@ -1109,6 +1109,8 @@ agent_status agent_service::status(araya::session::session_id const& session) co
 	return state && state->running ? agent_status::running : agent_status::idle;
 }
 
+bool agent_service::live(araya::session::session_id const& session) const { return static_cast<bool>(find(session)); }
+
 araya::task<void> agent_service::when_idle(araya::session::session_id const& session) {
 	for (;;) {
 		auto state = find(session);

@@ -543,28 +543,61 @@ bool subagents_service::interrupt(std::string const& child) {
 	return true;
 }
 
+child_info subagents_service::describe(std::string const& id) const {
+	auto const it = children_.find(id);
+	child_info info;
+	info.id = id;
+	if (it == children_.end())
+		return info;
+	auto const& state = it->second;
+	auto const sid = araya::session::session_id{id};
+	std::size_t pending = 0;
+	if (auto const* inbox = agent_->inbox(sid))
+		pending = inbox->next_turn.size() + inbox->next_step.size();
+	auto const outcome = agent_->last_outcome(sid);
+	std::string stop_reason;
+	if (outcome.turn > 0)
+		stop_reason = araya::agent::run_status_name(outcome.status);
+	child_status status = child_status::ready;
+	if (agent_->live(sid))
+		status =
+			agent_->status(sid) == araya::agent::agent_status::running ? child_status::running : child_status::idle;
+	info.parent = state.parent;
+	info.label = state.label;
+	info.provider = state.backend;
+	info.status = status;
+	info.pending = pending;
+	info.stop_reason = std::move(stop_reason);
+	return info;
+}
+
 std::vector<child_info> subagents_service::list_children(std::optional<std::string> const& parent) const {
 	std::vector<child_info> out;
 	for (auto const& [id, state] : children_) {
 		if (parent && state.parent != *parent)
 			continue;
-		auto const sid = araya::session::session_id{id};
-		std::size_t pending = 0;
-		if (auto const* inbox = agent_->inbox(sid))
-			pending = inbox->next_turn.size() + inbox->next_step.size();
-		auto const outcome = agent_->last_outcome(sid);
-		std::string stop_reason;
-		if (outcome.turn > 0)
-			stop_reason = araya::agent::run_status_name(outcome.status);
-		out.push_back(child_info{
-			state.id,
-			state.parent,
-			state.label,
-			state.backend,
-			agent_->status(sid) == araya::agent::agent_status::running,
-			pending,
-			std::move(stop_reason)});
+		out.push_back(describe(id));
 	}
+	return out;
+}
+
+std::vector<child_info> subagents_service::list_descendants(std::string const& root) const {
+	std::map<std::string, std::vector<std::string>> by_parent;
+	for (auto const& [id, state] : children_)
+		by_parent[state.parent].push_back(id);
+	std::vector<child_info> out;
+	std::function<void(std::string const&, std::uint32_t)> walk = [&](std::string const& parent, std::uint32_t depth) {
+		auto const it = by_parent.find(parent);
+		if (it == by_parent.end())
+			return;
+		for (auto const& id : it->second) {
+			auto info = describe(id);
+			info.depth = depth;
+			out.push_back(std::move(info));
+			walk(id, depth + 1);
+		}
+	};
+	walk(root, 1);
 	return out;
 }
 

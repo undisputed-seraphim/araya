@@ -54,6 +54,7 @@ target_link_libraries(araya_app PRIVATE
     araya::tool-read-image
     araya::tool-skill
     araya::tool-subagent
+    araya::tool-subagent-control
     araya::tool-todo
     araya::tool-web
     araya::tool-workflow
