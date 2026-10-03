@@ -442,6 +442,81 @@ TEST_CASE("surface/replace validates its span and message shape") {
 	});
 }
 
+TEST_CASE("surface/replace re-places the substitute at the removed span's position") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto store = h.store(root_ctx);
+		auto s = store->create(root_ctx, session_id{"s1"});
+		s->append("user/message", message("m0", "user", boost::json::array{})); // seq 0
+		s->append("user/message", message("m1", "user", boost::json::array{})); // seq 1
+		s->append("user/message", message("m2", "user", boost::json::array{})); // seq 2
+
+		// The middle node is rewritten in place: [m0, mX, m2], not [m0, m2, mX].
+		auto const replace_seq =
+			s->append("surface/replace", replace_event(1, 2, message("mX", "user", boost::json::array{})));
+		REQUIRE(s->surface().messages().size() == 3);
+		CHECK(s->surface().messages()[0].id == "m0");
+		CHECK(s->surface().messages()[1].id == "mX");
+		CHECK(s->surface().messages()[2].id == "m2");
+		// The rewritten node's source seq is the replace event's seq.
+		REQUIRE(s->surface().source_seqs().size() == 3);
+		CHECK(s->surface().source_seqs()[1] == replace_seq);
+	});
+}
+
+TEST_CASE("surface/replace collapses a multi-node span in place") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto store = h.store(root_ctx);
+		auto s = store->create(root_ctx, session_id{"s1"});
+		s->append("user/message", message("m0", "user", boost::json::array{})); // seq 0
+		s->append("user/message", message("m1", "user", boost::json::array{})); // seq 1
+		s->append("user/message", message("m2", "user", boost::json::array{})); // seq 2
+
+		// [0, 2) covers seqs 0 and 1: the two leading nodes collapse to one
+		// node in their position, leaving m2 after it.
+		s->append("surface/replace", replace_event(0, 2, message("mY", "user", boost::json::array{})));
+		REQUIRE(s->surface().messages().size() == 2);
+		CHECK(s->surface().messages()[0].id == "mY");
+		CHECK(s->surface().messages()[1].id == "m2");
+	});
+}
+
+TEST_CASE("surface/replace preserves the replacement's source plugin") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.session_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto store = h.store(root_ctx);
+		auto s = store->create(root_ctx, session_id{"s1"});
+		s->append("system/message", system("s0", "agent-loop", boost::json::array{{{"type", "text"}, {"text", "a"}}}));
+
+		boost::json::object replacement{
+			{"id", "s1"},
+			{"role", "system"},
+			{"content", boost::json::array{{{"type", "text"}, {"text", "b"}}}},
+			{"source", boost::json::object{{"kind", "plugin"}, {"plugin", "agent-loop"}}}};
+		s->append(
+			"surface/replace",
+			boost::json::object{{"start_seq", 0}, {"end_seq", 1}, {"message", std::move(replacement)}});
+
+		REQUIRE(s->surface().messages().size() == 1);
+		CHECK(s->surface().messages()[0].id == "s1");
+		REQUIRE(s->surface().messages()[0].source_plugin.has_value());
+		CHECK(*s->surface().messages()[0].source_plugin == "agent-loop");
+	});
+}
+
 TEST_CASE("the store lists entered sessions") {
 	harness h;
 	h.run([&](araya::runtime& rt) -> araya::task<void> {

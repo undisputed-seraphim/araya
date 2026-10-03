@@ -22,19 +22,32 @@ void session_surface::replace(
 	session_seq end,
 	session_seq source_seq,
 	std::optional<session_message> msg) {
+	// Erase the span by source seq, then re-place the replacement at the
+	// position the span occupied (not at the tail): the replacement speaks
+	// for the removed nodes in their position, so a mid-history update keeps
+	// everything after it in place. A span that matches nothing appends.
+	std::optional<std::size_t> insert_at;
 	std::size_t write = 0;
 	for (std::size_t i = 0; i < messages_.size(); ++i) {
-		if (source_seqs_[i] >= start && source_seqs_[i] < end)
+		if (source_seqs_[i] >= start && source_seqs_[i] < end) {
+			if (!insert_at)
+				insert_at = write;
 			continue;
-		messages_[write] = std::move(messages_[i]);
-		source_seqs_[write] = source_seqs_[i];
+		}
+		// Skip the self-assignment when nothing has been removed ahead of
+		// this node (self-move would clear the id/content).
+		if (write != i) {
+			messages_[write] = std::move(messages_[i]);
+			source_seqs_[write] = source_seqs_[i];
+		}
 		++write;
 	}
 	messages_.resize(write);
 	source_seqs_.resize(write);
 	if (msg) {
-		messages_.push_back(std::move(*msg));
-		source_seqs_.push_back(source_seq);
+		auto const at = insert_at.value_or(messages_.size());
+		messages_.insert(messages_.begin() + static_cast<std::ptrdiff_t>(at), std::move(*msg));
+		source_seqs_.insert(source_seqs_.begin() + static_cast<std::ptrdiff_t>(at), source_seq);
 	}
 }
 
@@ -176,9 +189,20 @@ surface_plan fold_builtin(session_event const& ev) {
 				auto role = string_field(*msg, "role");
 				auto content = msg->find("content");
 				if (id && role && content != msg->end()) {
-					if (auto parsed = parse_role(*role))
+					if (auto parsed = parse_role(*role)) {
+						std::optional<std::string> plugin;
+						if (auto sit = msg->find("source"); sit != msg->end()) {
+							if (auto const* src = sit->value().if_object())
+								plugin = string_field(*src, "plugin");
+						}
 						plan.message = session_message{
-							*parsed, *std::move(id), content->value(), std::nullopt, std::nullopt, source_field(*msg)};
+							*parsed,
+							*std::move(id),
+							content->value(),
+							std::nullopt,
+							std::move(plugin),
+							source_field(*msg)};
+					}
 				}
 			}
 		}

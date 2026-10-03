@@ -19,13 +19,23 @@ class session_surface {
 public:
 	std::vector<session_message> const& messages() const noexcept { return messages_; }
 
+	// The source event seq of each surface message, positionally aligned with
+	// messages(): the seq of the event that currently represents that node
+	// (a message event, or the 'surface/replace' event that last rewrote it).
+	std::vector<session_seq> const& source_seqs() const noexcept { return source_seqs_; }
+
 	// Folds one appended event's message into the surface.
 	void push(session_seq source_seq, session_message msg);
 
-	// Splicing: erases every message whose source event falls in
-	// [start, end), then appends the replacement (if any) at the end -
-	// the replacement speaks for the whole removed span, in the position
-	// of the event that removed it.
+	// Splicing: erases every message whose source event falls in [start, end),
+	// then re-places the replacement (if any) at the position the removed span
+	// occupied — the replacement speaks for the whole removed span in place.
+	// A span that matches nothing appends the replacement at the tail.
+	//
+	// NOTE: session-surface semantics are plugin-layer (the proof rig models
+	// the plugin runtime, not session history), so this is not yet covered by
+	// the model/oracle. The positional-replace observable is a candidate to
+	// formalize in the model and core later (see proof/README.md).
 	void replace(session_seq start, session_seq end, session_seq source_seq, std::optional<session_message> msg);
 
 private:
