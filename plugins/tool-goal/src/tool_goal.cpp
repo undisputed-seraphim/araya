@@ -38,6 +38,10 @@ using araya::goal::goals_key;
 
 constexpr araya::config_key<std::uint64_t> blocked_after_key{"blockedAfterConsecutiveRounds"};
 
+constexpr araya::config_field g_config[] = {
+	field(blocked_after_key, "Consecutive rounds before a goal may be marked blocked.", "3"),
+};
+
 // The authenticated call context: the exact calling session and the start
 // sequence of the open model turn (the authority window).
 struct execution {
@@ -351,7 +355,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"agent", 1}, true, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
-static const araya::plugin_descriptor g_descriptor{"tool-goal", g_deps, g_provs, &make_tool_goal};
+static const araya::plugin_descriptor g_descriptor{"tool-goal", g_deps, g_provs, &make_tool_goal, g_config};
 
 } // namespace
 

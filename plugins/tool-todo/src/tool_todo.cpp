@@ -41,6 +41,10 @@ using araya::util::string::trim;
 
 constexpr araya::config_key<bool> allow_parallel_key{"allow_parallel_in_progress"};
 
+constexpr araya::config_field g_config[] = {
+	field(allow_parallel_key, "Allow more than one in-progress task.", "true"),
+};
+
 constexpr std::string_view status_pending = "pending";
 constexpr std::string_view status_in_progress = "in_progress";
 constexpr std::string_view status_completed = "completed";
@@ -268,7 +272,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"tools", 1}, true, {}},
 };
 static const araya::provision_spec g_provs[]{{araya::service_id{"todos", 1}}};
-static const araya::plugin_descriptor g_descriptor{"tool-todo", g_deps, g_provs, &make_tool_todo};
+static const araya::plugin_descriptor g_descriptor{"tool-todo", g_deps, g_provs, &make_tool_todo, g_config};
 
 } // namespace
 

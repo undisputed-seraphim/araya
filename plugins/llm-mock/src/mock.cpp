@@ -90,6 +90,23 @@ inline constexpr araya::config_key<std::uint64_t> output_tokens_key{"output_toke
 inline constexpr araya::config_key<std::int64_t> delay_ms_key{"delay_ms"};
 inline constexpr araya::config_key<std::string> script_key{"script"};
 
+namespace {
+constexpr araya::config_field g_config[] = {
+	field(provider_key, "Route name.", "mock"),
+	field(model_key, "Advertised model id.", "mock-model"),
+	field(response_key, "Canned reply; {user} expands to the last user text.", "echo: {user}"),
+	field(fail_key, "Fail every request.", "false"),
+	field(fail_code_key, "Failure code name.", "server"),
+	field(fail_message_key, "Failure message.", "mock failure"),
+	field(input_tokens_key, "Reported input tokens.", "1"),
+	field(output_tokens_key, "Reported output tokens.", "1"),
+	field(delay_ms_key, "Pacing between chunks in milliseconds.", "0"),
+	field(script_key, "JSON array of scripted steps."),
+};
+} // namespace
+
+std::span<araya::config_field const> config_schema() { return g_config; }
+
 mock_config load_config(araya::plugin_config const& config) {
 	// The typed accessors throw config_error on malformed values (a
 	// missing key is still the default).

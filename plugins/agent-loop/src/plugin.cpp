@@ -20,6 +20,10 @@ namespace {
 // `maxTokensAsSuccess`, applied at the loop since we have no separate server).
 constexpr araya::config_key<bool> max_tokens_as_success_key{"max_tokens_as_success"};
 
+constexpr araya::config_field g_config[] = {
+	field(max_tokens_as_success_key, "Report a max-token termination as a completed turn.", "false"),
+};
+
 boost::json::value lifecycle_source(araya::session::session const& session) {
 	return boost::json::object{{"kind", session.header().is_seeded ? "resume" : "startup"}};
 }
@@ -108,7 +112,7 @@ static const araya::dependency_spec g_agent_deps[]{
 	{araya::service_id{"tools", 1}, true, {}},
 };
 static const araya::provision_spec g_agent_provs[]{{araya::service_id{"agent", 1}}};
-static const araya::plugin_descriptor g_descriptor{"agent-loop", g_agent_deps, g_agent_provs, &make_agent};
+static const araya::plugin_descriptor g_descriptor{"agent-loop", g_agent_deps, g_agent_provs, &make_agent, g_config};
 
 } // namespace
 

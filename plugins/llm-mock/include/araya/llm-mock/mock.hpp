@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -57,6 +58,9 @@ struct mock_config {
 // Parses the flat config map. Throws std::invalid_argument on unknown
 // fail_code names - the mounting fiber reports it.
 mock_config load_config(araya::plugin_config const& config);
+
+// The mock's declared config knobs (for host validation/introspection).
+std::span<araya::config_field const> config_schema();
 
 class mock_adapter : public araya::llm::llm_adapter {
 public:

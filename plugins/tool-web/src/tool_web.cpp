@@ -43,6 +43,11 @@ constexpr std::string_view external_notice =
 constexpr araya::config_key<std::uint64_t> max_results_key{"search_max_results"};
 constexpr araya::config_key<std::uint64_t> max_queries_key{"search_max_queries"};
 
+constexpr araya::config_field g_config[] = {
+	field(max_results_key, "Maximum web-search results per query.", "8"),
+	field(max_queries_key, "Maximum web-search queries per call.", "4"),
+};
+
 struct tool_web_config {
 	std::size_t max_results = 8;
 	std::size_t max_queries = 4;
@@ -249,7 +254,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"web", 1}, true, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
-static const araya::plugin_descriptor g_descriptor{"tool-web", g_deps, g_provs, &make_tool_web};
+static const araya::plugin_descriptor g_descriptor{"tool-web", g_deps, g_provs, &make_tool_web, g_config};
 
 } // namespace
 

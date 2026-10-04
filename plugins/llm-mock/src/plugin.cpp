@@ -29,7 +29,7 @@ std::unique_ptr<araya::plugin> make_mock(araya::plugin_config const& config) {
 
 static const araya::dependency_spec g_llm_dep[]{{araya::service_id{"llm", 1}, true, {}}};
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
-static const araya::plugin_descriptor g_descriptor{"llm-mock", g_llm_dep, g_no_provs, &make_mock};
+static const araya::plugin_descriptor g_descriptor{"llm-mock", g_llm_dep, g_no_provs, &make_mock, config_schema()};
 
 } // namespace
 

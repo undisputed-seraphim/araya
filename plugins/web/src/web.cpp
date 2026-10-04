@@ -30,6 +30,13 @@ constexpr araya::config_key<std::uint64_t> timeout_ms_key{"timeout_ms"};
 constexpr araya::config_key<std::string> search_endpoint_key{"search_endpoint"};
 constexpr araya::config_key<std::string> search_api_key_key{"search_api_key"};
 
+constexpr araya::config_field g_config[] = {
+	field(fetch_max_bytes_key, "Cap on bytes fetched from one URL.", "200000"),
+	field(timeout_ms_key, "Per-request timeout in milliseconds.", "30000"),
+	field(search_endpoint_key, "Web-search endpoint; empty disables search."),
+	field(search_api_key_key, "API key for the search endpoint."),
+};
+
 struct web_config {
 	std::size_t fetch_max_bytes = 200'000;
 	std::uint64_t timeout_ms = 30'000;
@@ -342,7 +349,7 @@ std::unique_ptr<araya::plugin> make_web(araya::plugin_config const& config) {
 
 static constexpr std::span<araya::dependency_spec const> g_deps{};
 static const araya::provision_spec g_provs[]{{araya::service_id{"web", 1}}};
-static const araya::plugin_descriptor g_descriptor{"web", g_deps, g_provs, &make_web};
+static const araya::plugin_descriptor g_descriptor{"web", g_deps, g_provs, &make_web, g_config};
 
 } // namespace
 

@@ -18,6 +18,13 @@ constexpr araya::config_key<std::uint64_t> max_message_key{"max_message_bytes"};
 constexpr araya::config_key<std::uint64_t> max_concurrency_key{"max_concurrency"};
 constexpr araya::config_key<std::uint64_t> max_total_agents_key{"max_total_agents"};
 
+constexpr araya::config_field g_config[] = {
+	field(node_key, "Node executable for the workflow worker.", "node"),
+	field(max_message_key, "Maximum control-frame/queued-write size in bytes.", "4194304"),
+	field(max_concurrency_key, "Agents run at once; further calls queue.", "4"),
+	field(max_total_agents_key, "Ceiling on accepted agent() calls per run.", "64"),
+};
+
 config parse_config(araya::plugin_config const& raw) {
 	araya::plugin_config_view const view(raw);
 	config out;
@@ -65,7 +72,8 @@ static const araya::dependency_spec g_workflow_deps[]{
 	{araya::service_id{"subagents", 1}, true, {}},
 };
 static const araya::provision_spec g_workflow_provs[]{{araya::service_id{"workflow", 1}}};
-static const araya::plugin_descriptor g_descriptor{"workflow", g_workflow_deps, g_workflow_provs, &make_workflow};
+static const araya::plugin_descriptor
+	g_descriptor{"workflow", g_workflow_deps, g_workflow_provs, &make_workflow, g_config};
 
 } // namespace
 

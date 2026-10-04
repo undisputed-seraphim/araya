@@ -21,6 +21,10 @@ namespace fs = std::filesystem;
 
 constexpr araya::config_key<std::string> root_key{"root"};
 
+constexpr araya::config_field g_config[] = {
+	field(root_key, "Attachment store root directory.", "araya-attachments"),
+};
+
 struct image_info {
 	std::string media_type;
 	std::uint32_t width = 0;
@@ -161,7 +165,7 @@ std::unique_ptr<araya::plugin> make_attachment(araya::plugin_config const& confi
 
 static constexpr std::span<araya::dependency_spec const> g_deps{};
 static const araya::provision_spec g_provs[]{{araya::service_id{"attachments", 1}}};
-static const araya::plugin_descriptor g_descriptor{"attachment", g_deps, g_provs, &make_attachment};
+static const araya::plugin_descriptor g_descriptor{"attachment", g_deps, g_provs, &make_attachment, g_config};
 
 } // namespace
 

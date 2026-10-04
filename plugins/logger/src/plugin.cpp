@@ -23,6 +23,11 @@ namespace {
 
 inline constexpr araya::config_key<log_level> level_key{"level"};
 
+constexpr araya::config_field g_config[] = {
+	{"name", "Default logger name.", "araya", false, nullptr},
+	field(level_key, "Log threshold (error|warn|info|debug).", "info"),
+};
+
 // The logger provider: apply() constructs the service from config and
 // binds it under logger_key. No dependencies.
 struct logger_plugin : araya::plugin {
@@ -47,7 +52,7 @@ std::unique_ptr<araya::plugin> make_logger(araya::plugin_config const& config) {
 
 static constexpr std::span<araya::dependency_spec const> g_no_deps{};
 static const araya::provision_spec g_logger_prov[]{{araya::service_id{"logger", 1}}};
-static const araya::plugin_descriptor g_descriptor{"logger", g_no_deps, g_logger_prov, &make_logger};
+static const araya::plugin_descriptor g_descriptor{"logger", g_no_deps, g_logger_prov, &make_logger, g_config};
 
 } // namespace
 

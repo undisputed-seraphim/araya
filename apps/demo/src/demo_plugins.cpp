@@ -113,12 +113,19 @@ static const araya::provision_spec g_bomb_logger_prov[]{{araya::service_id{"logg
 static const araya::provision_spec g_bomb_timer_prov[]{{araya::service_id{"timer", 1}}};
 static const araya::provision_spec g_bomb_sessions_prov[]{{araya::service_id{"sessions", 1}}};
 
+constexpr araya::config_field g_bomb_config[] = {
+	{"what", "Service the bomb replaces (logger|timer|session).", "", false, nullptr},
+};
+
 static const araya::plugin_descriptor g_console_desc{"console", g_console_inject, g_no_provs, &make_console};
 static const araya::plugin_descriptor g_beacon_desc{"beacon", g_no_deps, g_beacon_prov, &make_beacon};
 static const araya::plugin_descriptor g_watcher_desc{"watcher", g_watcher_inject, g_no_provs, &make_watcher};
-static const araya::plugin_descriptor g_bomb_logger_desc{"bomb", g_no_deps, g_bomb_logger_prov, &make_bomb};
-static const araya::plugin_descriptor g_bomb_timer_desc{"bomb", g_no_deps, g_bomb_timer_prov, &make_bomb};
-static const araya::plugin_descriptor g_bomb_sessions_desc{"bomb", g_no_deps, g_bomb_sessions_prov, &make_bomb};
+static const araya::plugin_descriptor
+	g_bomb_logger_desc{"bomb", g_no_deps, g_bomb_logger_prov, &make_bomb, g_bomb_config};
+static const araya::plugin_descriptor
+	g_bomb_timer_desc{"bomb", g_no_deps, g_bomb_timer_prov, &make_bomb, g_bomb_config};
+static const araya::plugin_descriptor
+	g_bomb_sessions_desc{"bomb", g_no_deps, g_bomb_sessions_prov, &make_bomb, g_bomb_config};
 
 } // namespace
 

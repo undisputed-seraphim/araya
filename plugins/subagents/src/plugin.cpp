@@ -16,6 +16,10 @@ namespace {
 // service through the seam.
 constexpr araya::config_key<std::uint32_t> max_depth_key{"max_depth"};
 
+constexpr araya::config_field g_config[] = {
+	field(max_depth_key, "Delegation depth ceiling.", "1"),
+};
+
 struct subagents_plugin : araya::plugin {
 	explicit subagents_plugin(araya::plugin_config config)
 		: config_(std::move(config)) {}
@@ -62,7 +66,8 @@ static const araya::dependency_spec g_subagents_deps[]{
 	{araya::service_id{"system-prompt", 1}, true, {}},
 };
 static const araya::provision_spec g_subagents_provs[]{{araya::service_id{"subagents", 1}}};
-static const araya::plugin_descriptor g_descriptor{"subagents", g_subagents_deps, g_subagents_provs, &make_subagents};
+static const araya::plugin_descriptor
+	g_descriptor{"subagents", g_subagents_deps, g_subagents_provs, &make_subagents, g_config};
 
 } // namespace
 

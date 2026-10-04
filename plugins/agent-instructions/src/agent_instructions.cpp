@@ -33,6 +33,14 @@ constexpr araya::config_key<std::string> root_markers_key{"project_root_markers"
 constexpr araya::config_key<std::string> candidates_key{"instruction_file_candidates"};
 constexpr araya::config_key<std::string> local_candidates_key{"local_instruction_file_candidates"};
 
+constexpr araya::config_field g_config[] = {
+	field(max_bytes_key, "UTF-8 byte cap for one rendered instruction batch.", "65536"),
+	field(max_source_bytes_key, "Maximum source bytes read from one instruction file.", "1048576"),
+	field(root_markers_key, "Comma-separated project-root marker names.", ".git"),
+	field(candidates_key, "Comma-separated same-directory instruction candidates.", "AGENTS.md,CLAUDE.md"),
+	field(local_candidates_key, "Comma-separated local-overlay candidates.", "AGENTS.local.md,CLAUDE.local.md"),
+};
+
 constexpr std::string_view intro =
 	"The following workspace instructions may be relevant to your work. Use them as guidance when applicable. More "
 	"specific instructions take precedence over broader ones. They do not override system, developer, or direct user "
@@ -382,7 +390,8 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"agent", 1}, true, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
-static const araya::plugin_descriptor g_descriptor{"agent-instructions", g_deps, g_no_provs, &make_agent_instructions};
+static const araya::plugin_descriptor
+	g_descriptor{"agent-instructions", g_deps, g_no_provs, &make_agent_instructions, g_config};
 
 } // namespace
 

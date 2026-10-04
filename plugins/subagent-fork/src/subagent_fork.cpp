@@ -19,6 +19,10 @@ namespace {
 
 constexpr araya::config_key<std::string> provider_name_key{"provider_name"};
 
+constexpr araya::config_field g_config[] = {
+	field(provider_name_key, "Registered name for the fork provider.", "fork"),
+};
+
 // The balanced completed-turn prefix of the parent's log: every event up to
 // and including the last `turn/end`. The in-flight turn is excluded because it
 // is unbalanced and cannot be replayed as a valid child session. Before any
@@ -97,7 +101,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"subagents", 1}, true, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
-static const araya::plugin_descriptor g_descriptor{"subagent-fork", g_deps, g_provs, &make_subagent_fork};
+static const araya::plugin_descriptor g_descriptor{"subagent-fork", g_deps, g_provs, &make_subagent_fork, g_config};
 
 } // namespace
 

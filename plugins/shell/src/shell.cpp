@@ -60,6 +60,14 @@ constexpr araya::config_key<std::string> shell_key{"shell"};
 constexpr araya::config_key<bool> background_key{"enable_run_in_background"};
 constexpr araya::config_key<std::uint64_t> spill_max_key{"spill_max_bytes"};
 
+constexpr araya::config_field g_config[] = {
+	field(timeout_key, "Per-command timeout in milliseconds.", "30000"),
+	field(max_output_key, "Cap on captured stdout/stderr bytes.", "100000"),
+	field(shell_key, "Shell executable used for commands.", "/bin/bash"),
+	field(background_key, "Expose the run_in_background parameter.", "true"),
+	field(spill_max_key, "Per-stream cap on the full-output spill file.", "67108864"),
+};
+
 struct shell_config {
 	std::uint64_t timeout_ms = 30000;
 	std::size_t max_output = 100'000;
@@ -691,7 +699,7 @@ static const araya::dependency_spec g_shell_deps[]{
 	{araya::sandbox_policy::sandbox_policy_key.id, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_shell_provs{};
-static const araya::plugin_descriptor g_descriptor{"shell", g_shell_deps, g_shell_provs, &make_shell};
+static const araya::plugin_descriptor g_descriptor{"shell", g_shell_deps, g_shell_provs, &make_shell, g_config};
 
 } // namespace
 

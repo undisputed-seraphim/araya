@@ -53,6 +53,16 @@ constexpr araya::config_key<std::uint64_t> grep_max_line_key{"grep_max_line_byte
 constexpr araya::config_key<std::uint64_t> spill_bytes_key{"spill_threshold_bytes"};
 constexpr araya::config_key<std::string> disabled_key{"disabled"};
 
+constexpr araya::config_field g_config[] = {
+	field(read_limit_key, "Default line cap for file reads.", "2000"),
+	field(read_max_line_key, "Maximum bytes kept from one read line.", "2000"),
+	field(glob_max_key, "Maximum glob results.", "100"),
+	field(grep_max_key, "Maximum grep matches.", "250"),
+	field(grep_max_line_key, "Maximum bytes kept from one grep line.", "2000"),
+	field(spill_bytes_key, "Complete search output above this many bytes spills to a file.", "200000"),
+	field(disabled_key, "Comma-separated tool names to leave unregistered."),
+};
+
 struct coreutil_config {
 	std::size_t read_limit = 2000;
 	std::size_t read_max_line = 2000;
@@ -1005,7 +1015,8 @@ static const araya::dependency_spec g_coreutil_deps[]{
 	{araya::service_id{"tools", 1}, true, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_coreutil_provs{};
-static const araya::plugin_descriptor g_descriptor{"coreutil", g_coreutil_deps, g_coreutil_provs, &make_coreutil};
+static const araya::plugin_descriptor
+	g_descriptor{"coreutil", g_coreutil_deps, g_coreutil_provs, &make_coreutil, g_config};
 
 } // namespace
 

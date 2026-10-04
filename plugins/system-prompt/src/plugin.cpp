@@ -20,6 +20,14 @@ inline constexpr araya::config_key<std::string> persona_suffix_key{"persona_suff
 inline constexpr araya::config_key<bool> include_harness_identity_key{"include_harness_identity"};
 inline constexpr araya::config_key<bool> include_runtime_context_key{"include_runtime_context"};
 
+constexpr araya::config_field g_config[] = {
+	field(persona_prefix_key, "Persona prefix prepended to the system prompt."),
+	field(persona_suffix_key, "Persona suffix appended after the prefix."),
+	field(include_harness_identity_key, "Include the harness identity section.", "true"),
+	field(include_runtime_context_key, "Include the runtime-context section.", "true"),
+	{"tool_order", "JSON array of tool names fixing their prompt order.", "", false, nullptr},
+};
+
 // The prompt registry: apply() constructs the service, seeds it from the
 // plugin config (persona, identity/runtime-context switches, tool order),
 // and binds it under system_prompt_key. No dependencies - feature plugins
@@ -64,11 +72,8 @@ std::unique_ptr<araya::plugin> make_system_prompt(araya::plugin_config const& co
 
 static constexpr std::span<araya::dependency_spec const> g_no_deps{};
 static const araya::provision_spec g_system_prompt_provs[]{{araya::service_id{"system-prompt", 1}}};
-static const araya::plugin_descriptor g_descriptor{
-	"system-prompt",
-	g_no_deps,
-	g_system_prompt_provs,
-	&make_system_prompt};
+static const araya::plugin_descriptor
+	g_descriptor{"system-prompt", g_no_deps, g_system_prompt_provs, &make_system_prompt, g_config};
 
 } // namespace
 

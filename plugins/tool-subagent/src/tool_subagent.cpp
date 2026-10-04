@@ -36,6 +36,17 @@ constexpr araya::config_key<std::string> child_model_key{"child_model"};
 constexpr araya::config_key<std::string> reasoning_effort_key{"reasoning_effort"};
 constexpr araya::config_key<bool> list_models_key{"list_models"};
 
+constexpr araya::config_field g_config[] = {
+	field(provider_key, "Subagent provider name.", "spawn"),
+	field(tool_name_key, "Model-facing delegation tool name.", "subagent"),
+	field(background_mode_key, "Background policy: continuable|one-shot.", "continuable"),
+	field(max_depth_key, "Delegation depth ceiling for this tool.", "1"),
+	field(child_provider_key, "Default child LLM provider."),
+	field(child_model_key, "Default child LLM model."),
+	field(reasoning_effort_key, "Default child reasoning effort."),
+	field(list_models_key, "Register list_subagent_models (one instance owns it).", "true"),
+};
+
 struct subagent_config {
 	std::string provider = "spawn";
 	std::string tool_name = "subagent";
@@ -320,7 +331,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::llm::llm_key.id, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
-static const araya::plugin_descriptor g_descriptor{"tool-subagent", g_deps, g_provs, &make_tool_subagent};
+static const araya::plugin_descriptor g_descriptor{"tool-subagent", g_deps, g_provs, &make_tool_subagent, g_config};
 
 } // namespace
 

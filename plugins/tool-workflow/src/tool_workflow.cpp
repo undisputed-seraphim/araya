@@ -31,6 +31,12 @@ constexpr araya::config_key<std::string> tool_name_key{"tool_name"};
 constexpr araya::config_key<bool> enabled_key{"enabled"};
 constexpr araya::config_key<std::uint64_t> max_result_key{"max_result_chars"};
 
+constexpr araya::config_field g_config[] = {
+	field(tool_name_key, "Model-facing tool name.", "workflow"),
+	field(enabled_key, "Register the model-facing tool (needs Node).", "false"),
+	field(max_result_key, "Maximum characters of a workflow result returned to the model.", "50000"),
+};
+
 struct tool_workflow_config {
 	std::string tool_name = "workflow";
 	bool enabled = false;
@@ -229,7 +235,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"system-prompt", 1}, true, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
-static const araya::plugin_descriptor g_descriptor{"tool-workflow", g_deps, g_provs, &make_tool_workflow};
+static const araya::plugin_descriptor g_descriptor{"tool-workflow", g_deps, g_provs, &make_tool_workflow, g_config};
 
 } // namespace
 

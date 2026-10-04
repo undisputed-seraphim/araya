@@ -27,6 +27,10 @@ using araya::util::string::trim;
 
 constexpr araya::config_key<std::string> custom_dirs_key{"custom_skill_dirs"};
 
+constexpr araya::config_field g_config[] = {
+	field(custom_dirs_key, "Comma-separated extra skill root directories."),
+};
+
 // Ranks decide duplicate-name winners (lower wins) and scan order. The
 // harness's project rows plus an optional custom row.
 constexpr int project_dsh_rank = 100;
@@ -321,7 +325,7 @@ std::unique_ptr<araya::plugin> make_skill(araya::plugin_config const& config) {
 
 static constexpr std::span<araya::dependency_spec const> g_deps{};
 static const araya::provision_spec g_provs[]{{araya::service_id{"skills", 1}}};
-static const araya::plugin_descriptor g_descriptor{"skill", g_deps, g_provs, &make_skill};
+static const araya::plugin_descriptor g_descriptor{"skill", g_deps, g_provs, &make_skill, g_config};
 
 } // namespace
 

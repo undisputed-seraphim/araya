@@ -130,6 +130,22 @@ std::optional<T> parse_value(std::string_view text) {
 	return config_parser<T>::parse(text);
 }
 
+// Whether `text` parses as this field's type (the validator stored in a
+// config_field). A string field accepts anything.
+template <class T>
+bool config_field_valid(std::string_view text) {
+	return config_parser<T>::parse(text).has_value();
+}
+
+// Build one declared config knob from a typed key. `default_value` is the
+// built-in default in its string form (empty means "unset"); a string field
+// carries no validator.
+template <class T>
+constexpr config_field
+field(config_key<T> key, std::string_view description, std::string_view default_value = {}, bool required = false) {
+	return config_field{key.name, description, default_value, required, &config_field_valid<T>};
+}
+
 // Read-only typed access over a plugin_config. get()/operator[] throw
 // config_error for absent and malformed values; try_get() returns
 // nullopt only when the key is absent — a present but malformed value

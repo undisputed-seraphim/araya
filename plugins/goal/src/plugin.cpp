@@ -12,6 +12,10 @@ namespace {
 
 constexpr araya::config_key<std::uint64_t> default_max_goal_rounds_key{"defaultMaxGoalRounds"};
 
+constexpr araya::config_field g_config[] = {
+	field(default_max_goal_rounds_key, "Default goal round budget.", "256"),
+};
+
 // The goal provider: constructs the service over the session store, registers
 // the `goal` projection, and binds the service under goals_key.
 struct goal_plugin : araya::plugin {
@@ -48,7 +52,7 @@ static const araya::dependency_spec g_goal_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
 };
 static const araya::provision_spec g_goal_provs[]{{araya::service_id{"goals", 1}}};
-static const araya::plugin_descriptor g_descriptor{"goal", g_goal_deps, g_goal_provs, &make_goal};
+static const araya::plugin_descriptor g_descriptor{"goal", g_goal_deps, g_goal_provs, &make_goal, g_config};
 
 } // namespace
 

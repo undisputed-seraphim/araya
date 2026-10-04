@@ -25,6 +25,10 @@ namespace {
 
 constexpr araya::config_key<std::uint64_t> max_concurrent_key{"max_concurrent_jobs_per_owner"};
 
+constexpr araya::config_field g_config[] = {
+	field(max_concurrent_key, "Maximum concurrent jobs per owner.", "10"),
+};
+
 // One live wait: settlement (or teardown) cancels the timer, which resumes the
 // waiter coroutine with operation_aborted; the timer expiring naturally is the
 // timeout.
@@ -395,7 +399,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
 };
 static const araya::provision_spec g_provs[]{{araya::service_id{"jobs", 1}}};
-static const araya::plugin_descriptor g_descriptor{"jobs", g_deps, g_provs, &make_jobs};
+static const araya::plugin_descriptor g_descriptor{"jobs", g_deps, g_provs, &make_jobs, g_config};
 
 } // namespace
 

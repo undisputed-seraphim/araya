@@ -44,6 +44,11 @@ using araya::tools::tools_service;
 constexpr araya::config_key<std::uint64_t> wait_timeout_key{"waitTimeoutMs"};
 constexpr araya::config_key<std::uint64_t> max_wait_timeout_key{"maxWaitTimeoutMs"};
 
+constexpr araya::config_field g_config[] = {
+	field(wait_timeout_key, "Default wait timeout in milliseconds.", "30000"),
+	field(max_wait_timeout_key, "Maximum wait timeout in milliseconds.", "600000"),
+};
+
 struct tool_jobs_config {
 	std::uint64_t wait_timeout_ms = 30'000;
 	std::uint64_t max_wait_timeout_ms = 600'000;
@@ -323,7 +328,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"agent", 1}, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
-static const araya::plugin_descriptor g_descriptor{"tool-jobs", g_deps, g_provs, &make_tool_jobs};
+static const araya::plugin_descriptor g_descriptor{"tool-jobs", g_deps, g_provs, &make_tool_jobs, g_config};
 
 } // namespace
 

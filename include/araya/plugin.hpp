@@ -31,6 +31,19 @@ struct provision_spec {
 
 using plugin_config = std::map<std::string, std::string>;
 
+// One declared config knob: the name, a human description, the built-in
+// default, whether the host must supply it, and a validator built from the
+// plugin's config_parser<T> (null means "any string, always valid"). This is
+// metadata only - the runtime never reads it; the host uses it to validate
+// overlays and to render --print-config.
+struct config_field {
+	std::string_view name;
+	std::string_view description;
+	std::string_view default_value;
+	bool required = false;
+	bool (*validate)(std::string_view) = nullptr;
+};
+
 // A component. One instance is created per fiber via the descriptor's
 // factory and destroyed when the fiber is retired.
 //
@@ -60,6 +73,9 @@ struct plugin_descriptor {
 	std::span<dependency_spec const> inject;
 	std::span<provision_spec const> provide;
 	std::function<std::unique_ptr<plugin>(plugin_config const&)> create;
+	// The plugin's declared config knobs; empty when it takes none. Metadata
+	// the host reads for validation/introspection; the runtime ignores it.
+	std::span<config_field const> config_schema{};
 };
 
 class context;

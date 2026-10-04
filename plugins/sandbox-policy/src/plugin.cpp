@@ -16,6 +16,11 @@ namespace {
 constexpr araya::config_key<std::string> mode_key{"mode"};
 constexpr araya::config_key<std::string> root_key{"workspace_root"};
 
+constexpr araya::config_field g_config[] = {
+	field(mode_key, "Sandbox mode.", "workspace-write"),
+	field(root_key, "Workspace root; empty uses the current directory."),
+};
+
 // Render the resolved policy without claiming which capabilities are mounted
 // (the tool layer owns the operation-specific denial guidance).
 std::string render_policy(araya::sandbox::sandbox_mode mode, std::string const& root) {
@@ -86,7 +91,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"system-prompt", 1}, true, {}},
 };
 static const araya::provision_spec g_provs[]{{araya::service_id{"sandbox-policy", 1}}};
-static const araya::plugin_descriptor g_descriptor{"sandbox-policy", g_deps, g_provs, &make_sandbox_policy};
+static const araya::plugin_descriptor g_descriptor{"sandbox-policy", g_deps, g_provs, &make_sandbox_policy, g_config};
 
 } // namespace
 
