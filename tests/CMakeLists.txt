@@ -12,6 +12,7 @@ add_executable(araya_tests
     diagnostics_test.cpp
     effects_test.cpp
     events_test.cpp
+    events_ingress_test.cpp
     invariants_test.cpp
     introspection_test.cpp
     json_test.cpp

@@ -131,6 +131,14 @@ araya::registration r = ctx.on(files, [](std::string const& path) -> araya::task
 - Registration and dispatch must run on the control strand (see below). Listener errors go
   to the bus's diagnostic sink (`set_diagnostic_sink`); `parallel` dispatch additionally
   rethrows the first listener failure at the dispatcher.
+- **Multi-producer ingress.** `event_bus::submit(key, msg, scope)` and
+  `event_bus::submit_nowait(key, msg, scope)` may be called from any thread or coroutine: they
+  hand the dispatch to the control strand, where the same strand-bound dispatch runs (so the
+  observable step sequence is unchanged). `submit` completes with the dispatch result (the
+  transformed message for `waterfall`, the flag for `bail`, nothing otherwise); `submit_nowait`
+  returns immediately and routes failures to the diagnostic sink. Submissions are linearized in
+  the order the strand receives them; there is no cross-thread ordering guarantee. A component
+  that owns worker threads can capture `plugin_context::bus()` and submit from them.
 
 ### Config lifecycle
 
@@ -166,8 +174,10 @@ All composition runs on the runtime's **control strand** (an Asio strand). The a
 entry points — `mount`, `retire`, `reconcile`, `wait_idle` — hop onto it for you. A few
 synchronous operations require you to be there already: `event_bus` dispatch/registration,
 `plugin_context::set_available`, and `runtime::run_on_strand`, which is the escape hatch
-from any thread or coroutine. Component `apply` bodies run on the strand; offload real work
-to your own executors and return to the strand to touch the context.
+from any thread or coroutine. The multi-producer `event_bus::submit`/`submit_nowait` are the
+other escape hatch for events: safe from any thread, they hop onto the strand for you.
+Component `apply` bodies run on the strand; offload real work to your own executors and
+return to the strand to touch the context.
 
 ## Building
 

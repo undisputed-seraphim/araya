@@ -92,6 +92,12 @@ public:
 		return act_ && act_->bus ? act_->bus->executor() : boost::asio::any_io_executor{};
 	}
 
+	// The runtime's event bus. Unlike plugin_context, the returned
+	// shared_ptr is safe to retain: a component that owns worker threads
+	// can capture it and use event_bus::submit()/submit_nowait() from
+	// those threads. Null for a default context.
+	std::shared_ptr<event_bus> bus() const noexcept { return act_ ? act_->bus : nullptr; }
+
 	// The interception metadata merged at access (Definition 27): the
 	// component-declared metadata overlaid with the context-carried
 	// metadata, which takes priority.

@@ -8,6 +8,8 @@
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
+#include <boost/asio/dispatch.hpp>
 #include <boost/asio/experimental/impl/promise.hpp>
 #include <boost/asio/experimental/promise.hpp>
 #include <boost/asio/experimental/use_promise.hpp>
@@ -20,6 +22,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -44,6 +47,15 @@ enum class dispatch_mode : std::uint8_t {
 	waterfall,
 	bail,
 };
+
+// The result of a multi-producer submit (see event_bus::submit): void for
+// the completion-only modes and the fire-and-forget mode, the transformed
+// message for waterfall, and the short-circuit flag for bail.
+template <dispatch_mode Mode, class Message>
+using submit_result_t = std::conditional_t<
+	Mode == dispatch_mode::waterfall,
+	Message,
+	std::conditional_t<Mode == dispatch_mode::bail, bool, void>>;
 
 // Options applied when a typed listener is registered through
 // add_listener / plugin_context::on. Raw (ABI) listeners take no options.
@@ -415,7 +427,16 @@ private:
 // (set_diagnostic_sink) - there is no dispatcher to throw at. parallel
 // rethrows the first failure; serial/waterfall/bail propagate the
 // failure that aborted them.
-class event_bus {
+//
+// MULTI-PRODUCER INGRESS: submit() / submit_nowait() may be called from
+// any thread or coroutine. They hand the dispatch to the control strand,
+// where the same strand-bound dispatch runs, so the observable step
+// sequence is unchanged (the ingress is a stutter under the refinement
+// abstraction). The bus is heap-owned (shared_from_this) and a queued
+// submission keeps it alive. Submissions are linearized in the order the
+// strand receives them; no cross-thread ordering is promised, and the
+// queue is unbounded (await submit() for back-pressure).
+class event_bus : public std::enable_shared_from_this<event_bus> {
 public:
 	using strand_type = boost::asio::strand<boost::asio::any_io_executor>;
 
@@ -531,8 +552,57 @@ public:
 		co_return co_await impl->dispatch_bail(msg, key.id, scope);
 	}
 
+	// -----------------------------------------------------------------
+	// Multi-producer ingress: safe to call from any thread or coroutine.
+	//
+	// submit() starts on the caller's executor and hands the dispatch to
+	// the control strand, where the same strand-bound dispatch above runs;
+	// it completes with that dispatch's result. The message and the scope
+	// live in the coroutine frame across the hop. For emit, completion
+	// means the listeners were scheduled, not that they finished (emit is
+	// fire-and-forget by contract).
+	template <class Message, dispatch_mode Mode>
+	boost::asio::awaitable<submit_result_t<Mode, Message>>
+	submit(event_key<Message, Mode> const& key, Message msg, std::shared_ptr<context> scope = {}) {
+		auto self = shared_from_this();
+		co_await boost::asio::dispatch(self->strand_, boost::asio::use_awaitable);
+		if constexpr (Mode == dispatch_mode::emit) {
+			self->dispatch(key, std::move(msg), scope.get());
+			co_return;
+		} else {
+			co_return co_await self->dispatch(key, msg, scope.get());
+		}
+	}
+
+	// Fire-and-forget ingress: returns immediately. The dispatch still runs
+	// on the control strand; a failure has no caller to throw at, so it is
+	// reported to the diagnostic sink (the same route an emit listener
+	// failure takes). Waterfall and bail results are discarded.
+	template <class Message, dispatch_mode Mode>
+	void submit_nowait(event_key<Message, Mode> const& key, Message msg, std::shared_ptr<context> scope = {}) {
+		auto self = shared_from_this();
+		boost::asio::dispatch(self->strand_, [self, key, msg = std::move(msg), scope = std::move(scope)]() mutable {
+			boost::asio::co_spawn(
+				self->strand_, self->run_nowait(key, std::move(msg), std::move(scope)), boost::asio::detached);
+		});
+	}
+
 private:
 	void ensure_on_strand() const;
+
+	template <class Message, dispatch_mode Mode>
+	boost::asio::awaitable<void> run_nowait(event_key<Message, Mode> key, Message msg, std::shared_ptr<context> scope) {
+		try {
+			if constexpr (Mode == dispatch_mode::emit) {
+				dispatch(key, std::move(msg), scope.get());
+				co_return;
+			} else {
+				co_await dispatch(key, msg, scope.get());
+			}
+		} catch (...) {
+			report(std::current_exception());
+		}
+	}
 
 	detail::event_entry_base* entry_base_for(service_id id) noexcept;
 
