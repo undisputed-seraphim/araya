@@ -12,6 +12,9 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
 cd "$root"
+# Isolate config and runtime state under the temp root.
+export XDG_CONFIG_HOME="$root/config"
+export XDG_STATE_HOME="$root/state"
 "$console" run "$save_script" > save.log 2>&1
 "$console" run "$load_script" > load.log 2>&1
 

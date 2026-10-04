@@ -25,7 +25,7 @@ constexpr araya::config_field g_config[] = {
 	field(persona_suffix_key, "Persona suffix appended after the prefix."),
 	field(include_harness_identity_key, "Include the harness identity section.", "true"),
 	field(include_runtime_context_key, "Include the runtime-context section.", "true"),
-	{"tool_order", "JSON array of tool names fixing their prompt order.", "", false, nullptr},
+	{"tool_order", "string", "JSON array of tool names fixing their prompt order.", "", false, nullptr},
 };
 
 // The prompt registry: apply() constructs the service, seeds it from the

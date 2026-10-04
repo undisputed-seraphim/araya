@@ -112,9 +112,9 @@ struct shared_state {
 	// Wakes the UI loop after a publish. Set once, before the engine
 	// thread starts; read only from then on.
 	std::function<void()> wake;
-	// The logger level word passed to the engine's logger plugin; set before
-	// the engine thread starts (from --log-level / ARAYA_LOG_LEVEL).
-	std::string log_level = "info";
+	// The resolved layered configuration, handed to the engine's app_context.
+	// Set before the engine thread starts.
+	araya::app::app_config config;
 };
 
 // The engine-side state: the shared app layer plus the UI-facing

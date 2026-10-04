@@ -24,7 +24,7 @@ namespace {
 inline constexpr araya::config_key<log_level> level_key{"level"};
 
 constexpr araya::config_field g_config[] = {
-	{"name", "Default logger name.", "araya", false, nullptr},
+	{"name", "string", "Default logger name.", "araya", false, nullptr},
 	field(level_key, "Log threshold (error|warn|info|debug).", "info"),
 };
 

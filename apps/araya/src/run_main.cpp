@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -106,15 +107,15 @@ araya::task<void> run(araya::app::app_context& ctx, std::string script_path) {
 
 } // namespace
 
-int run_main(int argc, char** argv, araya::app::log_settings logs) {
-	// argv[0] is "run"; the script path follows (--llm-config <path>
-	// selects the llm-openai config; ARAYA_LLM_CONFIG is the fallback).
+int run_main(int argc, char** argv, araya::app::app_config config) {
+	// argv[0] is "run"; the script path follows. --llm-config overrides the
+	// resolved LLM route with a provider config file.
 	std::string script;
-	std::string llm_config;
 	for (int i = 1; i < argc; ++i) {
 		std::string_view arg = argv[i];
 		if (arg == "--llm-config" && i + 1 < argc) {
-			llm_config = argv[++i];
+			config.llm_config_file = std::filesystem::absolute(argv[++i]).string();
+			config.llm_config_json.reset();
 		} else if (arg == "--help" || arg == "-h") {
 			std::cout << "usage: araya run <script> [--llm-config <path>]\n\n";
 			std::cout << araya::app::help_text() << '\n';
@@ -129,23 +130,20 @@ int run_main(int argc, char** argv, araya::app::log_settings logs) {
 		std::cerr << "usage: araya run <script> [--llm-config <path>]\n";
 		return 2;
 	}
-	if (llm_config.empty()) {
-		if (auto const* env = std::getenv("ARAYA_LLM_CONFIG"); env && *env)
-			llm_config = env;
-	}
 
 	araya::console_demo::init_demo_state(std::make_shared<araya::console_demo::demo_state>());
 
 	// Headless logging: the file sink always, plus a console mirror only when
 	// stdout is a terminal, so script output is not interleaved with records
 	// (and the ctests, which are not TTYs, capture only the script's output).
-	logs = araya::app::resolve_log_settings(std::move(logs));
+	araya::app::log_settings logs;
+	logs.file = config.log_file;
+	logs.level = config.log_level;
 	logs.console = isatty(STDOUT_FILENO) != 0;
 	araya::app::install_log_sinks(logs);
 
 	araya::app::app_context ctx;
-	ctx.llm_config = std::move(llm_config);
-	ctx.log_level = logs.level;
+	ctx.config = std::move(config);
 	boost::asio::co_spawn(ctx.io, run(ctx, std::move(script)), boost::asio::detached);
 	ctx.io.run();
 	araya::app::shutdown_logging();

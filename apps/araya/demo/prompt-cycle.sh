@@ -11,6 +11,9 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
 cd "$root"
+# Isolate config and runtime state under the temp root.
+export XDG_CONFIG_HOME="$root/config"
+export XDG_STATE_HOME="$root/state"
 ARAYA_SYSTEM_PROMPT="You are from the environment." "$console" run "$script" > prompt.log 2>&1
 
 grep -q 'You are from the environment.' prompt.log

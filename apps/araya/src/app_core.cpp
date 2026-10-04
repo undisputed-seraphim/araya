@@ -270,6 +270,7 @@ constexpr command_entry g_commands[]{
 	 &cmd_session},
 	{"timer", "timer ...", "in <sec> <text> | every <sec> <text> | cancel", &cmd_timer},
 	{"log", "log ...", "level <level> | <level> <text>", &cmd_log},
+	{"config", "config ...", "show | reload", &cmd_config},
 	{"prompt", "prompt ...", "show | set <text> | suffix <text> | identity on|off | clear", &cmd_prompt},
 	{"tool", "tool", "list the agent's registered tools", &cmd_tool},
 	{"goal",
@@ -442,27 +443,22 @@ std::string cwd_branch_line(std::string const& cwd) {
 	return branch.empty() ? shown : shown + ":" + branch;
 }
 
-araya::task<void> boot(app_context& ctx, line_sink const& out) {
+void build_tree(app_context& ctx, line_sink const& out) {
+	app_config const& cfg = ctx.config;
 	ctx.desired["logger"] =
-		desired_entry{&araya::logger::plugin_descriptor(), {{"name", "araya"}, {"level", ctx.log_level}}};
+		desired_entry{&araya::logger::plugin_descriptor(), {{"name", "araya"}, {"level", cfg.log_level}}};
 	ctx.desired["timer"] = desired_entry{&araya::timer::plugin_descriptor(), {}};
 	ctx.desired["session"] = desired_entry{&araya::session::plugin_descriptor(), {}};
-	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", "araya-sessions"}}};
+	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", cfg.sessions_dir}}};
 	ctx.desired["llm"] = desired_entry{&araya::llm::plugin_descriptor(), {}};
 	// The prompt and tool registries the agent loop assembles from. The
-	// system prompt's persona is config-only - nothing is hardcoded; the
-	// ARAYA_SYSTEM_PROMPT environment variable seeds the prefix.
+	// standard coding-agent persona is the built-in default; a config or
+	// ARAYA_SYSTEM_PROMPT persona_prefix overlays it below.
 	araya::plugin_config prompt_config;
-	if (auto const* env = std::getenv("ARAYA_SYSTEM_PROMPT"); env && *env) {
-		prompt_config["persona_prefix"] = env;
-	} else {
-		// The standard coding-agent persona (the harness's `standard`
-		// preset). The environment variable still wins when set.
-		prompt_config["persona_prefix"] = "You are a coding agent powered by the {{model}} model.";
-		prompt_config["persona_suffix"] =
-			"Your working directory is {{cwd}}. Your bash tool runs under a file sandbox — a `[sandbox: file access "
-			"denied …]` result is policy, not a command bug.";
-	}
+	prompt_config["persona_prefix"] = "You are a coding agent powered by the {{model}} model.";
+	prompt_config["persona_suffix"] =
+		"Your working directory is {{cwd}}. Your bash tool runs under a file sandbox — a `[sandbox: file access "
+		"denied …]` result is policy, not a command bug.";
 	ctx.desired["system-prompt"] = desired_entry{&araya::system_prompt::plugin_descriptor(), std::move(prompt_config)};
 	// Workspace instructions (AGENTS.md) as an agent context producer.
 	ctx.desired["agent-instructions"] = desired_entry{&araya::agent_instructions::plugin_descriptor(), {}};
@@ -486,7 +482,7 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	ctx.desired["user-questions"] = desired_entry{&araya::user_questions::plugin_descriptor(), {}};
 	ctx.desired["tool-ask-user"] = desired_entry{&araya::tool_ask_user::plugin_descriptor(), {}};
 	// Image attachments: the content-addressed store and the read_image tool.
-	ctx.desired["attachment"] = desired_entry{&araya::attachment::plugin_descriptor(), {{"root", "araya-attachments"}}};
+	ctx.desired["attachment"] = desired_entry{&araya::attachment::plugin_descriptor(), {{"root", cfg.attachments_dir}}};
 	ctx.desired["tool-read-image"] = desired_entry{&araya::tool_read_image::plugin_descriptor(), {}};
 	// The built-in file/search tools and the one-shot shell tool. The
 	// shell resolves relative workdirs against the session cwd; its
@@ -531,13 +527,42 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	// until enabled (config enabled=true) because it needs a Node runtime.
 	ctx.desired["workflow"] = desired_entry{&araya::workflow::plugin_descriptor(), {}};
 	ctx.desired["tool-workflow"] = desired_entry{&araya::tool_workflow::plugin_descriptor(), {}};
-	if (!ctx.llm_config.empty())
+	if (cfg.llm_config_file)
 		ctx.desired["llm-openai"] =
-			desired_entry{&araya::llm_openai::plugin_descriptor(), {{"config_file", ctx.llm_config}}};
+			desired_entry{&araya::llm_openai::plugin_descriptor(), {{"config_file", *cfg.llm_config_file}}};
+	else if (cfg.llm_config_json)
+		ctx.desired["llm-openai"] =
+			desired_entry{&araya::llm_openai::plugin_descriptor(), {{"config", *cfg.llm_config_json}}};
 	ctx.desired["beacon"] = desired_entry{&araya::console_demo::beacon_descriptor(), {}};
 	ctx.desired["watcher"] = desired_entry{&araya::console_demo::watcher_descriptor(), {}};
 	ctx.desired["console"] = desired_entry{&araya::console_demo::console_descriptor(), {}};
 
+	// Apply the layered component overrides and the enable switches. A
+	// configured id must name a mounted component; a malformed known value
+	// throws (validate_component), an unknown key is only reported.
+	std::vector<config_warning> warnings;
+	for (auto const& [id, knobs] : cfg.components) {
+		auto it = ctx.desired.find(id);
+		if (it == ctx.desired.end())
+			throw std::runtime_error("araya: component '" + id + "' is not mounted");
+		validate_component(real_descriptor, id, knobs, warnings);
+		for (auto const& [key, value] : knobs)
+			it->second.config[key] = value;
+	}
+	for (auto const& [id, disabled] : cfg.disabled) {
+		if (!disabled)
+			continue;
+		if (auto it = ctx.desired.find(id); it != ctx.desired.end())
+			ctx.desired.erase(it);
+		else
+			warnings.push_back({id, "component is not mounted; disable ignored"});
+	}
+	for (auto const& warning : warnings)
+		out("config: " + warning.source + ": " + warning.detail);
+}
+
+araya::task<void> boot(app_context& ctx, line_sink const& out) {
+	build_tree(ctx, out);
 	co_await ctx.rt->reconcile(make_desired(ctx));
 	co_await ctx.rt->wait_idle();
 

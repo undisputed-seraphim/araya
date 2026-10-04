@@ -17,6 +17,7 @@ araya::task<void> cmd_ls(app_context& ctx, line_sink const& out, std::string con
 araya::task<void> cmd_load(app_context& ctx, line_sink const& out, std::string const& line);
 araya::task<void> cmd_unload(app_context& ctx, line_sink const& out, std::string const& line);
 araya::task<void> cmd_reload(app_context& ctx, line_sink const& out, std::string const& line);
+araya::task<void> cmd_config(app_context& ctx, line_sink const& out, std::string const& line);
 araya::task<void> cmd_fail(app_context& ctx, line_sink const& out, std::string const& line);
 araya::task<void> cmd_avail(app_context& ctx, line_sink const& out, std::string const& line);
 araya::task<void> cmd_session(app_context& ctx, line_sink const& out, std::string const& line);

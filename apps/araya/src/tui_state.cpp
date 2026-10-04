@@ -373,9 +373,7 @@ araya::task<void> boot_and_run(shared_state& sh, engine_state& e, std::string re
 
 void run_engine(shared_state& sh, std::string resume_id) {
 	engine_state e;
-	if (auto const* env = std::getenv("ARAYA_LLM_CONFIG"); env && *env)
-		e.ctx.llm_config = env;
-	e.ctx.log_level = sh.log_level;
+	e.ctx.config = std::move(sh.config);
 	boost::asio::co_spawn(e.ctx.io.get_executor(), boot_and_run(sh, e, std::move(resume_id)), boost::asio::detached);
 	e.ctx.io.run();
 }

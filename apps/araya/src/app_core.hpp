@@ -5,6 +5,7 @@
 #include "araya/runtime.hpp"
 #include "araya/session/session_types.hpp"
 #include "araya/task.hpp"
+#include "config.hpp"
 #include "input_route.hpp"
 
 #include <boost/asio/io_context.hpp>
@@ -61,13 +62,9 @@ struct app_context {
 	std::vector<araya::registration> intervals;
 	std::string cwd;
 	std::string cwd_branch;
-	// Path to the llm-openai config JSON (the --llm-config flag or the
-	// ARAYA_LLM_CONFIG environment variable); empty means no adapter.
-	std::string llm_config;
-	// The logger plugin's level word (error|warn|info|debug), from
-	// --log-level / ARAYA_LOG_LEVEL. The file sink itself is installed by
-	// the entry point before boot (see log_setup.hpp).
-	std::string log_level = "info";
+	// The resolved layered configuration (paths, roots, log, llm, component
+	// overrides). Populated by the entry point before boot.
+	app_config config;
 	// The surface's transient-stream sink; the commands forward model
 	// content/reasoning deltas here. Empty disables streaming.
 	stream_callback stream_hook;
@@ -115,6 +112,10 @@ std::string cwd_branch_line(std::string const& cwd);
 // the session firehose into the sink. Call on the app's io executor;
 // the runtime's own teardown contract applies afterwards.
 araya::task<void> boot(app_context& ctx, line_sink const& out);
+
+// (Re)builds ctx.desired from the resolved configuration: the default tree
+// plus the layered component overrides and disables. Does not reconcile.
+void build_tree(app_context& ctx, line_sink const& out);
 
 // Parses one command line and runs it on the control strand. The
 // pseudo-commands quit/sleep are surface concerns and live outside.

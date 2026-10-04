@@ -322,17 +322,26 @@ The `logger` plugin wraps [quill](https://github.com/odygrd/quill) and provides 
 (`araya`, `console`, `watcher`, `main`, `timer`) with a rotating file sink before the
 tree boots, so the service adopts them by name:
 
-- The file is `./araya-tui.log` (override with `--log-file <path>` or `ARAYA_LOG_FILE`),
-  rotating at 5 MiB and keeping three backups. `araya-tui.log*` is gitignored.
+- The file defaults to `$XDG_STATE_HOME/araya/logs/araya.log` (override with
+  `--log-file <path>`, `ARAYA_LOG_FILE`, or `log.file` in the config; see
+  [doc/CONFIG.md](doc/CONFIG.md)), rotating at 5 MiB and keeping three backups.
 - `araya tui` writes the file only, so nothing lands on the FTXUI canvas. `araya run`
   writes the file always and mirrors to stdout only when stdout is a terminal, so script
   output and log records do not interleave (the ctests capture only script output).
 - The level defaults to `info`; set `--log-level error|warn|info|debug` (or
-  `ARAYA_LOG_LEVEL`) at any position, or the runtime `/log level <lvl>` command. An
-  unknown level is rejected before boot.
+  `ARAYA_LOG_LEVEL`, or `log.level`) at any position, or the runtime `/log level <lvl>`
+  command. An unknown level is rejected before boot.
 
 Every known logger is flushed and quill's backend is stopped on exit, so records are not
 lost at process end.
+
+## Configuration
+
+The full configuration surface - the layered JSON config, its file locations, the
+environment and flags, and the per-plugin knobs - is documented in
+[doc/CONFIG.md](doc/CONFIG.md). In short: built-in defaults, overridden by a home config
+(`$XDG_CONFIG_HOME/araya/config.json`), overridden by a project `./araya.json`, then
+`--config` overlays, environment, and flags.
 
 ## License
 

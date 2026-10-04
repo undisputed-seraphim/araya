@@ -41,6 +41,38 @@ araya::task<void> reconcile_print(app_context& ctx, line_sink const& out, std::s
 
 } // namespace
 
+araya::task<void> cmd_config(app_context& ctx, line_sink const& out, std::string const& line) {
+	std::istringstream is(line);
+	std::string cmd;
+	std::string sub;
+	is >> cmd >> sub;
+	if (sub == "show" || sub.empty()) {
+		std::istringstream lines(render_app_config(ctx.config, real_descriptor));
+		std::string row;
+		while (std::getline(lines, row))
+			out(row);
+		co_return;
+	}
+	if (sub == "reload") {
+		try {
+			std::vector<config_warning> warnings;
+			ctx.config = resolve_app_config(ctx.config.overlays, ctx.config.overrides, warnings);
+			for (auto const& warning : warnings)
+				out("config: " + warning.source + ": " + warning.detail);
+			ctx.desired.clear();
+			build_tree(ctx, out);
+			co_await ctx.rt->reconcile(make_desired(ctx));
+			co_await ctx.rt->wait_idle();
+			out("config: reloaded");
+		} catch (std::exception const& e) {
+			out(std::string("config: ") + e.what());
+		}
+		co_return;
+	}
+	out("config: show | reload");
+	co_return;
+}
+
 araya::task<void> cmd_ls(app_context& ctx, line_sink const& out, std::string const&) {
 	auto fibers = co_await ctx.rt->fibers_async();
 	out("fiber tree:");

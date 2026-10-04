@@ -129,7 +129,6 @@ template <class T>
 std::optional<T> parse_value(std::string_view text) {
 	return config_parser<T>::parse(text);
 }
-
 // Whether `text` parses as this field's type (the validator stored in a
 // config_field). A string field accepts anything.
 template <class T>
@@ -137,13 +136,27 @@ bool config_field_valid(std::string_view text) {
 	return config_parser<T>::parse(text).has_value();
 }
 
+// A human-readable type name for --print-config.
+template <class T>
+constexpr std::string_view config_type_name() {
+	if constexpr (std::is_same_v<T, bool>)
+		return "bool";
+	else if constexpr (std::is_integral_v<T>)
+		return "integer";
+	else if constexpr (std::is_floating_point_v<T>)
+		return "number";
+	else if constexpr (std::is_enum_v<T>)
+		return "enum";
+	else
+		return "string";
+}
+
 // Build one declared config knob from a typed key. `default_value` is the
-// built-in default in its string form (empty means "unset"); a string field
-// carries no validator.
+// built-in default in its string form (empty means "unset").
 template <class T>
 constexpr config_field
 field(config_key<T> key, std::string_view description, std::string_view default_value = {}, bool required = false) {
-	return config_field{key.name, description, default_value, required, &config_field_valid<T>};
+	return config_field{key.name, config_type_name<T>(), description, default_value, required, &config_field_valid<T>};
 }
 
 // Read-only typed access over a plugin_config. get()/operator[] throw

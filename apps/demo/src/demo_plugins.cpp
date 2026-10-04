@@ -114,7 +114,7 @@ static const araya::provision_spec g_bomb_timer_prov[]{{araya::service_id{"timer
 static const araya::provision_spec g_bomb_sessions_prov[]{{araya::service_id{"sessions", 1}}};
 
 constexpr araya::config_field g_bomb_config[] = {
-	{"what", "Service the bomb replaces (logger|timer|session).", "", false, nullptr},
+	{"what", "string", "Service the bomb replaces (logger|timer|session).", "", false, nullptr},
 };
 
 static const araya::plugin_descriptor g_console_desc{"console", g_console_inject, g_no_provs, &make_console};

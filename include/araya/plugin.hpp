@@ -38,6 +38,7 @@ using plugin_config = std::map<std::string, std::string>;
 // overlays and to render --print-config.
 struct config_field {
 	std::string_view name;
+	std::string_view type;
 	std::string_view description;
 	std::string_view default_value;
 	bool required = false;

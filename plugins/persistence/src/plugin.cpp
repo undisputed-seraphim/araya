@@ -60,7 +60,7 @@ static constexpr std::span<araya::dependency_spec const> g_no_deps{};
 static const araya::provision_spec g_persistence_prov[]{{araya::service_id{"session.persistence", 1}}};
 
 constexpr araya::config_field g_config[] = {
-	{"root", "Session JSONL root directory.", "araya-sessions", false, nullptr},
+	{"root", "string", "Session JSONL root directory.", "araya-sessions", false, nullptr},
 };
 static const araya::plugin_descriptor
 	g_descriptor{"persistence", g_no_deps, g_persistence_prov, &make_persistence, g_config};

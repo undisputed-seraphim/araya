@@ -9,6 +9,7 @@ add_executable(araya_app
     src/commands_goal.cpp
     src/commands_llm.cpp
     src/commands_session.cpp
+    src/config.cpp
     src/log_setup.cpp
     src/main.cpp
     src/run_main.cpp
@@ -74,17 +75,19 @@ install(TARGETS araya_app
 )
 
 if(ARAYA_TESTING)
+    set(ARAYA_TEST_ENV
+        "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-config;XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/test-state")
     add_test(NAME script_demo
         COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/demo.txt)
-    set_tests_properties(script_demo PROPERTIES TIMEOUT 60)
+    set_tests_properties(script_demo PROPERTIES TIMEOUT 60 ENVIRONMENT "${ARAYA_TEST_ENV}")
     add_test(NAME chat_demo
         COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/chat.txt)
-    set_tests_properties(chat_demo PROPERTIES TIMEOUT 60
+    set_tests_properties(chat_demo PROPERTIES TIMEOUT 60 ENVIRONMENT "${ARAYA_TEST_ENV}"
         PASS_REGULAR_EXPRESSION "assistant: echo: hello world")
 
     add_test(NAME agent_demo
         COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/agent.txt)
-    set_tests_properties(agent_demo PROPERTIES TIMEOUT 60
+    set_tests_properties(agent_demo PROPERTIES TIMEOUT 60 ENVIRONMENT "${ARAYA_TEST_ENV}"
         PASS_REGULAR_EXPRESSION "assistant: task done")
 
     add_test(NAME restart_cycle
@@ -107,10 +110,12 @@ if(ARAYA_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/demo/prompt.txt)
     set_tests_properties(prompt_cycle PROPERTIES TIMEOUT 60)
 
-    # The pure input-routing helpers and the logging setup (no plugins, no
-    # app library). log_setup links the logger plugin for quill/parse_level.
+    # The pure input-routing helpers and the config/logging setup (no
+    # plugins, no app library). log_setup links the logger plugin for
+    # quill/parse_level; config takes a descriptor lookup instead.
     araya_add_test(araya_app_tests
-        SOURCES tests/route_test.cpp tests/log_setup_test.cpp src/log_setup.cpp
+        SOURCES tests/route_test.cpp tests/log_setup_test.cpp tests/config_test.cpp
+                src/log_setup.cpp src/config.cpp
         INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/src
         DEPS araya::logger
     )
