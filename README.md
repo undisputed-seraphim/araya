@@ -239,6 +239,42 @@ find_package(araya 0.1 REQUIRED)
 target_link_libraries(my_app PRIVATE araya::araya)
 ```
 
+### Consuming araya as a subproject
+
+Araya is subproject-safe for `add_subdirectory`: every build-surface option defaults to
+`OFF` unless araya is the top-level project, so a vendored araya builds only the engine
+until you ask for more.
+
+```cmake
+add_subdirectory(third_party/araya)
+target_link_libraries(my_app PRIVATE araya::araya araya::session araya::llm)
+```
+
+```sh
+cmake -B build -G Ninja \
+    -DARAYA_BUILD_PLUGINS=ON -DARAYA_BUILD_APP=OFF -DARAYA_BUILD_BENCH=OFF \
+    -DARAYA_BUILD_TESTS=OFF -DARAYA_BUILD_PROOF=OFF \
+    -DARAYA_PLUGINS="logger;timer;llm;llm-bridge;session;persistence;system-prompt;tools;agent-loop"
+```
+
+- `ARAYA_PLUGINS` selects the first-party targets to build. It must be
+  **dependency-closed**: `agent-loop` needs `llm-bridge` (which pulls `session` and
+  `llm`) and `tools` (which pulls `system-prompt`); `coreutil` needs `fs` and
+  `fs-observation-policy`; `shell`/`workflow` additionally need Boost.Process. The
+  `llm-bridge` list name maps to the header-only bridge at `plugins/llm/bridge`.
+- Boost ≥ 1.91 (JSON) is required by the engine; `process`/`filesystem` are required
+  only when `shell` or `workflow` is selected. A parent that already found Boost keeps
+  its targets; otherwise araya discovers its own.
+- `llm` (and anything built on it) requires OpenSSL.
+- `ARAYA_WERROR` promotes first-party warnings to errors (default: on only when
+  top-level). `ARAYA_INSTALL` emits the install/export rules (default: on only when
+  top-level), so a subproject does not write into the parent's install prefix.
+- The engine alone needs only Boost.JSON and Threads:
+  `-DARAYA_BUILD_PLUGINS=OFF`.
+
+Subproject builds skip the app, bench, tests, proof bridge, and FTXUI/quill fetches
+unless the corresponding option (and the plugins they need) are enabled.
+
 The `bench/araya_bench` target is a complete example host exercising every lifecycle above
 and doubles as the profiling benchmark.
 

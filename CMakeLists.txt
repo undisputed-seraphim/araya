@@ -12,7 +12,12 @@ include(cmake/Format.cmake)
 include(cmake/Warnings.cmake)
 include(cmake/Testing.cmake)
 include(cmake/Plugin.cmake)
-include(cmake/Landlock.cmake)
+
+# -- build surface --------------------------------------------------------
+# Every build-surface option defaults to ON only when araya is the top-level
+# project. As a subproject (add_subdirectory) nothing is pulled in unless the
+# consumer opts in, so a vendored araya does not drag in the app, the bench,
+# the tests, the proof bridge, or install rules.
 
 option(ARAYA_ENFORCE_INVARIANTS
     "Check engine invariants even in release builds (violations throw)"
@@ -20,42 +25,99 @@ option(ARAYA_ENFORCE_INVARIANTS
 
 option(ARAYA_BUILD_PLUGINS
     "Build the first-party plugin libraries"
-    ON)
+    ${PROJECT_IS_TOP_LEVEL})
 
 option(ARAYA_BUILD_BENCH
     "Build the profiling bench application (requires plugins)"
-    ON)
+    ${PROJECT_IS_TOP_LEVEL})
 
 option(ARAYA_BUILD_APP
     "Build the unified araya application (console + TUI; requires plugins)"
-    ON)
+    ${PROJECT_IS_TOP_LEVEL})
 
 option(ARAYA_BUILD_TESTS
     "Build the Catch2 test suites (requires Catch2)"
-    ON)
+    ${PROJECT_IS_TOP_LEVEL})
 
+option(ARAYA_BUILD_PROOF
+    "Build the proof/conformance bridge (and wire the TLA+ check)"
+    ${PROJECT_IS_TOP_LEVEL})
+
+option(ARAYA_INSTALL
+    "Install the araya library, headers, and CMake package"
+    ${PROJECT_IS_TOP_LEVEL})
+
+option(ARAYA_WERROR
+    "Promote warnings to errors on first-party targets"
+    ${PROJECT_IS_TOP_LEVEL})
+
+# The first-party plugins and support libraries to build. Top-level builds
+# build all of them; a consumer passes a dependency-closed subset, e.g.
+#   -DARAYA_PLUGINS="logger;timer;llm;llm-bridge;session;persistence;system-prompt;tools;agent-loop"
+# The bridge lives at llm/bridge; its friendly list name is llm-bridge.
+set(ARAYA_PLUGINS
+    agent-instructions agent-loop attachment coreutil fs fs-observation-policy
+    goal goal-round-driver jobs llm llm-bridge llm-mock llm-openai logger
+    persistence sandbox sandbox-policy session shell skill subagent-fork
+    subagents system-prompt timer tool-ask-user tool-goal tool-jobs
+    tool-read-image tool-skill tool-subagent tool-subagent-control tool-todo
+    tool-workflow tool-web tools user-questions web workflow
+    CACHE STRING "First-party plugins and support libraries to build")
+
+# Landlock detection is only meaningful when the sandbox plugin is selected.
+include(cmake/Landlock.cmake)
+
+# -- dependencies ---------------------------------------------------------
 # Boost is discovered once. Boost.JSON is a compiled component and the
 # engine's public util/json.hpp depends on it, so it rides the engine's
-# PUBLIC link interface. Boost.Process v2 and Boost.Filesystem are only
-# used by the shell plugin, so they are required only when plugins are
-# built. Module mode (Boost_NO_BOOST_CMAKE) keeps a header-only Boost
-# elsewhere from shadowing the compiled components.
+# PUBLIC link interface. Boost.Process v2 and Boost.Filesystem are used only
+# by the shell and workflow plugins, so they are required only when one of
+# those is in the selected set.
+#
+# A parent that already found Boost keeps its own targets; otherwise araya
+# discovers module-mode Boost (Boost_NO_BOOST_CMAKE keeps a header-only Boost
+# elsewhere from shadowing the compiled components).
 set(ARAYA_BOOST_MIN 1.91)
-set(Boost_NO_BOOST_CMAKE ON)
+
+set(_araya_need_process OFF)
 if(ARAYA_BUILD_PLUGINS)
-    find_package(Boost ${ARAYA_BOOST_MIN} REQUIRED COMPONENTS json process filesystem)
-else()
+    foreach(_plugin IN LISTS ARAYA_PLUGINS)
+        if(_plugin STREQUAL "shell" OR _plugin STREQUAL "workflow")
+            set(_araya_need_process ON)
+        endif()
+    endforeach()
+endif()
+
+if(NOT TARGET Boost::json)
+    set(Boost_NO_BOOST_CMAKE ON)
     find_package(Boost ${ARAYA_BOOST_MIN} REQUIRED COMPONENTS json)
 endif()
+
+if(_araya_need_process AND NOT TARGET Boost::process)
+    set(Boost_NO_BOOST_CMAKE ON)
+    find_package(Boost ${ARAYA_BOOST_MIN} REQUIRED COMPONENTS process filesystem)
+endif()
+
+# The header-only target differs between Boost's module (Boost::boost) and
+# config (Boost::headers) packages; normalize so either parent discovery works.
+if(TARGET Boost::boost)
+    set(ARAYA_BOOST_HEADERS Boost::boost)
+else()
+    set(ARAYA_BOOST_HEADERS Boost::headers)
+endif()
+
 # The process-spawning plugins (shell, workflow) share this link set; keep the
 # component list here rather than repeating it in each plugin's CMakeLists.
 set(ARAYA_BOOST_PROCESS_LIBS Boost::process Boost::filesystem)
+
 find_package(Threads REQUIRED)
-find_package(Catch2 3 QUIET)
 
 set(ARAYA_TESTING OFF)
-if(Catch2_FOUND AND ARAYA_BUILD_TESTS)
-    set(ARAYA_TESTING ON)
+if(ARAYA_BUILD_TESTS)
+    find_package(Catch2 3 QUIET)
+    if(Catch2_FOUND)
+        set(ARAYA_TESTING ON)
+    endif()
 endif()
 
 add_library(araya STATIC
@@ -82,9 +144,13 @@ target_include_directories(araya PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
-target_link_libraries(araya PUBLIC Boost::boost Boost::json Threads::Threads)
+target_link_libraries(araya PUBLIC ${ARAYA_BOOST_HEADERS} Boost::json Threads::Threads)
 
-araya_enable_warnings(araya WERROR)
+if(ARAYA_WERROR)
+    araya_enable_warnings(araya WERROR)
+else()
+    araya_enable_warnings(araya)
+endif()
 
 if(ARAYA_ENFORCE_INVARIANTS)
     target_compile_definitions(araya
@@ -109,43 +175,61 @@ endif()
 if(ARAYA_BUILD_PLUGINS)
     include(thirdparty/quill.cmake)
     add_subdirectory(plugins)
-    if(ARAYA_BUILD_BENCH)
+endif()
+
+if(ARAYA_BUILD_BENCH)
+    if(ARAYA_BUILD_PLUGINS)
         add_subdirectory(bench)
-    endif()
-    if(ARAYA_BUILD_APP)
-        include(thirdparty/ftxui.cmake)
-        add_subdirectory(apps)
+    else()
+        message(WARNING "ARAYA_BUILD_BENCH=ON requires ARAYA_BUILD_PLUGINS=ON; skipping the bench")
     endif()
 endif()
 
-add_subdirectory(proof)
+if(ARAYA_BUILD_APP)
+    if(ARAYA_BUILD_PLUGINS)
+        include(thirdparty/ftxui.cmake)
+        add_subdirectory(apps)
+    else()
+        message(WARNING "ARAYA_BUILD_APP=ON requires ARAYA_BUILD_PLUGINS=ON; skipping the app")
+    endif()
+endif()
 
-install(TARGETS araya
-    EXPORT arayaTargets
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
+if(ARAYA_BUILD_PROOF)
+    add_subdirectory(proof)
+endif()
 
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# -- install / export -----------------------------------------------------
+# Only emit install rules when araya owns the install prefix. The exported
+# araya::araya target (and the installed CMake package) is what downstream
+# find_package consumers link.
+if(ARAYA_INSTALL)
+    install(TARGETS araya
+        EXPORT arayaTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
 
-install(EXPORT arayaTargets
-    NAMESPACE araya::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/araya
-)
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-configure_package_config_file(
-    cmake/arayaConfig.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/arayaConfig.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/araya
-)
+    install(EXPORT arayaTargets
+        NAMESPACE araya::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/araya
+    )
 
-write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/arayaConfigVersion.cmake
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
-)
+    configure_package_config_file(
+        cmake/arayaConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/arayaConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/araya
+    )
 
-install(FILES
-    ${CMAKE_CURRENT_BINARY_DIR}/arayaConfig.cmake
-    ${CMAKE_CURRENT_BINARY_DIR}/arayaConfigVersion.cmake
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/araya
-)
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/arayaConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion
+    )
+
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/arayaConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/arayaConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/araya
+    )
+endif()

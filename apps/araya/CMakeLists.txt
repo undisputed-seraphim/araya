@@ -68,11 +68,17 @@ target_link_libraries(araya_app PRIVATE
     ftxui::screen
 )
 
-araya_enable_warnings(araya_app WERROR)
+if(ARAYA_WERROR)
+    araya_enable_warnings(araya_app WERROR)
+else()
+    araya_enable_warnings(araya_app)
+endif()
 
-install(TARGETS araya_app
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+if(ARAYA_INSTALL)
+    install(TARGETS araya_app
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
 
 if(ARAYA_TESTING)
     set(ARAYA_TEST_ENV

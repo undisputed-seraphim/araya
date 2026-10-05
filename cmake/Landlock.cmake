@@ -28,7 +28,10 @@ option(ARAYA_ENABLE_LANDLOCK
 
 set(ARAYA_HAVE_LANDLOCK OFF)
 
-if(NOT ARAYA_ENABLE_LANDLOCK)
+if(NOT ARAYA_BUILD_PLUGINS OR NOT "sandbox" IN_LIST ARAYA_PLUGINS)
+    # The sandbox plugin is not being built; no detection is needed.
+    message(STATUS "Landlock: skipped (sandbox plugin not built)")
+elseif(NOT ARAYA_ENABLE_LANDLOCK)
     message(STATUS "Landlock: disabled by ARAYA_ENABLE_LANDLOCK=OFF")
 elseif(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(STATUS "Landlock: not Linux (${CMAKE_SYSTEM_NAME}); sandbox will fail closed")

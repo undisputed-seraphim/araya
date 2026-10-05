@@ -34,7 +34,10 @@ if(NOT TLA2TOOLS_JAR)
         PATHS /usr/local/share/tla+ /usr/share/java /usr/share/tla+
         NO_DEFAULT_PATH)
 endif()
-if(ARAYA_JAVA AND TLA2TOOLS_JAR)
+if(NOT ARAYA_TESTING)
+    message(STATUS
+        "TLA+ model check not wired (ARAYA_TESTING is off)")
+elseif(ARAYA_JAVA AND TLA2TOOLS_JAR)
     add_test(NAME tlc_refinement
         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tla/run-tlc.sh
                 "${TLA2TOOLS_JAR}")

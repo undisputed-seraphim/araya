@@ -1,8 +1,26 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-find_dependency(Boost 1.91 COMPONENTS json)
+# Use a Boost the consumer already found; otherwise discover it the same way
+# araya's own build does (module mode avoids BoostConfig's static-runtime
+# checks on a static Boost). find_dependency is a no-op when the target exists.
+if(NOT TARGET Boost::json)
+    set(Boost_NO_BOOST_CMAKE ON)
+    find_dependency(Boost 1.91 COMPONENTS json)
+endif()
 find_dependency(Threads)
+
+# Boost's module and config packages name the header-only target differently
+# (Boost::boost vs Boost::headers). The exported araya target references the
+# one seen at build time; provide a shim so either discovery satisfies it.
+if(NOT TARGET Boost::boost AND TARGET Boost::headers)
+    add_library(Boost::boost INTERFACE IMPORTED)
+    set_target_properties(Boost::boost PROPERTIES INTERFACE_LINK_LIBRARIES Boost::headers)
+endif()
+if(NOT TARGET Boost::headers AND TARGET Boost::boost)
+    add_library(Boost::headers INTERFACE IMPORTED)
+    set_target_properties(Boost::headers PROPERTIES INTERFACE_LINK_LIBRARIES Boost::boost)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/arayaTargets.cmake")
 
