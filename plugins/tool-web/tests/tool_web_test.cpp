@@ -62,17 +62,23 @@ struct harness : araya_test::plugin_harness {
 	araya::component_spec web_spec(araya::plugin_config cfg = {}) {
 		return spec(&araya::web::plugin_descriptor(), std::move(cfg));
 	}
-	araya::component_spec tool_web_spec() { return spec(&araya::tool_web::plugin_descriptor()); }
+	araya::component_spec tool_web_spec(araya::plugin_config cfg = {}) {
+		return spec(&araya::tool_web::plugin_descriptor(), std::move(cfg));
+	}
 };
 
 struct rig {
 	std::shared_ptr<tools_service> tools;
 
-	araya::task<void> mount(araya::runtime& rt, harness& h, araya::plugin_config web_config = {}) {
+	araya::task<void> mount(
+		araya::runtime& rt,
+		harness& h,
+		araya::plugin_config web_config = {},
+		araya::plugin_config tool_web_config = {}) {
 		co_await rt.mount(h.prompt_spec());
 		co_await rt.mount(h.tools_spec());
 		co_await rt.mount(h.web_spec(std::move(web_config)));
-		co_await rt.mount(h.tool_web_spec());
+		co_await rt.mount(h.tool_web_spec(std::move(tool_web_config)));
 		co_await rt.wait_idle();
 		tools = rt.root_context().require<tools_service>(tools_key).shared();
 	}
@@ -128,7 +134,8 @@ TEST_CASE("web_search merges provider sources and recommends citing") {
 		server.on_request = [](http::request<http::string_body> const&) {
 			http::response<http::string_body> response{http::status::ok, 11};
 			response.set(http::field::content_type, "application/json");
-			response.body() = R"({"results":[{"title":"A","url":"https://e.com/a","snippet":"alpha"}]})";
+			response.body() =
+				R"({"content":"Summary answer.","results":[{"title":"A","url":"https://e.com/a","snippet":"alpha"}]})";
 			return response;
 		};
 		boost::asio::co_spawn(h.io.get_executor(), server.serve(), boost::asio::detached);
@@ -138,18 +145,35 @@ TEST_CASE("web_search merges provider sources and recommends citing") {
 		auto out = co_await r.call("web_search", {{"queries", boost::json::array{"araya"}}});
 		REQUIRE(out.has_value());
 		CHECK_FALSE(out->is_error);
+		CHECK(text_of(*out).find("Summary answer.") != std::string::npos);
 		CHECK(text_of(*out).find("[A](https://e.com/a)") != std::string::npos);
 		CHECK(text_of(*out).find("alpha") != std::string::npos);
 		CHECK(text_of(*out).find("Cite the relevant URLs") != std::string::npos);
 	});
 }
 
-TEST_CASE("web_search is not registered without a provider") {
+TEST_CASE("web_search is registered without a provider and fails at call time") {
 	harness h;
 	h.run([&](araya::runtime& rt) -> araya::task<void> {
 		rig r;
 		co_await r.mount(rt, h);
+		// Tool registration is decoupled from provider availability: both tools
+		// stay visible, and the missing provider surfaces only when search runs.
 		CHECK(r.tools->find("web_fetch", std::nullopt).has_value());
+		CHECK(r.tools->find("web_search", std::nullopt).has_value());
+		auto out = co_await r.call("web_search", {{"queries", boost::json::array{"araya"}}});
+		REQUIRE(out.has_value());
+		CHECK(out->is_error);
+		CHECK(text_of(*out).find("no web search provider") != std::string::npos);
+	});
+}
+
+TEST_CASE("web tools honor the search and fetch enable knobs") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r;
+		co_await r.mount(rt, h, {}, {{"search", "false"}, {"fetch", "false"}});
 		CHECK_FALSE(r.tools->find("web_search", std::nullopt).has_value());
+		CHECK_FALSE(r.tools->find("web_fetch", std::nullopt).has_value());
 	});
 }

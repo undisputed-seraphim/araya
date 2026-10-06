@@ -319,6 +319,10 @@ public:
 			if (auto source = source_from_json(value))
 				result.sources.push_back(std::move(*source));
 		}
+		if (auto const* content = object->if_contains("content"); content && content->is_string())
+			result.content = std::string(content->as_string());
+		else if (auto const* answer = object->if_contains("answer"); answer && answer->is_string())
+			result.content = std::string(answer->as_string());
 		if (result.sources.size() > request.max_results) {
 			result.sources.resize(request.max_results);
 			result.truncated = true;

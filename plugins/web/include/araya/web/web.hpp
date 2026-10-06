@@ -49,6 +49,9 @@ struct search_request {
 
 struct search_result {
 	std::vector<search_source> sources;
+	// Optional provider-generated answer or summary text. Not every backend
+	// returns one; the model-facing render includes it when present.
+	std::string content;
 	bool truncated = false;
 };
 

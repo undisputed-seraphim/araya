@@ -108,6 +108,12 @@ keys, types, defaults, and where the effective value came from). The plugin
 source is the origin of truth; the declaration sits beside the plugin's
 descriptor.
 
+For example, `tool-web` takes `search` and `fetch` booleans (both default
+`true`) that register the model-facing `web_search` and `web_fetch` tools.
+Registration is independent of whether a search endpoint is configured: with
+none, `web_search` is still visible and fails with a structured error at call
+time. Disable one with `"components": { "tool-web": { "search": false } }`.
+
 ## Runtime commands
 
 | Command | Effect |

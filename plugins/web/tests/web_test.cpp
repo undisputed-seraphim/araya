@@ -92,7 +92,8 @@ TEST_CASE("web search returns provider sources and reports absence") {
 			CHECK(request.target().starts_with("/search?q="));
 			http::response<http::string_body> response{http::status::ok, 11};
 			response.set(http::field::content_type, "application/json");
-			response.body() = R"({"results":[{"title":"First","url":"https://example.com/a","snippet":"alpha"},)"
+			response.body() = R"({"content":"Provider summary.",)"
+							  R"("results":[{"title":"First","url":"https://example.com/a","snippet":"alpha"},)"
 							  R"({"title":"Second","url":"https://example.com/b","snippet":"beta"}]})";
 			return response;
 		};
@@ -110,6 +111,7 @@ TEST_CASE("web search returns provider sources and reports absence") {
 		CHECK(result.sources[0].title == "First");
 		CHECK(result.sources[0].url == "https://example.com/a");
 		CHECK(result.sources[0].snippet == "alpha");
+		CHECK(result.content == "Provider summary.");
 	});
 }
 

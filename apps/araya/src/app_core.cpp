@@ -473,8 +473,10 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	// and its session catalog context producer.
 	ctx.desired["skill"] = desired_entry{&araya::skill::plugin_descriptor(), {}};
 	ctx.desired["tool-skill"] = desired_entry{&araya::tool_skill::plugin_descriptor(), {}};
-	// Web access: the fetch/search service and the model-facing tools.
-	// Without a configured search provider only `web_fetch` is registered.
+	// Web access: the fetch/search service and the model-facing tools. Both
+	// tools register by default (tool registration is independent of provider
+	// availability, matching deepseek-harness); without a configured search
+	// endpoint `web_search` fails with a structured error at call time.
 	ctx.desired["web"] = desired_entry{&araya::web::plugin_descriptor(), {}};
 	ctx.desired["tool-web"] = desired_entry{&araya::tool_web::plugin_descriptor(), {}};
 	// Human interaction: the user-questions service and the model-facing
