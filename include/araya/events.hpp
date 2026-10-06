@@ -173,6 +173,20 @@ boost::asio::awaitable<void> invoke_owned_raw(Fn const& fn, Message msg) {
 	co_await fn(&msg);
 }
 
+// Emit-mode variants: every listener shares one immutable message, so the
+// per-listener deep copy is replaced by a single allocation plus refcounts.
+// The shared_ptr lives in this frame, keeping the message alive for the
+// listener's whole duration.
+template <class Message, class Fn>
+boost::asio::awaitable<void> invoke_shared(Fn const& fn, std::shared_ptr<Message const> msg) {
+	co_await fn(*msg);
+}
+
+template <class Message, class Fn>
+boost::asio::awaitable<void> invoke_shared_raw(Fn const& fn, std::shared_ptr<Message const> msg) {
+	co_await fn(msg.get());
+}
+
 } // namespace detail
 
 template <class Message>
@@ -317,25 +331,57 @@ public:
 		service_id id,
 		context const* scope,
 		std::shared_ptr<std::move_only_function<void(std::exception_ptr)>> sink) {
+		// Snapshot both lists up front. Each spawned coroutine holds a
+		// reference to its slot's callable, so the completion handler also
+		// captures the snapshot: that keeps the vector (and those callables)
+		// alive until the listener finishes, even if an add/remove replaces
+		// the current list while a suspended listener is still in flight.
 		auto snapshot = listeners_;
+		auto raw_snapshot = raw_;
+		std::size_t total = 0;
+		for (auto const& slot : *snapshot)
+			if (deliver(slot, id, scope))
+				++total;
+		total += raw_snapshot->size();
+		if (total == 0)
+			return;
+		auto report = [sink](std::exception_ptr ep) {
+			if (ep && *sink)
+				(*sink)(ep);
+		};
+		// With more than one listener and a message whose copy is more than a
+		// value (e.g. a string or a JSON tree), share one immutable copy
+		// instead of deep-copying per listener. A single listener, or a
+		// trivially copyable message, keeps the cheaper per-listener copy.
+		if (total >= 2 && !std::is_trivially_copyable_v<Message>) {
+			auto shared = std::make_shared<Message const>(std::move(msg));
+			for (auto const& slot : *snapshot) {
+				if (!deliver(slot, id, scope))
+					continue;
+				boost::asio::co_spawn(
+					strand, invoke_shared<Message>(slot.fn, shared), [snapshot, report](std::exception_ptr ep) {
+						report(ep);
+					});
+			}
+			for (auto const& slot : *raw_snapshot) {
+				boost::asio::co_spawn(
+					strand, invoke_shared_raw<Message>(slot.fn, shared), [raw_snapshot, report](std::exception_ptr ep) {
+						report(ep);
+					});
+			}
+			return;
+		}
 		for (auto const& slot : *snapshot) {
 			if (!deliver(slot, id, scope))
 				continue;
 			Message m = msg;
 			auto t = invoke_owned(slot.fn, std::move(m));
-			boost::asio::co_spawn(strand, std::move(t), [sink](std::exception_ptr ep) {
-				if (ep && *sink)
-					(*sink)(ep);
-			});
+			boost::asio::co_spawn(strand, std::move(t), [snapshot, report](std::exception_ptr ep) { report(ep); });
 		}
-		auto raw_snapshot = raw_;
 		for (auto const& slot : *raw_snapshot) {
 			Message m = msg;
 			auto t = invoke_owned_raw(slot.fn, std::move(m));
-			boost::asio::co_spawn(strand, std::move(t), [sink](std::exception_ptr ep) {
-				if (ep && *sink)
-					(*sink)(ep);
-			});
+			boost::asio::co_spawn(strand, std::move(t), [raw_snapshot, report](std::exception_ptr ep) { report(ep); });
 		}
 	}
 

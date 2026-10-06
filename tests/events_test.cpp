@@ -31,6 +31,28 @@ inline constexpr araya::event_key<std::string, araya::dispatch_mode::waterfall> 
 
 inline constexpr araya::event_key<std::string, araya::dispatch_mode::bail> bail_key{"example.bail", 1};
 
+// An emit message with an instrumented copy constructor, so a test can
+// prove listeners share one copy instead of deep-copying each.
+struct counted {
+	static int copies;
+	int value = 0;
+
+	counted() = default;
+	explicit counted(int v)
+		: value(v) {}
+	counted(counted const& other)
+		: value(other.value) {
+		++copies;
+	}
+	counted& operator=(counted const& other) = default;
+	counted(counted&&) noexcept = default;
+	counted& operator=(counted&&) noexcept = default;
+};
+
+int counted::copies = 0;
+
+inline constexpr araya::event_key<counted, araya::dispatch_mode::emit> counted_key{"example.counted", 1};
+
 boost::asio::awaitable<void> dummy_raw(void const*) { co_return; }
 
 // Throws from a plain (non-coroutine) frame: the test coroutine only
@@ -707,4 +729,79 @@ TEST_CASE("scope filtering applies to parallel dispatch") {
 
 	fx.io.run();
 	CHECK(got == std::vector<std::string>{"scoped:b"});
+}
+
+TEST_CASE("emit shares one message copy across multiple listeners") {
+	fixture fx;
+	std::vector<int> seen;
+
+	boost::asio::co_spawn(
+		fx.strand,
+		araya_test::heap_coroutine([&]() -> araya::task<void> {
+			fx.ctx.on(counted_key, [&](counted const& m) { seen.push_back(m.value); });
+			fx.ctx.on(counted_key, [&](counted const& m) { seen.push_back(m.value * 10); });
+			fx.ctx.on(counted_key, [&](counted const& m) { seen.push_back(m.value * 100); });
+
+			counted::copies = 0;
+			fx.bus->dispatch(counted_key, counted{3});
+			co_return;
+		}),
+		boost::asio::detached);
+
+	fx.io.run();
+	// Three listeners, three deliveries, but the message was constructed
+	// once and shared: no per-listener deep copy.
+	CHECK(counted::copies == 0);
+	CHECK(seen == std::vector<int>{3, 30, 300});
+}
+
+TEST_CASE("emit with a single listener keeps the per-listener copy") {
+	fixture fx;
+	int seen = 0;
+
+	boost::asio::co_spawn(
+		fx.strand,
+		araya_test::heap_coroutine([&]() -> araya::task<void> {
+			fx.ctx.on(counted_key, [&](counted const& m) { seen = m.value; });
+
+			counted::copies = 0;
+			fx.bus->dispatch(counted_key, counted{7});
+			co_return;
+		}),
+		boost::asio::detached);
+
+	fx.io.run();
+	// A single listener sits below the sharing threshold, so it still takes
+	// one copy; the point is that sharing is skipped rather than forced.
+	CHECK(counted::copies == 1);
+	CHECK(seen == 7);
+}
+
+TEST_CASE("an in-flight emit listener survives a listener-list replacement") {
+	fixture fx;
+	bool slow_ran = false;
+
+	boost::asio::co_spawn(
+		fx.strand,
+		araya_test::heap_coroutine([&]() -> araya::task<void> {
+			fx.ctx.on(emit_key, [&](std::string const&) -> araya::task<void> {
+				auto timer = boost::asio::steady_timer(co_await boost::asio::this_coro::executor, 20ms);
+				co_await timer.async_wait(boost::asio::use_awaitable);
+				slow_ran = true;
+			});
+
+			fx.bus->dispatch(emit_key, std::string("e"));
+			// A registration replaces the listener vector (copy-on-write)
+			// while the slow listener above is still suspended. Its callable
+			// lives in the replaced snapshot, which the dispatch's completion
+			// handler must keep alive until the listener finishes.
+			fx.ctx.on(emit_key, [](std::string const&) {});
+
+			auto wait = boost::asio::steady_timer(co_await boost::asio::this_coro::executor, 50ms);
+			co_await wait.async_wait(boost::asio::use_awaitable);
+		}),
+		boost::asio::detached);
+
+	fx.io.run();
+	CHECK(slow_ran);
 }
