@@ -85,6 +85,53 @@ araya::registration
 	});
 }
 
+araya::registration
+tools_service::guard(araya::plugin_context& caller, tool_guard check, std::optional<std::string> scope) {
+	if (!check)
+		throw std::invalid_argument("tools: guard must not be empty");
+	auto const id = next_guard_id_++;
+	return caller.effect([this, id, scope = std::move(scope), check = std::move(check)]() -> araya::cleanup_action {
+		guards_.push_back(guard_entry{id, std::move(scope), std::move(check)});
+		return [this, id] { std::erase_if(guards_, [id](guard_entry const& e) { return e.id == id; }); };
+	});
+}
+
+araya::registration tools_service::on_result(
+	araya::plugin_context& caller,
+	tool_result_listener listener,
+	std::optional<std::string> scope) {
+	if (!listener)
+		throw std::invalid_argument("tools: result listener must not be empty");
+	auto const id = next_result_id_++;
+	return caller.effect(
+		[this, id, scope = std::move(scope), listener = std::move(listener)]() -> araya::cleanup_action {
+			result_listeners_.push_back(result_entry{id, std::move(scope), std::move(listener)});
+			return [this, id] { std::erase_if(result_listeners_, [id](result_entry const& e) { return e.id == id; }); };
+		});
+}
+
+std::optional<std::string>
+tools_service::guard_reason(tool_context const& context, std::optional<std::string> const& scope) const {
+	for (auto const& entry : guards_) {
+		if (entry.scope && (!scope || *entry.scope != *scope))
+			continue;
+		if (auto reason = entry.check(context))
+			return reason;
+	}
+	return std::nullopt;
+}
+
+void tools_service::notify_result(
+	tool_context const& context,
+	tool_result const& result,
+	std::optional<std::string> const& scope) const {
+	for (auto const& entry : result_listeners_) {
+		if (entry.scope && (!scope || *entry.scope != *scope))
+			continue;
+		entry.listener(context, result);
+	}
+}
+
 std::optional<tool_definition>
 tools_service::find(std::string_view name, std::optional<std::string> const& scope) const {
 	for (auto const* entry : visible(scope)) {
@@ -112,7 +159,14 @@ tools_service::invoke(std::string_view name, tool_context context, std::optional
 	}
 	if (!found)
 		co_return std::nullopt;
-	co_return co_await found->handler(context);
+	if (auto reason = guard_reason(context, scope)) {
+		tool_result denied = error_result(*reason);
+		notify_result(context, denied, scope);
+		co_return denied;
+	}
+	tool_result result = co_await found->handler(context);
+	notify_result(context, result, scope);
+	co_return result;
 }
 
 std::vector<system_prompt::tool_schema> tools_service::schemas(std::optional<std::string> const& scope) const {

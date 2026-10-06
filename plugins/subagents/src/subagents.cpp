@@ -194,10 +194,13 @@ void validate_into(
 	}
 }
 
-// The mutable capture shared between the child's scoped tool handler and the
-// run that awaits the child.
+// The mutable capture shared between the child's scoped tool handler, guard,
+// and result listener, and the run that awaits the child. A validated value is
+// staged by the handler and committed only once its own result comes back
+// successful - the harness's authoritative (two-phase) capture.
 struct structured_capture {
 	boost::json::value schema;
+	std::optional<boost::json::value> staged;
 	std::optional<boost::json::value> value;
 	bool recorded = false;
 };
@@ -244,10 +247,42 @@ araya::tools::tool_handler make_structured_handler(std::shared_ptr<structured_ca
 			co_return araya::tools::tool_result{
 				boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, true};
 		}
-		capture->value = ctx.arguments;
-		capture->recorded = true;
+		// Stage rather than commit: the value is accepted only when this call's
+		// own result comes back successful. The result carries concludes_turn so
+		// the loop takes no further steps (the terminal semantics of the tool).
+		capture->staged = ctx.arguments;
 		co_return araya::tools::tool_result{
-			boost::json::array{{{"type", "text"}, {"text", "Structured output recorded."}}}, false};
+			boost::json::array{{{"type", "text"}, {"text", "Structured output recorded."}}}, false, true};
+	};
+}
+
+// The scoped guard that makes the capture terminal: once a value is staged or
+// committed, every later tool call in the run is refused - one-way, because a
+// guard can only deny.
+araya::tools::tool_guard make_structured_guard(std::shared_ptr<structured_capture> capture) {
+	return [capture](araya::tools::tool_context const& ctx) -> std::optional<std::string> {
+		if (!capture->recorded && !capture->staged)
+			return std::nullopt;
+		return "structured output already recorded: the run is complete, so `" + ctx.name + "` is not executed";
+	};
+}
+
+// The scoped result listener that commits the staged value once its own call
+// reports success, and drops it otherwise.
+araya::tools::tool_result_listener make_structured_listener(std::shared_ptr<structured_capture> capture) {
+	return [capture](araya::tools::tool_context const& ctx, araya::tools::tool_result const& result) {
+		if (std::string_view(ctx.name) != k_structured_tool)
+			return;
+		if (!capture->staged)
+			return;
+		auto staged = std::move(*capture->staged);
+		capture->staged.reset();
+		if (result.is_error)
+			return;
+		if (!capture->recorded) {
+			capture->value = std::move(staged);
+			capture->recorded = true;
+		}
 	};
 }
 
@@ -402,11 +437,14 @@ araya::task<result> subagents_service::run(std::string_view provider_name, start
 	// released when this run's frame unwinds.
 	composition_guard composition{&state.composition};
 
-	// A schema-bearing one-shot registers a child-scoped capture tool and
-	// instruction before the child's first step assembles its prompt.
+	// A schema-bearing one-shot registers a child-scoped capture tool,
+	// instruction, terminal guard, and result listener before the child's first
+	// step assembles its prompt.
 	std::shared_ptr<structured_capture> capture;
 	std::optional<registration_guard> tool_guard;
 	std::optional<registration_guard> section_guard;
+	std::optional<registration_guard> guard_registration;
+	std::optional<registration_guard> listener_registration;
 	if (req.output_schema && tools_ && prompts_ && context_factory_) {
 		capture = std::make_shared<structured_capture>();
 		capture->schema = *req.output_schema;
@@ -416,6 +454,10 @@ araya::task<result> subagents_service::run(std::string_view provider_name, start
 			view, structured_tool_def(*req.output_schema), make_structured_handler(capture), child->id().value);
 		section_guard.emplace();
 		section_guard->reg = prompts_->section(view, structured_section(), child->id().value);
+		guard_registration.emplace();
+		guard_registration->reg = tools_->guard(view, make_structured_guard(capture), child->id().value);
+		listener_registration.emplace();
+		listener_registration->reg = tools_->on_result(view, make_structured_listener(capture), child->id().value);
 	}
 
 	araya::agent::run_options options;

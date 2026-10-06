@@ -52,6 +52,17 @@ tool_definition echo_def(std::string description = "echoes") {
 	return tool_definition{"echo", std::move(description), boost::json::object{}};
 }
 
+std::string text_of(tool_result const& result) {
+	auto const* arr = result.content.if_array();
+	if (!arr || arr->empty())
+		return {};
+	auto const* object = arr->front().if_object();
+	if (!object)
+		return {};
+	auto it = object->find("text");
+	return it != object->end() && it->value().is_string() ? std::string(it->value().as_string()) : std::string{};
+}
+
 struct harness {
 	boost::asio::io_context io;
 	std::shared_ptr<araya::runtime> rt = std::make_shared<araya::runtime>(io.get_executor());
@@ -229,5 +240,100 @@ TEST_CASE("releasing a restriction lifts it") {
 		CHECK_FALSE(r.tools->find("bash", scope).has_value());
 		reg.release();
 		CHECK(r.tools->find("bash", scope).has_value());
+	});
+}
+
+TEST_CASE("a guard denies a call with its verbatim reason, leaving earlier calls alone") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h, rt};
+		bool deny = false;
+		co_await r.mount([&](araya::plugin_context& ctx, tools_service& svc) {
+			svc.register_tool(ctx, echo_def(), &echo_handler);
+			svc.guard(ctx, [&deny](tool_context const& c) -> std::optional<std::string> {
+				if (deny)
+					return "already done, so `" + c.name + "` is not executed";
+				return std::nullopt;
+			});
+		});
+		auto first = co_await r.tools->invoke("echo", tool_context{.name = "echo"});
+		REQUIRE(first.has_value());
+		CHECK_FALSE(first->is_error);
+
+		deny = true;
+		auto second = co_await r.tools->invoke("echo", tool_context{.name = "echo"});
+		REQUIRE(second.has_value());
+		CHECK(second->is_error);
+		CHECK(text_of(*second) == "already done, so `echo` is not executed");
+	});
+}
+
+TEST_CASE("a scoped guard only affects its own scope") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h, rt};
+		co_await r.mount([&](araya::plugin_context& ctx, tools_service& svc) {
+			svc.register_tool(ctx, echo_def(), &echo_handler);
+			svc.guard(
+				ctx, [](tool_context const&) -> std::optional<std::string> { return "blocked"; }, std::string("child"));
+		});
+		auto global = co_await r.tools->invoke("echo", tool_context{.name = "echo"});
+		REQUIRE(global.has_value());
+		CHECK_FALSE(global->is_error);
+		auto scoped = co_await r.tools->invoke("echo", tool_context{.name = "echo"}, std::string("child"));
+		REQUIRE(scoped.has_value());
+		CHECK(scoped->is_error);
+	});
+}
+
+TEST_CASE("a result listener observes the final result of every dispatch") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h, rt};
+		std::vector<std::string> seen;
+		bool deny = false;
+		co_await r.mount([&](araya::plugin_context& ctx, tools_service& svc) {
+			svc.register_tool(ctx, echo_def(), &echo_handler);
+			svc.guard(ctx, [&deny](tool_context const&) -> std::optional<std::string> {
+				return deny ? std::optional<std::string>{"blocked"} : std::nullopt;
+			});
+			svc.on_result(ctx, [&seen](tool_context const& c, tool_result const& res) {
+				seen.push_back(c.name + (res.is_error ? ":error" : ":ok"));
+			});
+		});
+		co_await r.tools->invoke("echo", tool_context{.name = "echo"});
+		deny = true;
+		co_await r.tools->invoke("echo", tool_context{.name = "echo"});
+		CHECK(seen == std::vector<std::string>{"echo:ok", "echo:error"});
+	});
+}
+
+TEST_CASE("releasing a guard lifts it") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h, rt};
+		araya::registration reg;
+		co_await r.mount([&](araya::plugin_context& ctx, tools_service& svc) {
+			svc.register_tool(ctx, echo_def(), &echo_handler);
+			reg = svc.guard(ctx, [](tool_context const&) -> std::optional<std::string> { return "blocked"; });
+		});
+		auto denied = co_await r.tools->invoke("echo", tool_context{.name = "echo"});
+		REQUIRE(denied.has_value());
+		CHECK(denied->is_error);
+		reg.release();
+		auto allowed = co_await r.tools->invoke("echo", tool_context{.name = "echo"});
+		REQUIRE(allowed.has_value());
+		CHECK_FALSE(allowed->is_error);
+	});
+}
+
+TEST_CASE("guard and result listener reject empty callbacks") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h, rt};
+		co_await r.mount([](araya::plugin_context& ctx, tools_service& svc) {
+			CHECK_THROWS_AS(svc.guard(ctx, tool_guard{}), std::invalid_argument);
+			CHECK_THROWS_AS(svc.on_result(ctx, tool_result_listener{}), std::invalid_argument);
+		});
 	});
 }

@@ -258,6 +258,25 @@ araya::task<araya::tools::tool_result> echo_tool(araya::tools::tool_context cons
 	co_return araya::tools::tool_result{boost::json::array{{{"type", "text"}, {"text", std::move(text)}}}, false};
 }
 
+// One assistant step carrying two tool calls in model order.
+std::vector<stream_chunk> two_tool_stream(std::string first_name, std::string second_name) {
+	tool_call_block first{"call-1", std::move(first_name), "{}"};
+	tool_call_block second{"call-2", std::move(second_name), "{}"};
+	token_usage tokens;
+	tokens.input_tokens = 6;
+	tokens.output_tokens = 2;
+	return {
+		stream_chunk{block_start_chunk{0, content_block_type::tool_call}},
+		stream_chunk{tool_call_delta_chunk{0, "call-1", first.name, "{}"}},
+		stream_chunk{block_end_chunk{0, content_block{first}}},
+		stream_chunk{block_start_chunk{1, content_block_type::tool_call}},
+		stream_chunk{tool_call_delta_chunk{1, "call-2", second.name, "{}"}},
+		stream_chunk{block_end_chunk{1, content_block{second}}},
+		stream_chunk{usage_chunk{tokens}},
+		stream_chunk{finish_chunk{finish_chunk::reason::tool_calls, std::nullopt, std::nullopt}},
+	};
+}
+
 } // namespace
 
 TEST_CASE("a text-only turn commits the full event envelope") {
@@ -362,6 +381,75 @@ TEST_CASE("tool calls execute and feed the next step") {
 		}
 		CHECK(saw_tool_event);
 		CHECK(saw_tool_done);
+	});
+}
+
+TEST_CASE("a concluding result ends the turn with no further steps") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{tool_stream("finish", "{}")}, {text_stream("unreachable")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+		r.tools->register_tool(
+			root_ctx,
+			araya::tools::tool_definition{"finish", "finishes", boost::json::value{{"type", "object"}}},
+			[](araya::tools::tool_context const&) -> araya::task<araya::tools::tool_result> {
+				co_return araya::tools::tool_result{
+					boost::json::array{{{"type", "text"}, {"text", "done"}}}, false, true};
+			});
+
+		auto outcome = co_await r.agent->run(options_for("hi"), {});
+
+		CHECK(outcome.status == run_status::completed);
+		CHECK(g_scripted->seen.size() == 1); // no second model call
+		CHECK(count_type(*r.session, "step/start") == 1);
+		CHECK(count_type(*r.session, "tool/call") == 1);
+	});
+}
+
+TEST_CASE("a guard stops calls after a concluding result in the same step") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		g_scripted->script = {{two_tool_stream("finish", "echo")}};
+		rig r{h};
+		co_await r.mount(rt);
+		auto root_ctx = rt.root_context();
+		auto committed = std::make_shared<bool>(false);
+		r.tools->register_tool(
+			root_ctx,
+			araya::tools::tool_definition{"finish", "finishes", boost::json::value{{"type", "object"}}},
+			[](araya::tools::tool_context const&) -> araya::task<araya::tools::tool_result> {
+				co_return araya::tools::tool_result{
+					boost::json::array{{{"type", "text"}, {"text", "done"}}}, false, true};
+			});
+		r.tools->register_tool(
+			root_ctx,
+			araya::tools::tool_definition{"echo", "echoes", boost::json::value{{"type", "object"}}},
+			&echo_tool);
+		// The guard is armed by the authoritative result, then denies the next
+		// call in the step - the structured-output pattern in miniature.
+		r.tools->guard(root_ctx, [committed](araya::tools::tool_context const& c) -> std::optional<std::string> {
+			if (*committed)
+				return "already done, so `" + c.name + "` is not executed";
+			return std::nullopt;
+		});
+		r.tools->on_result(
+			root_ctx, [committed](araya::tools::tool_context const& ctx, araya::tools::tool_result const& result) {
+				if (ctx.name == "finish" && !result.is_error)
+					*committed = true;
+			});
+
+		auto outcome = co_await r.agent->run(options_for("hi"), {});
+
+		CHECK(outcome.status == run_status::completed);
+		CHECK(count_type(*r.session, "tool/call") == 2);
+		CHECK(count_type(*r.session, "tool/result") == 2);
+		auto const* denied = find_data(*r.session, "tool/result", 1);
+		REQUIRE(denied != nullptr);
+		CHECK(denied->at("content").as_array()[0].at("is_error").as_bool());
 	});
 }
 

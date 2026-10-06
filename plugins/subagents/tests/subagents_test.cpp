@@ -415,8 +415,11 @@ TEST_CASE("consecutive structured children keep their own captures") {
 			rt,
 			{},
 			{{"provider", "mock"},
+			 // The structured call concludes each run, so each child consumes
+			 // exactly one scripted step.
 			 {"script",
-			  R"([{"tool_call":{"name":"structured_output","arguments":"{\"answer\":1}"}},{"text":"one"},{"tool_call":{"name":"structured_output","arguments":"{\"answer\":2}"}},{"text":"two"}])"}});
+			  R"([{"tool_call":{"name":"structured_output","arguments":"{\"answer\":1}"}},)"
+			  R"({"tool_call":{"name":"structured_output","arguments":"{\"answer\":2}"}}])"}});
 
 		auto first = co_await r.subs->run("spawn", structured_request("first"));
 		auto second = co_await r.subs->run("spawn", structured_request("second"));
@@ -425,6 +428,30 @@ TEST_CASE("consecutive structured children keep their own captures") {
 		REQUIRE(second.structure.has_value());
 		CHECK(first.structure->at("answer").as_int64() == 1);
 		CHECK(second.structure->at("answer").as_int64() == 2);
+	});
+}
+
+TEST_CASE("a structured call ends the run and blocks anything after it") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		rig r{h};
+		co_await r.mount(
+			rt,
+			{},
+			{{"provider", "mock"},
+			 {"script",
+			  R"([{"tool_call":{"name":"structured_output","arguments":"{\"answer\":5}"}},)"
+			  R"({"tool_call":{"name":"structured_output","arguments":"{\"answer\":6}"}}])"}});
+
+		auto result = co_await r.subs->run("spawn", structured_request("answer"));
+
+		REQUIRE(result.structure.has_value());
+		// The first and only call wins, and the run stops right after it.
+		CHECK(result.structure->at("answer").as_int64() == 5);
+		CHECK(result.stop_reason == "completed");
+		auto child = r.store->get(araya::session::session_id{result.child});
+		REQUIRE(child != nullptr);
+		CHECK(count_type(*child, "tool/call") == 1);
 	});
 }
 

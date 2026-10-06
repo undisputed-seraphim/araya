@@ -77,6 +77,14 @@ enum class run_status : std::uint8_t {
 // The stable display name for a run status (also the turn/end reason).
 char const* run_status_name(run_status status) noexcept;
 
+// The outcome of executing one step's tool calls. `aborted` ends the run as
+// aborted; `concluded` means a committed result declared the turn complete
+// (`tool_result::concludes_turn`), so the loop takes no further steps.
+struct tool_batch_outcome {
+	bool aborted = false;
+	bool concluded = false;
+};
+
 struct run_outcome {
 	run_status status = run_status::completed;
 	// The provider failure, set iff status is error.
@@ -287,7 +295,7 @@ private:
 		std::vector<boost::json::value> const& messages,
 		bool starts_request_series,
 		event_sink const& sink);
-	araya::task<bool> execute_tools(
+	araya::task<tool_batch_outcome> execute_tools(
 		state_ptr const& state,
 		araya::session::session& session,
 		std::uint64_t turn,

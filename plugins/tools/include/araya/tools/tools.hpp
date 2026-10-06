@@ -54,6 +54,10 @@ struct tool_result {
 	// [{"type":"text","text":"..."}]).
 	boost::json::value content;
 	bool is_error = false;
+	// A committed result that ends the current turn: the agent loop takes no
+	// further steps once a step commits one. Set by a tool whose completion is
+	// terminal (the structured-output capture).
+	bool concludes_turn = false;
 };
 
 // The common single-text-block result and its error counterpart. Every tool
@@ -67,6 +71,20 @@ inline tool_result error_result(std::string text) { return text_result(std::move
 inline tool_result error_result(std::exception const& e) { return error_result(std::string("Error: ") + e.what()); }
 
 using tool_handler = std::function<araya::task<tool_result>(tool_context const&)>;
+
+// A monotonic execution guard: evaluated before a tool body runs (after the
+// visible entry is resolved). Returning a reason denies the call - it is not
+// executed and the reason becomes the error result; returning nullopt leaves
+// the call allowed. Guards have no allow result, so no ordering of guards can
+// turn a denial back into permission.
+using tool_guard = std::function<std::optional<std::string>(tool_context const&)>;
+
+// A result listener: notified with the final result of one tool invocation,
+// after the handler settled (success or error) and after any guard denial. It
+// observes the result and cannot transform it. Used to commit state that must
+// only be accepted once the call is authoritative (the structured-output
+// capture).
+using tool_result_listener = std::function<void(tool_context const&, tool_result const&)>;
 
 // A per-scope filter over the global tools a scope inherits. `allow` keeps
 // only the named globals; `deny` removes the named globals; when both are
@@ -113,6 +131,16 @@ public:
 		tool_restriction filter,
 		std::optional<std::string> scope = {});
 
+	// Registers a monotonic execution guard. A guard with no scope applies
+	// globally; a scoped guard applies only when the invoke's scope matches.
+	// Owned by `caller`.
+	araya::registration guard(araya::plugin_context& caller, tool_guard check, std::optional<std::string> scope = {});
+
+	// Registers a result listener. Scoping matches `guard`: no scope is global.
+	// Owned by `caller`.
+	araya::registration
+	on_result(araya::plugin_context& caller, tool_result_listener listener, std::optional<std::string> scope = {});
+
 private:
 	struct tool_entry {
 		std::uint64_t id = 0;
@@ -125,6 +153,16 @@ private:
 		std::optional<std::string> scope;
 		tool_restriction filter;
 	};
+	struct guard_entry {
+		std::uint64_t id = 0;
+		std::optional<std::string> scope;
+		tool_guard check;
+	};
+	struct result_entry {
+		std::uint64_t id = 0;
+		std::optional<std::string> scope;
+		tool_result_listener listener;
+	};
 
 	// Merged visible entries (scoped shadows global), name-ordered.
 	std::vector<tool_entry const*> visible(std::optional<std::string> const& scope) const;
@@ -132,10 +170,23 @@ private:
 	// Whether every restriction in `scope` admits the global `name`.
 	bool admits(std::string_view name, std::optional<std::string> const& scope) const;
 
+	// The first monotonic denial from the guards that apply to `scope`, or
+	// nullopt. Global guards apply everywhere; a scoped guard only to its scope.
+	std::optional<std::string> guard_reason(tool_context const& context, std::optional<std::string> const& scope) const;
+
+	// Notify every result listener that applies to `scope` with one invocation's
+	// final result.
+	void notify_result(tool_context const& context, tool_result const& result, std::optional<std::string> const& scope)
+		const;
+
 	std::uint64_t next_id_ = 1;
 	std::vector<tool_entry> tools_;
 	std::uint64_t next_restriction_id_ = 1;
 	std::vector<restriction_entry> restrictions_;
+	std::uint64_t next_guard_id_ = 1;
+	std::vector<guard_entry> guards_;
+	std::uint64_t next_result_id_ = 1;
+	std::vector<result_entry> result_listeners_;
 };
 
 inline constexpr araya::service_key<tools_service> tools_key{"tools", 1};

@@ -782,12 +782,17 @@ araya::task<std::optional<run_status>> agent_service::run_step(
 	auto const calls = tool_calls_of(commit.blocks);
 	if (calls.empty())
 		co_return run_status::completed;
-	if (co_await execute_tools(state, session, turn, step, calls, sink))
+	auto executed = co_await execute_tools(state, session, turn, step, calls, sink);
+	if (executed.aborted)
 		co_return run_status::aborted;
+	// A committed result declared the turn complete (the structured-output
+	// capture): take no further steps, exactly as the harness's concludeTurn.
+	if (executed.concluded)
+		co_return run_status::completed;
 	co_return std::nullopt;
 }
 
-araya::task<bool> agent_service::execute_tools(
+araya::task<tool_batch_outcome> agent_service::execute_tools(
 	state_ptr const& state,
 	session& session,
 	std::uint64_t turn,
@@ -795,14 +800,14 @@ araya::task<bool> agent_service::execute_tools(
 	std::vector<tool_call_block> const& calls,
 	event_sink const& sink) {
 	auto const scope = session.id().value;
-	bool aborted = false;
+	tool_batch_outcome outcome;
 	for (auto const& call : calls) {
 		session.append("tool/call", tool_call_data(turn, step, call));
 		emit(sink, tool_call_event{turn, step, call.id, call.name});
 
 		tool_result result;
-		if (aborted || state->exec.stop.stop_requested()) {
-			aborted = true;
+		if (outcome.aborted || state->exec.stop.stop_requested()) {
+			outcome.aborted = true;
 			result = error_result("Error: tool call aborted before dispatch");
 		} else {
 			boost::system::error_code ec;
@@ -819,13 +824,15 @@ araya::task<bool> agent_service::execute_tools(
 				result = error_result(std::string("Error: ") + e.what());
 			}
 		}
+		if (result.concludes_turn)
+			outcome.concluded = true;
 
 		session.append(
 			"tool/result",
 			tool_result_data("t" + std::to_string(session.log().size()), call.id, result.content, result.is_error));
 		emit(sink, tool_done_event{turn, step, call.id, call.name, result.is_error});
 	}
-	co_return aborted;
+	co_return outcome;
 }
 
 // -- prompt/request assembly ----------------------------------------------
