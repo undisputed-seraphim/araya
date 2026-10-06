@@ -1,0 +1,24 @@
+{
+  "log": { "level": "info" },
+  "state": { "sessions": "/tmp/araya-tour/sessions", "attachments": "/tmp/araya-tour/attachments" },
+  "llm": {
+    "openai": {
+      "provider": "llama",
+      "base_url": "http://127.0.0.1:8082/v1",
+      "default_model": "your-llama-cpp-model-id",
+      "connect_timeout_ms": 10000,
+      "idle_timeout_ms": 300000,
+      "models": {
+        "your-llama-cpp-model-id": {
+          "name": "Local llama.cpp model",
+          "context_window": 131072,
+          "max_tokens": 2048,
+          "temperature": 0.6
+        }
+      }
+    }
+  },
+  "components": {
+    "tool-workflow": { "enabled": "true" }
+  }
+}

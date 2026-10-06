@@ -7,10 +7,12 @@
 #include "araya/tools/tools.hpp"
 #include "araya/util/overloaded.hpp"
 
+#include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
 
 #include <optional>
 #include <sstream>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -270,6 +272,64 @@ araya::task<void> cmd_tool(app_context& ctx, line_sink const& out, std::string c
 			out("tool: " + tool.name + " - " + tool.description);
 	} catch (std::exception const& e) {
 		out(std::string("tool: ") + e.what());
+	}
+	co_return;
+}
+
+araya::task<void> cmd_call(app_context& ctx, line_sink const& out, std::string const& line) {
+	try {
+		std::istringstream is(line);
+		std::string cmd;
+		is >> cmd;
+		std::string name;
+		is >> name;
+		std::string rest;
+		std::getline(is, rest);
+		rest = trim(rest);
+		if (name.empty()) {
+			out("call: usage: call <tool> [json args]");
+			co_return;
+		}
+
+		auto root_ctx = ctx.rt->root_context();
+		auto registry = root_ctx.require<araya::tools::tools_service>(araya::tools::tools_key).shared();
+		auto store = root_ctx.require<session_store>(sessions_key).shared();
+		auto s = ensure_session(ctx, *store, out);
+
+		boost::json::value arguments;
+		if (rest.empty()) {
+			arguments = boost::json::object{};
+		} else {
+			boost::system::error_code ec;
+			arguments = boost::json::parse(rest, ec);
+			if (ec) {
+				out(std::string("call: invalid JSON arguments: ") + ec.message());
+				co_return;
+			}
+		}
+
+		auto const call_id = "call-" + std::to_string(s->log().size());
+		auto result = co_await registry->invoke(
+			name,
+			araya::tools::tool_context{call_id, name, s->id().value, std::move(arguments), std::stop_token{}},
+			s->id().value);
+		if (!result) {
+			out("call: unknown tool '" + name + "'");
+			co_return;
+		}
+		out(std::string("call: ") + name + (result->is_error ? " (error)" : ""));
+		if (auto const* blocks = result->content.if_array()) {
+			for (auto const& block : *blocks) {
+				auto const* object = block.if_object();
+				if (!object)
+					continue;
+				auto it = object->find("text");
+				if (it != object->end() && it->value().is_string())
+					out(std::string(it->value().as_string()));
+			}
+		}
+	} catch (std::exception const& e) {
+		out(std::string("call: ") + e.what());
 	}
 	co_return;
 }

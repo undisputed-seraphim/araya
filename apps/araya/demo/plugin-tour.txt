@@ -1,0 +1,67 @@
+/help
+/ls
+/config show
+/log level debug
+/log debug a debug record from the plugin tour
+/log level info
+/prompt show
+/prompt set You are a terse assistant demonstrating the araya plugin tour.
+/prompt suffix End every final answer with the token TOUR-DONE.
+/prompt identity off
+/prompt
+/session new tour
+/session append first entry
+/session append second entry
+/session show
+/timer in 1 one-shot ping
+sleep 1600
+/timer every 1 repeating ping
+sleep 2200
+/timer cancel
+/fail timer
+/ls
+/timer in 1 this should report unavailable
+sleep 1500
+/fail clear
+/avail wait
+/ls
+/avail ready
+/unload console
+/load console
+/reload timer
+/tool
+/say a local line that never touches the model
+/chat In one sentence, what is the araya plugin tour?
+/ask Reply with exactly the word: tour-ok. Then stop.
+/call write {"file_path":"tour.txt","content":"hello from the plugin tour\n"}
+/call read {"file_path":"tour.txt"}
+/call glob {"pattern":"tour*"}
+/call grep {"pattern":"hello","include":"*.txt"}
+/call bash {"command":"echo sandboxed shell; pwd; ls"}
+/call todo_write {"todos":[{"content":"exercise plugins","status":"in_progress"},{"content":"report results","status":"pending"}]}
+/call job_list
+/call skill {"name":"plugin-tour"}
+/call list_subagent_models {}
+/unload goal-round-driver
+/goal create complete the araya plugin tour
+/goal get
+/goal pause
+/goal resume
+/goal disarm
+/goal get
+/goal clear
+/load goal-round-driver
+/call web_fetch {"url":"http://192.168.1.180:8082/health"}
+/call workflow {"script":"return {ok: true, n: 1};","meta":{"name":"tour-smoke","description":"minimal workflow smoke"}}
+/call ask_user_question {"questions":[{"id":"pick","question":"Pick an option","header":"Tour","options":[{"label":"alpha","description":"the first"},{"label":"beta","description":"the second"}]}]}
+alpha
+/call subagent {"description":"tour child","prompt":"Reply with exactly the single word: child-ok. Then stop.","run_in_background":false}
+/call list_agents
+/session replace 0 2 condensed by the tour
+/session show
+/ask Use the write tool to create agent-note.txt with the single line "written by the model agent". Then use the read tool to read it back and quote its contents.
+/session show
+/session save
+/ls
+/prompt clear
+quit
