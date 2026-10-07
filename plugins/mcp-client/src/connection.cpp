@@ -1,5 +1,6 @@
 #include "connection.hpp"
 
+#include "http_transport.hpp"
 #include "jsonrpc.hpp"
 #include "stdio_transport.hpp"
 
@@ -153,9 +154,12 @@ araya::task<void> server_connection::run() {
 void server_connection::open_session() {
 	if (stopped_)
 		throw std::runtime_error("mcp: connection stopped");
-	if (config_.transport != "local")
-		throw std::runtime_error("mcp: transport '" + config_.transport + "' is not supported yet");
-	channel_ = launch_stdio(executor_, config_);
+	if (config_.transport == "local")
+		channel_ = launch_stdio(executor_, config_);
+	else if (config_.transport == "remote")
+		channel_ = launch_http(executor_, config_);
+	else
+		throw std::runtime_error("mcp: server '" + config_.name + "' has unknown type '" + config_.transport + "'");
 	tool_names_.clear();
 	instructions_.clear();
 	session_lost_ = false;

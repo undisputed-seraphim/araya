@@ -9,11 +9,12 @@ araya_add_plugin(mcp-client
     SOURCES
         src/config.cpp
         src/connection.cpp
+        src/http_transport.cpp
         src/mcp_client.cpp
         src/naming.cpp
         src/stdio_transport.cpp
-    DEPS araya::araya araya::tools araya::system-prompt
+    DEPS araya::araya araya::tools araya::system-prompt araya::llm
          OpenSSL::Crypto ${ARAYA_BOOST_PROCESS_LIBS}
-    TEST tests/mcp_test.cpp
+    TESTS tests/mcp_test.cpp tests/mcp_http_test.cpp
     TEST_INCLUDES src
 )
