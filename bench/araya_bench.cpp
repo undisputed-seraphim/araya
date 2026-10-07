@@ -579,9 +579,12 @@ int main(int argc, char** argv) {
 	auto opt = parse_args(argc, argv);
 
 	// The host's irreducible duties: own the strand, boot the engine,
-	// and issue the first causal actions.
+	// and issue the first causal actions. The runtime must be shared-owned
+	// (activations capture a weak_ptr back to it), so it lives in a
+	// shared_ptr rather than on the stack.
 	boost::asio::io_context io;
-	runtime rt{io.get_executor()};
+	auto runtime_holder = std::make_shared<runtime>(io.get_executor());
+	runtime& rt = *runtime_holder;
 
 	// The logger plugin is mounted like any other component; its quill
 	// console sink timestamps every record, keeping the bench phases
