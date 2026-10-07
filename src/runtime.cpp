@@ -538,9 +538,15 @@ void runtime::on_apply_completed(fiber_id id, std::exception_ptr ep) {
 		f->instance.reset();
 		f->committed.clear();
 		transition_finished();
+		// `done->open()` can synchronously run a waiting reconcile that
+		// erases this very fiber (its unique_ptr in the map is destroyed,
+		// freeing the record). Capture the reactivate verdict first, then
+		// re-resolve the fiber by id so we never dereference a freed record.
+		bool const reactivate_stale = stale && f->reactivate >= 0;
 		f->done->open();
-		if (stale && f->reactivate >= 0)
-			evaluate(*f);
+		if (reactivate_stale)
+			if (auto* current = find(id))
+				evaluate(*current);
 		return;
 	}
 
