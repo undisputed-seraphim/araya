@@ -47,6 +47,7 @@ state base, absolute paths are used verbatim.
   "state": { "sessions": "sessions", "attachments": "attachments" },
   "llm":   { "config_file": "~/llm.json" },   // or an inline provider object
   "mcp":   { "servers": { "github": { "type": "local", "command": ["github-mcp-server", "stdio"] } } },
+  "lsp":   { "servers": { "typescript": { "command": "typescript-language-server", "args": ["--stdio"], "extensionToLanguage": { ".ts": "typescript" } } } },
   "disabled": { "tool-web": true },
   "components": {
     "system-prompt": { "persona_prefix": "You are a coding agent." },
@@ -64,6 +65,8 @@ state base, absolute paths are used verbatim.
   `--llm-config` flag and `$ARAYA_LLM_CONFIG` still win.
 - `mcp` — external Model Context Protocol servers (see [MCP servers](#mcp-servers)).
   Absent, no MCP client is mounted.
+- `lsp` — local language servers for the `lsp` tool (see [Language servers](#language-servers)).
+  Absent, no LSP stack is mounted.
 - `disabled` — a per-component enable switch, merged per id: `true` drops the
   component, `false` re-enables one a lower layer dropped. Kept separate from
   `components` because some plugins take a `disabled` knob of their own.
@@ -159,6 +162,44 @@ the `MCP resource servers` prompt section.
 | `reconnect` | shared | `{enabled, initialDelayMs, maxDelayMs, maxAttempts}`; delays double up to the ceiling |
 
 `${NAME}` references in strings expand from the process environment.
+
+## Language servers
+
+The `lsp` block configures local language servers for the model-facing `lsp`
+tool (definitions, references, implementations, hover). Each named server maps
+file extensions to LSP language ids and is pooled one process per workspace.
+The block mounts the `lsp` seam, the `lsp-stdio` provider, and the `tool-lsp`
+tool together; when absent, no LSP stack runs.
+
+```jsonc
+"lsp": {
+  "servers": {
+    "typescript": {
+      "command": "typescript-language-server",
+      "args": ["--stdio"],
+      "extensionToLanguage": { ".ts": "typescript", ".tsx": "typescriptreact" },
+      "env": { "NODE_OPTIONS": "--max-old-space-size=4096" }
+    }
+  }
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `command` | required | Executable to spawn — absolute, or resolved on `PATH` at launch |
+| `args` | `[]` | Arguments passed to the executable |
+| `extensionToLanguage` | required | lowercase leading-dot extension → LSP language id |
+| `env` | `{}` | Extra child env vars, merged over the ambient environment after credential-shaped and `ARAYA_*` names are scrubbed |
+| `initializationOptions` | `null` | Static `initialize` options forwarded to the server |
+| `configuration` | `null` | Static answer to every `workspace/configuration` item |
+| `maxMessageBytes` / `maxStderrBytes` / `maxDocumentBytes` | 16000000 / 1000000 / 4000000 | framing, stderr-tail, and source-size caps |
+| `shutdownTimeoutMs` / `killGraceMs` | 5000 / 2000 | graceful-shutdown and SIGTERM→SIGKILL budgets |
+| `requestTimeoutMs` | 30000 | per-request timeout (Araya addition; prevents a wedged server from hanging a query) |
+
+Positions from the model are one-based line and character (UTF-16); the tool
+converts them to the protocol's zero-based coordinates. `findReferences`
+always includes the declaration. `${NAME}` references expand from the process
+environment.
 
 ## Runtime commands
 

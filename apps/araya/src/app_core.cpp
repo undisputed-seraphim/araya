@@ -15,6 +15,8 @@
 #include "araya/llm-openai/openai.hpp"
 #include "araya/llm/llm.hpp"
 #include "araya/logger/logger.hpp"
+#include "araya/lsp-stdio/lsp_stdio.hpp"
+#include "araya/lsp/lsp.hpp"
 #include "araya/mcp-client/mcp.hpp"
 #include "araya/mcp-resources/mcp_resources.hpp"
 #include "araya/persistence/persistence.hpp"
@@ -30,6 +32,7 @@
 #include "araya/tool-ask-user/tool_ask_user.hpp"
 #include "araya/tool-goal/tool_goal.hpp"
 #include "araya/tool-jobs/tool_jobs.hpp"
+#include "araya/tool-lsp/tool_lsp.hpp"
 #include "araya/tool-read-image/tool_read_image.hpp"
 #include "araya/tool-skill/tool_skill.hpp"
 #include "araya/tool-subagent-control/tool_subagent_control.hpp"
@@ -257,6 +260,7 @@ constexpr command_entry g_commands[]{
 	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | mcp-client | mcp-resources | "
+	 "lsp | lsp-stdio | tool-lsp | "
 	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-skill | tool-web | "
 	 "subagents | subagent-fork | tool-subagent | tool-subagent-fork | tool-subagent-control | workflow | "
 	 "tool-workflow | console | beacon | "
@@ -321,6 +325,12 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::mcp::plugin_descriptor();
 	if (name == "mcp-resources")
 		return &araya::mcp_resources::plugin_descriptor();
+	if (name == "lsp")
+		return &araya::lsp::plugin_descriptor();
+	if (name == "lsp-stdio")
+		return &araya::lsp_stdio::plugin_descriptor();
+	if (name == "tool-lsp")
+		return &araya::tool_lsp::plugin_descriptor();
 	if (name == "timer")
 		return &araya::timer::plugin_descriptor();
 	if (name == "session")
@@ -551,6 +561,14 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	// client; both appear only when a server is configured).
 	if (cfg.mcp_config_json)
 		ctx.desired["mcp-resources"] = desired_entry{&araya::mcp_resources::plugin_descriptor(), {}};
+	// Language-server navigation: the seam, the stdio provider, and the
+	// model-facing tool, mounted together when the `lsp` block is configured.
+	if (cfg.lsp_config_json) {
+		ctx.desired["lsp"] = desired_entry{&araya::lsp::plugin_descriptor(), {}};
+		ctx.desired["lsp-stdio"] =
+			desired_entry{&araya::lsp_stdio::plugin_descriptor(), {{"config", *cfg.lsp_config_json}}};
+		ctx.desired["tool-lsp"] = desired_entry{&araya::tool_lsp::plugin_descriptor(), {}};
+	}
 	ctx.desired["beacon"] = desired_entry{&araya::console_demo::beacon_descriptor(), {}};
 	ctx.desired["watcher"] = desired_entry{&araya::console_demo::watcher_descriptor(), {}};
 	ctx.desired["console"] = desired_entry{&araya::console_demo::console_descriptor(), {}};

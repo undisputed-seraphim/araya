@@ -42,6 +42,8 @@ target_link_libraries(araya_app PRIVATE
     araya::llm-mock
     araya::llm-openai
     araya::logger
+    araya::lsp
+    araya::lsp-stdio
     araya::mcp-client
     araya::mcp-resources
     araya::persistence
@@ -56,6 +58,7 @@ target_link_libraries(araya_app PRIVATE
     araya::tool-ask-user
     araya::tool-goal
     araya::tool-jobs
+    araya::tool-lsp
     araya::tool-read-image
     araya::tool-skill
     araya::tool-subagent

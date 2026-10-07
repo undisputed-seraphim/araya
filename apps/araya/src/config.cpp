@@ -166,6 +166,9 @@ void apply_layer(
 		} else if (key == "mcp") {
 			require_object(value, source, key);
 			cfg.mcp_config_json = json::serialize(value);
+		} else if (key == "lsp") {
+			require_object(value, source, key);
+			cfg.lsp_config_json = json::serialize(value);
 		} else if (key == "disabled") {
 			require_object(value, source, key);
 			for (auto const& [id, flag] : value.as_object()) {
@@ -315,6 +318,8 @@ std::string render_app_config(app_config const& config, descriptor_lookup lookup
 		out << "  llm:          (none)\n";
 	if (config.mcp_config_json)
 		out << "  mcp:          configured\n";
+	if (config.lsp_config_json)
+		out << "  lsp:          configured\n";
 	out << "  layers:";
 	if (config.layers.empty())
 		out << " (defaults only)";

@@ -37,6 +37,8 @@ struct app_config {
 	std::optional<std::string> llm_config_json;
 	// The MCP servers document (the whole top-level `mcp` object), inline.
 	std::optional<std::string> mcp_config_json;
+	// The LSP servers document (the whole top-level `lsp` object), inline.
+	std::optional<std::string> lsp_config_json;
 	// Per-component knob overrides, already stringified.
 	std::map<std::string, araya::plugin_config> components;
 	// Per-component key provenance (source label) for --print-config.
