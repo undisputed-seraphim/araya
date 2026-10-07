@@ -35,6 +35,8 @@ struct app_config {
 	// The LLM provider: a path (config_file) or an inline provider object.
 	std::optional<std::string> llm_config_file;
 	std::optional<std::string> llm_config_json;
+	// The MCP servers document (the whole top-level `mcp` object), inline.
+	std::optional<std::string> mcp_config_json;
 	// Per-component knob overrides, already stringified.
 	std::map<std::string, araya::plugin_config> components;
 	// Per-component key provenance (source label) for --print-config.

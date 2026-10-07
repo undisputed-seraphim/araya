@@ -58,10 +58,10 @@ option(ARAYA_WERROR
 set(ARAYA_PLUGINS
     agent-instructions agent-loop attachment coreutil fs fs-observation-policy
     goal goal-round-driver jobs llm llm-bridge llm-mock llm-openai logger
-    persistence sandbox sandbox-policy session shell skill subagent-fork
-    subagents system-prompt timer tool-ask-user tool-goal tool-jobs
-    tool-read-image tool-skill tool-subagent tool-subagent-control tool-todo
-    tool-workflow tool-web tools user-questions web workflow
+    mcp-client persistence sandbox sandbox-policy session shell skill
+    subagent-fork subagents system-prompt timer tool-ask-user tool-goal
+    tool-jobs tool-read-image tool-skill tool-subagent tool-subagent-control
+    tool-todo tool-workflow tool-web tools user-questions web workflow
     CACHE STRING "First-party plugins and support libraries to build")
 
 # Landlock detection is only meaningful when the sandbox plugin is selected.
@@ -82,7 +82,7 @@ set(ARAYA_BOOST_MIN 1.91)
 set(_araya_need_process OFF)
 if(ARAYA_BUILD_PLUGINS)
     foreach(_plugin IN LISTS ARAYA_PLUGINS)
-        if(_plugin STREQUAL "shell" OR _plugin STREQUAL "workflow")
+        if(_plugin STREQUAL "shell" OR _plugin STREQUAL "workflow" OR _plugin STREQUAL "mcp-client")
             set(_araya_need_process ON)
         endif()
     endforeach()

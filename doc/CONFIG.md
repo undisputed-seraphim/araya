@@ -46,6 +46,7 @@ state base, absolute paths are used verbatim.
   "log":   { "file": "logs/araya.log", "level": "info" },
   "state": { "sessions": "sessions", "attachments": "attachments" },
   "llm":   { "config_file": "~/llm.json" },   // or an inline provider object
+  "mcp":   { "servers": { "github": { "type": "local", "command": ["github-mcp-server", "stdio"] } } },
   "disabled": { "tool-web": true },
   "components": {
     "system-prompt": { "persona_prefix": "You are a coding agent." },
@@ -61,6 +62,8 @@ state base, absolute paths are used verbatim.
 - `llm` — either `config_file` (a path to the OpenAI-compatible provider JSON,
   same as `--llm-config`) or `openai` (the provider object inline). The
   `--llm-config` flag and `$ARAYA_LLM_CONFIG` still win.
+- `mcp` — external Model Context Protocol servers (see [MCP servers](#mcp-servers)).
+  Absent, no MCP client is mounted.
 - `disabled` — a per-component enable switch, merged per id: `true` drops the
   component, `false` re-enables one a lower layer dropped. Kept separate from
   `components` because some plugins take a `disabled` knob of their own.
@@ -113,6 +116,47 @@ For example, `tool-web` takes `search` and `fetch` booleans (both default
 Registration is independent of whether a search endpoint is configured: with
 none, `web_search` is still visible and fails with a structured error at call
 time. Disable one with `"components": { "tool-web": { "search": false } }`.
+
+## MCP servers
+
+The `mcp` block configures external Model Context Protocol servers. Each named
+server is a `local` (stdio child process) or `remote` (streamable HTTP)
+connection; its tools register into the agent as
+`mcp__<server>__<toolName>`, and the server's `instructions` join the system
+prompt. The block is mounted as one `mcp-client` component; when it is absent,
+no MCP client runs.
+
+```jsonc
+"mcp": {
+  "servers": {
+    "github": {
+      "type": "local",
+      "command": ["github-mcp-server", "stdio"],
+      "environment": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" },
+      "enabled": true
+    }
+  },
+  "requestTimeoutMs": 60000,
+  "maxInstructionBytes": 32768,
+  "reconnect": { "enabled": true, "initialDelayMs": 500, "maxDelayMs": 30000, "maxAttempts": 10 }
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `servers` | `{}` | map of server name → server object; the name is the tool namespace (`[A-Za-z0-9_-]{1,32}`) |
+| `type` | `local` | `local` (stdio) or `remote` (streamable HTTP) |
+| `command` | — | local: program + arguments (argv); a bare name is resolved against `PATH` |
+| `environment` | `{}` | local: extra child env vars, merged over the ambient environment after credential-shaped and `ARAYA_*` names are scrubbed |
+| `cwd` | — | local: child working directory |
+| `url` / `headers` | — | remote: endpoint URL and extra request headers |
+| `enabled` | `true` | a `false` server is not connected |
+| `timeoutMs` | `requestTimeoutMs` | per-request timeout for this server |
+| `maxInstructionBytes` | `maxInstructionBytes` | reject a connection whose instructions exceed this |
+| `failOnStartupError` | `false` | reject `mcp-client` activation when the initial connection fails |
+| `reconnect` | shared | `{enabled, initialDelayMs, maxDelayMs, maxAttempts}`; delays double up to the ceiling |
+
+`${NAME}` references in strings expand from the process environment.
 
 ## Runtime commands
 

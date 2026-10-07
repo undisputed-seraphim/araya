@@ -163,6 +163,9 @@ void apply_layer(
 					warnings.push_back({source, "unknown llm key '" + std::string(name) + "'"});
 				}
 			}
+		} else if (key == "mcp") {
+			require_object(value, source, key);
+			cfg.mcp_config_json = json::serialize(value);
 		} else if (key == "disabled") {
 			require_object(value, source, key);
 			for (auto const& [id, flag] : value.as_object()) {
@@ -310,6 +313,8 @@ std::string render_app_config(app_config const& config, descriptor_lookup lookup
 		out << "  llm:          inline provider object\n";
 	else
 		out << "  llm:          (none)\n";
+	if (config.mcp_config_json)
+		out << "  mcp:          configured\n";
 	out << "  layers:";
 	if (config.layers.empty())
 		out << " (defaults only)";

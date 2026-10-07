@@ -42,6 +42,7 @@ target_link_libraries(araya_app PRIVATE
     araya::llm-mock
     araya::llm-openai
     araya::logger
+    araya::mcp-client
     araya::persistence
     araya::sandbox
     araya::sandbox-policy
