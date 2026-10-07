@@ -124,7 +124,9 @@ server is a `local` (stdio child process) or `remote` (streamable HTTP)
 connection; its tools register into the agent as
 `mcp__<server>__<toolName>`, and the server's `instructions` join the system
 prompt. The block is mounted as one `mcp-client` component; when it is absent,
-no MCP client runs.
+no MCP client runs. Configured servers also enable the shared resource tools
+(`list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`) and
+the `MCP resource servers` prompt section.
 
 ```jsonc
 "mcp": {

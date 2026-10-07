@@ -16,6 +16,7 @@
 #include "araya/llm/llm.hpp"
 #include "araya/logger/logger.hpp"
 #include "araya/mcp-client/mcp.hpp"
+#include "araya/mcp-resources/mcp_resources.hpp"
 #include "araya/persistence/persistence.hpp"
 #include "araya/sandbox-policy/sandbox_policy.hpp"
 #include "araya/sandbox/sandbox.hpp"
@@ -255,7 +256,7 @@ constexpr command_entry g_commands[]{
 	 "load <component> [json config]",
 	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
-	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | mcp-client | "
+	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | mcp-client | mcp-resources | "
 	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-skill | tool-web | "
 	 "subagents | subagent-fork | tool-subagent | tool-subagent-fork | tool-subagent-control | workflow | "
 	 "tool-workflow | console | beacon | "
@@ -318,6 +319,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::logger::plugin_descriptor();
 	if (name == "mcp-client")
 		return &araya::mcp::plugin_descriptor();
+	if (name == "mcp-resources")
+		return &araya::mcp_resources::plugin_descriptor();
 	if (name == "timer")
 		return &araya::timer::plugin_descriptor();
 	if (name == "session")
@@ -544,6 +547,10 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	// instance owns every server in the `mcp` document).
 	if (cfg.mcp_config_json)
 		ctx.desired["mcp-client"] = desired_entry{&araya::mcp::plugin_descriptor(), {{"config", *cfg.mcp_config_json}}};
+	// The shared MCP resource tools and server-name section (mounted with the
+	// client; both appear only when a server is configured).
+	if (cfg.mcp_config_json)
+		ctx.desired["mcp-resources"] = desired_entry{&araya::mcp_resources::plugin_descriptor(), {}};
 	ctx.desired["beacon"] = desired_entry{&araya::console_demo::beacon_descriptor(), {}};
 	ctx.desired["watcher"] = desired_entry{&araya::console_demo::watcher_descriptor(), {}};
 	ctx.desired["console"] = desired_entry{&araya::console_demo::console_descriptor(), {}};
