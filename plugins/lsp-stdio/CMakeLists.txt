@@ -9,6 +9,7 @@ araya_add_plugin(lsp-stdio
         src/lsp_stdio.cpp
         src/provider.cpp
         src/translate.cpp
-    DEPS araya::araya araya::lsp ${ARAYA_BOOST_PROCESS_LIBS}
+    DEPS araya::araya araya::lsp araya::logger ${ARAYA_BOOST_PROCESS_LIBS}
     TEST tests/lsp_stdio_test.cpp
+    TEST_INCLUDES src
 )

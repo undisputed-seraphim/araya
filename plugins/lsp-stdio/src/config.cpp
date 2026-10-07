@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -82,6 +83,55 @@ server_config parse_server(std::string id, boost::json::value const& value) {
 
 } // namespace
 
+// The built-in default language servers. They are only registered when their
+// executable is installed (the plugin resolves commands at load and skips a
+// missing one), so an uninstalled toolchain is a no-op rather than an error.
+std::vector<server_config> builtin_servers() {
+	std::vector<server_config> servers;
+	auto add = [&servers](
+				   std::string id,
+				   std::string command,
+				   std::vector<std::string> args,
+				   std::vector<std::pair<std::string, std::string>> extensions) {
+		server_config server;
+		server.id = std::move(id);
+		server.command = std::move(command);
+		server.args = std::move(args);
+		server.extension_to_language = std::move(extensions);
+		servers.push_back(std::move(server));
+	};
+	add("clangd",
+		"clangd",
+		{"--background-index"},
+		{{".c", "c"},
+		 {".h", "c"},
+		 {".cc", "cpp"},
+		 {".cpp", "cpp"},
+		 {".cxx", "cpp"},
+		 {".c++", "cpp"},
+		 {".hh", "cpp"},
+		 {".hpp", "cpp"},
+		 {".hxx", "cpp"},
+		 {".h++", "cpp"},
+		 {".m", "objective-c"},
+		 {".mm", "objective-cpp"},
+		 {".cu", "cuda"},
+		 {".cuh", "cuda"}});
+	add("rust-analyzer", "rust-analyzer", {}, {{".rs", "rust"}});
+	add("gopls", "gopls", {}, {{".go", "go"}});
+	add("typescript-language-server",
+		"typescript-language-server",
+		{"--stdio"},
+		{{".ts", "typescript"},
+		 {".tsx", "typescriptreact"},
+		 {".js", "javascript"},
+		 {".jsx", "javascriptreact"},
+		 {".mjs", "javascript"},
+		 {".cjs", "javascript"}});
+	add("pyright-langserver", "pyright-langserver", {"--stdio"}, {{".py", "python"}, {".pyi", "python"}});
+	return servers;
+}
+
 std::string expand_vars(std::string_view text) {
 	std::string out;
 	out.reserve(text.size());
@@ -117,23 +167,51 @@ bool sensitive_env_name(std::string_view name) {
 }
 
 lsp_stdio_config parse_config(araya::plugin_config const& config) {
-	std::string const text = araya::util::read_config_text(config, "lsp-stdio");
-	if (text.empty())
-		return {};
-	boost::json::value const root = araya::util::parse_config_json(text, "lsp-stdio");
-	auto const& object = root.as_object();
-
 	lsp_stdio_config out;
-	if (auto const* servers = object.if_contains("servers"); servers) {
-		auto const* map = servers->if_object();
-		if (!map)
-			throw std::invalid_argument("lsp-stdio: 'servers' must be an object");
-		for (auto const& [id, value] : *map) {
-			std::string const server_id(id);
-			if (!valid_id(server_id))
-				throw std::invalid_argument("lsp-stdio: server ids must be non-empty strings");
-			out.servers.push_back(parse_server(server_id, value));
+	std::string const text = araya::util::read_config_text(config, "lsp-stdio");
+	if (!text.empty()) {
+		boost::json::value const root = araya::util::parse_config_json(text, "lsp-stdio");
+		auto const& object = root.as_object();
+		if (auto const* field = object.if_contains("defaults"); field && field->is_bool())
+			out.defaults = field->as_bool();
+		if (auto const* servers = object.if_contains("servers"); servers) {
+			auto const* map = servers->if_object();
+			if (!map)
+				throw std::invalid_argument("lsp-stdio: 'servers' must be an object");
+			for (auto const& [id, value] : *map) {
+				std::string const server_id(id);
+				if (!valid_id(server_id))
+					throw std::invalid_argument("lsp-stdio: server ids must be non-empty strings");
+				out.servers.push_back(parse_server(server_id, value));
+			}
 		}
+	}
+
+	if (!out.defaults)
+		return out;
+
+	// Merge the built-in defaults under the configured servers, scoped to the
+	// extensions the user did not claim (an extension is owned by one
+	// provider) and skipping an id the user already defined.
+	std::set<std::string> claimed;
+	for (auto const& server : out.servers)
+		for (auto const& [ext, language] : server.extension_to_language)
+			claimed.insert(ext);
+	std::set<std::string> ids;
+	for (auto const& server : out.servers)
+		ids.insert(server.id);
+	for (auto& fallback : builtin_servers()) {
+		if (ids.contains(fallback.id))
+			continue;
+		std::vector<std::pair<std::string, std::string>> remaining;
+		for (auto const& [ext, language] : fallback.extension_to_language) {
+			if (!claimed.contains(ext))
+				remaining.emplace_back(ext, language);
+		}
+		if (remaining.empty())
+			continue;
+		fallback.extension_to_language = std::move(remaining);
+		out.servers.push_back(std::move(fallback));
 	}
 	return out;
 }

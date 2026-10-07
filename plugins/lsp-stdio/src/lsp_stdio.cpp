@@ -1,12 +1,15 @@
 #include "araya/lsp-stdio/lsp_stdio.hpp"
 
 #include "araya/config.hpp"
+#include "araya/logger/logger.hpp"
 #include "araya/lsp/lsp.hpp"
 #include "araya/plugin_context.hpp"
 
 #include "config.hpp"
+#include "host.hpp"
 #include "provider.hpp"
 
+#include <functional>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -33,13 +36,28 @@ std::unique_ptr<araya::plugin> make_lsp_stdio(araya::plugin_config const& config
 		araya::task<void> apply(araya::plugin_context& ctx) override {
 			auto lsp = ctx.require<araya::lsp::lsp_service>(araya::lsp::lsp_key).shared();
 			auto parsed = parse_config(config);
-			if (parsed.servers.empty())
-				throw std::invalid_argument("lsp-stdio: servers must contain at least one server");
 
+			// An optional logger for graceful-degradation warnings.
+			std::shared_ptr<araya::logger::logger_service> logger;
+			if (auto lease = ctx.find<araya::logger::logger_service>(araya::logger::logger_key))
+				logger = lease->shared();
+			auto warn = [logger](std::string const& message) {
+				if (logger)
+					logger->named("lsp-stdio").warn("{}", message);
+			};
+
+			// Resolve each command now and skip one that is not installed, so a
+			// missing toolchain degrades gracefully instead of failing the whole
+			// stack (the default servers are commonly absent).
 			std::vector<std::shared_ptr<stdio_lsp_provider>> providers;
 			providers.reserve(parsed.servers.size());
-			for (auto& server : parsed.servers)
+			for (auto& server : parsed.servers) {
+				if (!find_executable(server.command)) {
+					warn("lsp-stdio: skipping '" + server.id + "': '" + server.command + "' is not installed");
+					continue;
+				}
 				providers.push_back(std::make_shared<stdio_lsp_provider>(ctx.executor(), std::move(server)));
+			}
 
 			// The disposal effect is registered before the provider routes so,
 			// at teardown (LIFO), routes are removed first and no new query can
@@ -70,6 +88,8 @@ std::unique_ptr<araya::plugin> make_lsp_stdio(araya::plugin_config const& config
 
 static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"lsp", 1}, true, {}},
+	// Optional: used only to warn when a configured server is not installed.
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
 static const araya::plugin_descriptor g_descriptor{"lsp-stdio", g_deps, g_provs, &make_lsp_stdio, g_config};

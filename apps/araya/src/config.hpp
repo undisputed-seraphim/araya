@@ -39,6 +39,9 @@ struct app_config {
 	std::optional<std::string> mcp_config_json;
 	// The LSP servers document (the whole top-level `lsp` object), inline.
 	std::optional<std::string> lsp_config_json;
+	// `lsp: false` disables the LSP stack (which is otherwise on by default,
+	// with built-in default servers that degrade gracefully when absent).
+	bool lsp_disabled = false;
 	// Per-component knob overrides, already stringified.
 	std::map<std::string, araya::plugin_config> components;
 	// Per-component key provenance (source label) for --print-config.

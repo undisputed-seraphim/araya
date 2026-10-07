@@ -562,11 +562,13 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	if (cfg.mcp_config_json)
 		ctx.desired["mcp-resources"] = desired_entry{&araya::mcp_resources::plugin_descriptor(), {}};
 	// Language-server navigation: the seam, the stdio provider, and the
-	// model-facing tool, mounted together when the `lsp` block is configured.
-	if (cfg.lsp_config_json) {
+	// model-facing tool. On by default with built-in default servers (clangd
+	// for C/C++, and other common toolchains) that are skipped when their
+	// executable is not installed. `lsp: false` disables the whole stack.
+	if (!cfg.lsp_disabled) {
 		ctx.desired["lsp"] = desired_entry{&araya::lsp::plugin_descriptor(), {}};
 		ctx.desired["lsp-stdio"] =
-			desired_entry{&araya::lsp_stdio::plugin_descriptor(), {{"config", *cfg.lsp_config_json}}};
+			desired_entry{&araya::lsp_stdio::plugin_descriptor(), {{"config", cfg.lsp_config_json.value_or("{}")}}};
 		ctx.desired["tool-lsp"] = desired_entry{&araya::tool_lsp::plugin_descriptor(), {}};
 	}
 	ctx.desired["beacon"] = desired_entry{&araya::console_demo::beacon_descriptor(), {}};

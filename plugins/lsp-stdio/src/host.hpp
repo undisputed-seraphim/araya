@@ -1,15 +1,45 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
+
+#include <unistd.h>
 
 // Filesystem-seam source access for the stdio LSP provider: canonicalize a
 // workspace, read one contained, byte-bounded UTF-8 source, and build file
 // URIs. Local host only (std::filesystem).
 namespace araya::lsp_stdio {
+
+// Resolves a configured command to an executable path: an absolute/relative
+// path is returned when executable, otherwise the first match on PATH.
+// Returns nullopt when the command is not installed (so a default or
+// configured server can be skipped gracefully).
+inline std::optional<std::string> find_executable(std::string const& command) {
+	if (command.empty())
+		return std::nullopt;
+	if (command.find('/') != std::string::npos)
+		return ::access(command.c_str(), X_OK) == 0 ? std::optional<std::string>(command) : std::nullopt;
+	char const* path = std::getenv("PATH");
+	if (!path)
+		return std::nullopt;
+	std::string_view remaining{path};
+	while (!remaining.empty()) {
+		auto const colon = remaining.find(':');
+		std::string_view const dir = remaining.substr(0, colon);
+		std::string candidate = (dir.empty() ? std::string{"."} : std::string{dir}) + "/" + command;
+		if (::access(candidate.c_str(), X_OK) == 0)
+			return candidate;
+		if (colon == std::string_view::npos)
+			break;
+		remaining.remove_prefix(colon + 1);
+	}
+	return std::nullopt;
+}
 
 struct host_workspace {
 	std::string canonical_path;

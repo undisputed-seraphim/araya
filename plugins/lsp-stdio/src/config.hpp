@@ -54,6 +54,9 @@ struct server_config {
 
 struct lsp_stdio_config {
 	std::vector<server_config> servers; // insertion order
+	// Whether built-in default servers (clangd, rust-analyzer, ...) are merged
+	// under the configured ones for extensions the user did not claim.
+	bool defaults = true;
 };
 
 // Parses the plugin's JSON config. Throws std::invalid_argument on malformed

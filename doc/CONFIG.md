@@ -66,7 +66,7 @@ state base, absolute paths are used verbatim.
 - `mcp` — external Model Context Protocol servers (see [MCP servers](#mcp-servers)).
   Absent, no MCP client is mounted.
 - `lsp` — local language servers for the `lsp` tool (see [Language servers](#language-servers)).
-  Absent, no LSP stack is mounted.
+  On by default with built-in defaults; `false` disables the whole stack.
 - `disabled` — a per-component enable switch, merged per id: `true` drops the
   component, `false` re-enables one a lower layer dropped. Kept separate from
   `components` because some plugins take a `disabled` knob of their own.
@@ -169,10 +169,19 @@ The `lsp` block configures local language servers for the model-facing `lsp`
 tool (definitions, references, implementations, hover). Each named server maps
 file extensions to LSP language ids and is pooled one process per workspace.
 The block mounts the `lsp` seam, the `lsp-stdio` provider, and the `tool-lsp`
-tool together; when absent, no LSP stack runs.
+tool together.
+
+**The stack is on by default with a set of built-in servers** — `clangd` for
+C/C++/Objective-C/CUDA, plus `rust-analyzer` (Rust), `gopls` (Go),
+`typescript-language-server` (TS/JS), and `pyright-langserver` (Python). A
+default server is registered only when its executable is found on `PATH`;
+otherwise it is skipped (with a warning), so a missing toolchain degrades
+gracefully. `"lsp": false` disables the whole stack, and `"defaults": false`
+inside the block drops the built-ins while keeping configured servers.
 
 ```jsonc
 "lsp": {
+  "defaults": false,                        // keep only the servers below
   "servers": {
     "typescript": {
       "command": "typescript-language-server",
@@ -186,7 +195,8 @@ tool together; when absent, no LSP stack runs.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `command` | required | Executable to spawn — absolute, or resolved on `PATH` at launch |
+| `defaults` | `true` | merge the built-in default servers for extensions not otherwise claimed |
+| `command` | required | Executable to spawn — absolute, or resolved on `PATH` at load; a server whose executable is not installed is skipped |
 | `args` | `[]` | Arguments passed to the executable |
 | `extensionToLanguage` | required | lowercase leading-dot extension → LSP language id |
 | `env` | `{}` | Extra child env vars, merged over the ambient environment after credential-shaped and `ARAYA_*` names are scrubbed |

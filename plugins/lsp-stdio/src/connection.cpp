@@ -2,6 +2,7 @@
 
 #include "araya/lsp/lsp.hpp"
 #include "framing.hpp"
+#include "host.hpp"
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -44,22 +45,8 @@ std::string env_key(std::string_view entry) {
 }
 
 std::string resolve_program(std::string const& program) {
-	if (program.find('/') != std::string::npos)
-		return program;
-	char const* path = std::getenv("PATH");
-	if (!path)
-		return program;
-	std::string_view remaining{path};
-	while (!remaining.empty()) {
-		auto const colon = remaining.find(':');
-		std::string_view const dir = remaining.substr(0, colon);
-		std::string candidate = (dir.empty() ? std::string{"."} : std::string{dir}) + "/" + program;
-		if (::access(candidate.c_str(), X_OK) == 0)
-			return candidate;
-		if (colon == std::string_view::npos)
-			break;
-		remaining.remove_prefix(colon + 1);
-	}
+	if (auto resolved = find_executable(program))
+		return *resolved;
 	return program;
 }
 

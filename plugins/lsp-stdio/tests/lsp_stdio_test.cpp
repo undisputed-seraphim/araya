@@ -5,6 +5,9 @@
 #include "araya/plugin.hpp"
 #include "araya/runtime.hpp"
 
+#include "config.hpp"
+#include "host.hpp"
+
 #include "support/plugin_harness.hpp"
 
 #include <boost/json/object.hpp>
@@ -145,4 +148,45 @@ TEST_CASE("lsp-stdio navigates through a fixture server") {
 	});
 
 	std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("lsp-stdio merges built-in default servers under configured ones") {
+	// No config: the defaults are present, including clangd for C/C++.
+	auto const defaults = araya::lsp_stdio::parse_config({});
+	bool default_clangd = false;
+	for (auto const& server : defaults.servers)
+		for (auto const& [extension, language] : server.extension_to_language)
+			if (server.id == "clangd" && extension == ".cpp" && language == "cpp")
+				default_clangd = true;
+	CHECK(default_clangd);
+
+	// A user server claims `.ts`; clangd still supplies `.cpp`.
+	araya::plugin_config config;
+	config["config"] = R"({"servers":{"mine":{"command":"x","extensionToLanguage":{".ts":"typescript"}}}})";
+	auto const merged = araya::lsp_stdio::parse_config(config);
+	bool user_ts = false;
+	bool merged_clangd = false;
+	for (auto const& server : merged.servers)
+		for (auto const& [extension, language] : server.extension_to_language) {
+			if (server.id == "mine" && extension == ".ts")
+				user_ts = true;
+			if (server.id == "clangd" && extension == ".cpp")
+				merged_clangd = true;
+		}
+	CHECK(user_ts);
+	CHECK(merged_clangd);
+
+	// `defaults: false` disables the fallbacks entirely.
+	config["config"] =
+		R"({"defaults":false,"servers":{"mine":{"command":"x","extensionToLanguage":{".ts":"typescript"}}}})";
+	auto const only_user = araya::lsp_stdio::parse_config(config);
+	REQUIRE(only_user.servers.size() == 1);
+	CHECK(only_user.servers[0].id == "mine");
+}
+
+TEST_CASE("lsp-stdio resolves commands and skips ones that are not installed") {
+	CHECK(araya::lsp_stdio::find_executable("/bin/sh").has_value());
+	CHECK(araya::lsp_stdio::find_executable("sh").has_value());
+	CHECK_FALSE(araya::lsp_stdio::find_executable("/nonexistent/language-server").has_value());
+	CHECK_FALSE(araya::lsp_stdio::find_executable("definitely-not-installed-xyz").has_value());
 }
