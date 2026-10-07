@@ -28,6 +28,9 @@ araya::task<void> cmd_tool(app_context& ctx, line_sink const& out, std::string c
 // model. Script/testing affordance so a script can exercise every tool
 // plugin deterministically.
 araya::task<void> cmd_call(app_context& ctx, line_sink const& out, std::string const& line);
+// Print a process memory snapshot (RSS/VM from /proc plus glibc arena stats);
+// `mem dump <path>` writes the malloc_info XML for offline analysis.
+araya::task<void> cmd_mem(app_context& ctx, line_sink const& out, std::string const& line);
 // The human goal surface (inspect/create/pause/resume/complete/clear).
 araya::task<void> cmd_goal(app_context& ctx, line_sink const& out, std::string const& line);
 // A local conversation turn: appends a user message to the current

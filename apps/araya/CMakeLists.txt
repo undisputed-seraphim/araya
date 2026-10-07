@@ -8,6 +8,7 @@ add_executable(araya_app
     src/commands_components.cpp
     src/commands_goal.cpp
     src/commands_llm.cpp
+    src/commands_mem.cpp
     src/commands_session.cpp
     src/config.cpp
     src/log_setup.cpp

@@ -274,6 +274,7 @@ constexpr command_entry g_commands[]{
 	{"prompt", "prompt ...", "show | set <text> | suffix <text> | identity on|off | clear", &cmd_prompt},
 	{"tool", "tool", "list the agent's registered tools", &cmd_tool},
 	{"call", "call <tool> [json args]", "invoke a registered tool directly (script/testing)", &cmd_call},
+	{"mem", "mem [dump <path>]", "print process memory and allocator stats", &cmd_mem},
 	{"goal",
 	 "goal [get | create <objective> | pause | resume | complete | disarm | clear]",
 	 "inspect or control the current session goal",

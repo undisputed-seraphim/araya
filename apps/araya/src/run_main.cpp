@@ -30,26 +30,70 @@ namespace {
 
 void out(std::string_view text) { std::cout << text << '\n' << std::flush; }
 
-// Runs one line. Pseudo-commands stay here: quit controls the loop,
-// sleep paces the script. Everything else dispatches on the control
-// strand.
-araya::task<void> exec_line(araya::app::app_context& ctx, bool& quitting, std::string line) {
-	auto first = line.find_first_not_of(" \t");
+std::string trim(std::string text) {
+	auto first = text.find_first_not_of(" \t\r");
 	if (first == std::string::npos)
+		return {};
+	auto last = text.find_last_not_of(" \t\r");
+	return text.substr(first, last - first + 1);
+}
+
+// The `/source` nesting cap; deeper inclusion is refused so a self-referential
+// script cannot recurse forever.
+constexpr int max_source_depth = 8;
+constexpr long long max_repeat = 1'000'000;
+
+// Runs one line. Pseudo-commands stay here: quit controls the loop, sleep
+// paces the script, repeat loops a command, source includes another script.
+// A leading '/' is optional on the pseudo-commands, so `/repeat` and `repeat`
+// both work. Everything else dispatches on the control strand.
+araya::task<void>
+exec_line(araya::app::app_context& ctx, bool& quitting, std::string line, std::filesystem::path const& base, int depth);
+
+// Execute every line of `path` (used by `/source`). Relative includes resolve
+// against the including file's directory.
+araya::task<void>
+source_file(araya::app::app_context& ctx, bool& quitting, std::filesystem::path const& path, int depth) {
+	if (depth > max_source_depth) {
+		out("source: maximum nesting depth (" + std::to_string(max_source_depth) + ") reached");
 		co_return;
-	auto last = line.find_last_not_of(" \t");
-	line = line.substr(first, last - first + 1);
+	}
+	std::ifstream file(path);
+	if (!file) {
+		out("source: cannot open '" + path.string() + "'");
+		co_return;
+	}
+	auto const base = path.parent_path();
+	std::string line;
+	while (std::getline(file, line) && !quitting) {
+		out("> " + line);
+		co_await exec_line(ctx, quitting, std::move(line), base, depth);
+	}
+}
+
+araya::task<void> exec_line(
+	araya::app::app_context& ctx,
+	bool& quitting,
+	std::string line,
+	std::filesystem::path const& base,
+	int depth) {
+	line = trim(std::move(line));
+	if (line.empty())
+		co_return;
 
 	std::istringstream is(line);
 	std::string cmd;
 	is >> cmd;
+	std::string pseudo = cmd;
+	if (!pseudo.empty() && pseudo.front() == '/')
+		pseudo.erase(0, 1);
 
-	if (cmd == "quit") {
+	if (pseudo == "quit") {
 		quitting = true;
 		out("quit: retiring the tree");
 		co_return;
 	}
-	if (cmd == "sleep") {
+	if (pseudo == "sleep") {
 		std::int64_t ms = 0;
 		is >> ms;
 		if (!is || ms < 0) {
@@ -58,6 +102,38 @@ araya::task<void> exec_line(araya::app::app_context& ctx, bool& quitting, std::s
 			boost::asio::steady_timer timer(ctx.io, std::chrono::milliseconds(ms));
 			co_await timer.async_wait(boost::asio::use_awaitable);
 		}
+		co_return;
+	}
+	if (pseudo == "repeat") {
+		long long count = 0;
+		if (!(is >> count) || count < 0 || count > max_repeat) {
+			out("repeat: usage: repeat <0..1000000> <command>");
+			co_return;
+		}
+		std::string rest;
+		std::getline(is, rest);
+		rest = trim(std::move(rest));
+		if (rest.empty()) {
+			out("repeat: usage: repeat <0..1000000> <command>");
+			co_return;
+		}
+		out("repeat: " + std::to_string(count) + " x " + rest);
+		for (long long i = 0; i < count && !quitting; ++i)
+			co_await exec_line(ctx, quitting, rest, base, depth);
+		co_return;
+	}
+	if (pseudo == "source") {
+		std::string path;
+		std::getline(is, path);
+		path = trim(std::move(path));
+		if (path.empty()) {
+			out("source: usage: source <path>");
+			co_return;
+		}
+		std::filesystem::path resolved(path);
+		if (resolved.is_relative())
+			resolved = base / resolved;
+		co_await source_file(ctx, quitting, resolved, depth + 1);
 		co_return;
 	}
 
@@ -75,8 +151,9 @@ araya::task<void> run(araya::app::app_context& ctx, std::string script_path) {
 			out("error: cannot open script '" + script_path + "'");
 			co_return;
 		}
-		// `ask_user_question` reads its answer from the next script line (the
-		// console answerer). Set before boot so the answerer is registered.
+		// `ask_user_question` reads its answer from the next top-level script
+		// line (the console answerer). Lines pulled in via /source or /repeat
+		// reuse this same top-level stream.
 		ctx.answer_input = [&script, &sink](std::string_view prompt) {
 			sink(std::string(prompt));
 			std::string answer;
@@ -85,14 +162,15 @@ araya::task<void> run(araya::app::app_context& ctx, std::string script_path) {
 		};
 		co_await araya::app::boot(ctx, sink);
 
+		auto const base = std::filesystem::path(script_path).parent_path();
 		bool quitting = false;
 		std::string line;
 		while (std::getline(script, line) && !quitting) {
 			out("> " + line);
-			co_await exec_line(ctx, quitting, std::move(line));
+			co_await exec_line(ctx, quitting, std::move(line), base, 0);
 		}
 		if (!quitting)
-			co_await exec_line(ctx, quitting, "quit");
+			co_await exec_line(ctx, quitting, "quit", base, 0);
 
 		// Retire the whole tree while the io_context still runs, so the
 		// runtime destructor (at scope exit, with the context drained)
@@ -120,6 +198,8 @@ int run_main(int argc, char** argv, araya::app::app_config config) {
 			std::cout << "usage: araya run <script> [--llm-config <path>]\n\n";
 			std::cout << araya::app::help_text() << '\n';
 			std::cout << "  sleep <ms>              wait (script mode)\n";
+			std::cout << "  repeat <n> <command>    run a command n times (script mode)\n";
+			std::cout << "  source <path>           include another script (script mode)\n";
 			std::cout << "  quit                    retire everything and exit\n";
 			return 0;
 		} else if (script.empty()) {
