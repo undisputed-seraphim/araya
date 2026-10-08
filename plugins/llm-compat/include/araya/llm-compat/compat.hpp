@@ -9,14 +9,16 @@
 #include <string_view>
 #include <vector>
 
-// The OpenAI-compatible chat-completions adapter: one instance serves
-// every OpenAI-compatible endpoint (OpenAI, DeepSeek-chat, Ollama,
-// vLLM, llama.cpp, OpenRouter). Configured through the plugin config:
-// either `config_file` (path to JSON) or `config` (inline JSON), with
-// sensible defaults when absent.
+// The compatibility LLM adapter: one instance speaks both wire protocols
+// through per-route profiles. `protocol` selects OpenAI Chat Completions
+// (OpenAI, DeepSeek-chat, Ollama, vLLM, llama.cpp, OpenRouter) or Anthropic
+// Messages (Anthropic, DeepSeek-anthropic, llama.cpp). Configured through the
+// plugin config: either `config_file` (path to JSON) or `config` (inline
+// JSON), with sensible defaults when absent.
 //
 //   {
 //     "provider": "openai",
+//     "protocol": "chat-completions",
 //     "base_url": "https://api.openai.com/v1",
 //     "api_key_env": "OPENAI_API_KEY",
 //     "default_model": "gpt-4o-mini",
@@ -25,9 +27,15 @@
 //     "verify_peer": true,
 //     "models": { "gpt-4o-mini": {"context_window": 128000, "max_tokens": 16384} }
 //   }
-namespace araya::llm_openai {
+namespace araya::llm_compat {
 
-struct openai_model {
+// The wire protocol a provider route speaks.
+enum class compat_protocol : std::uint8_t {
+	chat_completions, // POST {base}/chat/completions (OpenAI-compatible)
+	messages,		  // POST {base}/v1/messages (Anthropic-compatible)
+};
+
+struct compat_model {
 	std::string id;
 	std::string name; // display name; defaults to the id
 	std::uint64_t context_window = 0;
@@ -39,25 +47,33 @@ struct openai_model {
 	bool supports_image = false;
 };
 
-struct openai_config {
+struct compat_config {
 	std::string provider = "openai";
+	compat_protocol protocol = compat_protocol::chat_completions;
 	std::string base_url = "https://api.openai.com/v1";
 	std::string api_key_env = "OPENAI_API_KEY";
 	std::string default_model = "gpt-4o-mini";
 	std::chrono::milliseconds idle_timeout{60000};
 	std::chrono::milliseconds connect_timeout{30000};
 	bool verify_peer = true;
-	std::vector<openai_model> models;
+	// Messages requires max_tokens; used when neither the request nor the
+	// model supplies one.
+	std::uint64_t fallback_max_tokens = 4096;
+	// Messages reasoning: when positive, send the Anthropic-native
+	// `thinking: {type:"enabled", budget_tokens:N}` instead of the
+	// DeepSeek-style `output_config.effort`.
+	std::uint64_t thinking_budget_tokens = 0;
+	std::vector<compat_model> models;
 };
 
 // Loads the config from the plugin config map (the `config_file` /
 // `config` convention). Throws std::invalid_argument on unreadable
 // files or malformed JSON - the mounting fiber reports it.
-openai_config load_config(araya::plugin_config const& config);
+compat_config load_config(araya::plugin_config const& config);
 
-class openai_adapter : public araya::llm::llm_adapter {
+class compat_adapter : public araya::llm::llm_adapter {
 public:
-	explicit openai_adapter(openai_config config);
+	explicit compat_adapter(compat_config config);
 
 	araya::task<void> stream(araya::llm::generate_options const& options, araya::llm::chunk_sink const& sink) override;
 
@@ -68,11 +84,11 @@ public:
 	araya::llm::provider_info describe_provider(std::string_view provider) override;
 
 private:
-	openai_config config_;
+	compat_config config_;
 };
 
 // The plugin descriptor: requires `llm`, registers the adapter under the
 // configured provider route.
 araya::plugin_descriptor const& plugin_descriptor();
 
-} // namespace araya::llm_openai
+} // namespace araya::llm_compat

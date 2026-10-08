@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace araya::llm_openai {
+namespace araya::llm_compat {
 namespace {
 
 using araya::llm::content_block_type;
@@ -451,4 +451,4 @@ std::vector<stream_chunk> chunk_translator::finish() {
 	return chunks;
 }
 
-} // namespace araya::llm_openai
+} // namespace araya::llm_compat

@@ -1,8 +1,9 @@
-#include "araya/llm-openai/openai.hpp"
+#include "araya/llm-compat/compat.hpp"
 #include "araya/llm/http.hpp"
 #include "araya/llm/sse.hpp"
 #include "araya/util/json.hpp"
 #include "araya/util/plugin_config_json.hpp"
+#include "messages.hpp"
 #include "translate.hpp"
 
 #include <boost/asio/this_coro.hpp>
@@ -12,10 +13,11 @@
 
 #include <cstdlib>
 #include <deque>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
-namespace araya::llm_openai {
+namespace araya::llm_compat {
 namespace {
 
 using araya::llm::chunk_sink;
@@ -30,7 +32,7 @@ using araya::llm::http::header_value;
 
 // The assembled model_info for one configured model, shared by
 // list_models and resolve_model.
-araya::llm::model_info to_model_info(openai_model const& model, std::string_view provider) {
+araya::llm::model_info to_model_info(compat_model const& model, std::string_view provider) {
 	araya::llm::model_info info;
 	info.provider = std::string(provider);
 	info.model = model.id;
@@ -47,16 +49,24 @@ araya::llm::model_info to_model_info(openai_model const& model, std::string_view
 
 } // namespace
 
-openai_config load_config(araya::plugin_config const& config) {
-	openai_config result;
-	auto const text = araya::util::read_config_text(config, "llm-openai");
+compat_config load_config(araya::plugin_config const& config) {
+	compat_config result;
+	auto const text = araya::util::read_config_text(config, "llm-compat");
 	if (text.empty())
 		return result;
 
-	auto const object = araya::util::parse_config_json(text, "llm-openai").as_object();
+	auto const object = araya::util::parse_config_json(text, "llm-compat").as_object();
 	namespace json = araya::util::json;
 	if (auto value = json::opt_string(object, "provider"))
 		result.provider = *value;
+	if (auto value = json::opt_string(object, "protocol")) {
+		if (*value == "messages")
+			result.protocol = compat_protocol::messages;
+		else if (*value == "chat-completions")
+			result.protocol = compat_protocol::chat_completions;
+		else
+			throw std::invalid_argument("llm-compat: protocol must be \"chat-completions\" or \"messages\"");
+	}
 	if (auto value = json::opt_string(object, "base_url"))
 		result.base_url = *value;
 	if (auto value = json::opt_string(object, "api_key_env"))
@@ -69,9 +79,13 @@ openai_config load_config(araya::plugin_config const& config) {
 		result.connect_timeout = std::chrono::milliseconds(*value);
 	if (auto value = json::opt_bool(object, "verify_peer"))
 		result.verify_peer = *value;
+	if (auto value = json::opt_uint(object, "fallback_max_tokens"))
+		result.fallback_max_tokens = *value;
+	if (auto value = json::opt_uint(object, "thinking_budget_tokens"))
+		result.thinking_budget_tokens = *value;
 	if (auto const* models = json::get_object(object, "models")) {
 		for (auto const& [id, entry] : *models) {
-			openai_model model;
+			compat_model model;
 			model.id = std::string(id);
 			model.name = std::string(id);
 			if (auto const* entry_object = json::as_object(entry)) {
@@ -104,11 +118,23 @@ openai_config load_config(araya::plugin_config const& config) {
 	return result;
 }
 
-openai_adapter::openai_adapter(openai_config config)
+compat_adapter::compat_adapter(compat_config config)
 	: config_(std::move(config)) {}
 
-araya::task<void> openai_adapter::stream(generate_options const& options, chunk_sink const& sink) {
+araya::task<void> compat_adapter::stream(generate_options const& options, chunk_sink const& sink) {
 	auto executor = co_await boost::asio::this_coro::executor;
+	if (config_.protocol == compat_protocol::messages) {
+		compat_model model;
+		model.id = options.model;
+		for (auto const& candidate : config_.models) {
+			if (candidate.id == options.model) {
+				model = candidate;
+				break;
+			}
+		}
+		co_await run_messages_call(executor, config_, model, options, sink);
+		co_return;
+	}
 	// The terminal chunk is emitted after the try/catch: the standard
 	// forbids await-expressions in handlers.
 	std::optional<finish_chunk> terminal;
@@ -190,7 +216,7 @@ araya::task<void> openai_adapter::stream(generate_options const& options, chunk_
 		co_await sink(std::move(*terminal));
 }
 
-std::vector<araya::llm::model_info> openai_adapter::list_models(std::string_view provider) {
+std::vector<araya::llm::model_info> compat_adapter::list_models(std::string_view provider) {
 	std::vector<araya::llm::model_info> result;
 	result.reserve(config_.models.size());
 	for (auto const& model : config_.models)
@@ -198,7 +224,7 @@ std::vector<araya::llm::model_info> openai_adapter::list_models(std::string_view
 	return result;
 }
 
-araya::llm::model_info openai_adapter::resolve_model(std::string_view provider, std::string_view model) {
+araya::llm::model_info compat_adapter::resolve_model(std::string_view provider, std::string_view model) {
 	if (model.empty())
 		model = config_.default_model;
 	for (auto const& candidate : config_.models) {
@@ -208,8 +234,9 @@ araya::llm::model_info openai_adapter::resolve_model(std::string_view provider, 
 	return araya::llm::llm_adapter::resolve_model(provider, model);
 }
 
-araya::llm::provider_info openai_adapter::describe_provider(std::string_view provider) {
-	return araya::llm::provider_info{std::string(provider), "OpenAI"};
+araya::llm::provider_info compat_adapter::describe_provider(std::string_view provider) {
+	return araya::llm::provider_info{
+		std::string(provider), config_.protocol == compat_protocol::messages ? "Messages" : "OpenAI"};
 }
 
-} // namespace araya::llm_openai
+} // namespace araya::llm_compat

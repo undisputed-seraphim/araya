@@ -16,7 +16,7 @@
 // The chat-completions wire translation: pure JSON <-> chunks, no I/O.
 // Faithful to the deepseek-harness chat-completions protocol (request
 // build, SSE delta mapping, usage split, status -> failure).
-namespace araya::llm_openai {
+namespace araya::llm_compat {
 
 using araya::llm::chunk_sink;
 using araya::llm::finish_chunk;
@@ -101,4 +101,4 @@ private:
 	bool done_ = false;
 };
 
-} // namespace araya::llm_openai
+} // namespace araya::llm_compat

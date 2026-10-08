@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "araya/llm-openai/openai.hpp"
+#include "araya/llm-compat/compat.hpp"
 #include "translate.hpp"
 
 #include <boost/json/parse.hpp>
@@ -13,7 +13,7 @@
 namespace {
 
 using namespace araya::llm;
-using namespace araya::llm_openai;
+using namespace araya::llm_compat;
 
 llm_message message(message_role role, std::vector<content_block> blocks) {
 	llm_message result;

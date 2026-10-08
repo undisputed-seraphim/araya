@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "araya/llm-openai/openai.hpp"
+#include "araya/llm-compat/compat.hpp"
 #include "support/stream_chunks.hpp"
 
 #include <boost/asio/co_spawn.hpp>
@@ -12,7 +12,9 @@
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <optional>
 #include <string>
@@ -26,7 +28,7 @@
 namespace {
 
 using namespace araya::llm;
-using namespace araya::llm_openai;
+using namespace araya::llm_compat;
 using namespace araya_test::llm;
 using namespace std::chrono_literals;
 
@@ -101,8 +103,8 @@ struct harness {
 	}
 };
 
-openai_config config_for(test_server const& server) {
-	openai_config config;
+compat_config config_for(test_server const& server) {
+	compat_config config;
 	config.base_url = "http://127.0.0.1:" + std::to_string(server.port());
 	return config;
 }
@@ -122,7 +124,7 @@ std::optional<finish_chunk> last_finish(std::vector<stream_chunk> const& chunks)
 	return finish ? std::optional<finish_chunk>(*finish) : std::nullopt;
 }
 
-araya::task<std::vector<stream_chunk>> run_stream(openai_adapter& adapter, generate_options const& options) {
+araya::task<std::vector<stream_chunk>> run_stream(compat_adapter& adapter, generate_options const& options) {
 	std::vector<stream_chunk> got;
 	chunk_sink sink = [&got](stream_chunk const& chunk) -> araya::task<void> {
 		got.push_back(chunk);
@@ -149,7 +151,7 @@ TEST_CASE("a canned SSE stream assembles text, usage, and finish") {
 		};
 		h.serve(server);
 
-		openai_adapter adapter(config_for(server));
+		compat_adapter adapter(config_for(server));
 		auto got = co_await run_stream(adapter, chat());
 
 		REQUIRE(got.size() == 6);
@@ -192,7 +194,7 @@ TEST_CASE("chunked transfer encoding is de-framed before the translator") {
 		};
 		h.serve(server);
 
-		openai_adapter adapter(config_for(server));
+		compat_adapter adapter(config_for(server));
 		auto got = co_await run_stream(adapter, chat());
 
 		REQUIRE(got.size() == 6);
@@ -223,7 +225,7 @@ TEST_CASE("tool-call deltas round-trip through the adapter") {
 		};
 		h.serve(server);
 
-		openai_adapter adapter(config_for(server));
+		compat_adapter adapter(config_for(server));
 		auto got = co_await run_stream(adapter, chat());
 
 		REQUIRE(got.size() >= 4);
@@ -253,7 +255,7 @@ TEST_CASE("a non-2xx status finishes with the mapped failure") {
 		};
 		h.serve(server);
 
-		openai_adapter adapter(config_for(server));
+		compat_adapter adapter(config_for(server));
 		auto got = co_await run_stream(adapter, chat());
 
 		REQUIRE(got.size() == 1);
@@ -280,7 +282,7 @@ TEST_CASE("429 with Retry-After carries the retry delay") {
 		};
 		h.serve(server);
 
-		openai_adapter adapter(config_for(server));
+		compat_adapter adapter(config_for(server));
 		auto got = co_await run_stream(adapter, chat());
 
 		auto const finish = last_finish(got);
@@ -301,7 +303,7 @@ TEST_CASE("a stalled response body trips the idle watchdog") {
 
 		auto config = config_for(server);
 		config.idle_timeout = 100ms;
-		openai_adapter adapter(std::move(config));
+		compat_adapter adapter(std::move(config));
 		auto got = co_await run_stream(adapter, chat());
 
 		auto const finish = last_finish(got);
@@ -322,7 +324,7 @@ TEST_CASE("stop_token mid-stream finishes as aborted") {
 
 		auto config = config_for(server);
 		config.idle_timeout = 5000ms;
-		auto adapter = std::make_shared<openai_adapter>(std::move(config));
+		auto adapter = std::make_shared<compat_adapter>(std::move(config));
 		std::stop_source stop;
 		auto options = chat();
 		options.stop_token = stop.get_token();
@@ -367,7 +369,7 @@ TEST_CASE("malformed SSE payloads finish as malformed_response") {
 		};
 		h.serve(server);
 
-		openai_adapter adapter(config_for(server));
+		compat_adapter adapter(config_for(server));
 		auto got = co_await run_stream(adapter, chat());
 
 		auto const finish = last_finish(got);
@@ -390,7 +392,7 @@ TEST_CASE("a stream that ends without [DONE] finishes as stream_closed") {
 		};
 		h.serve(server);
 
-		openai_adapter adapter(config_for(server));
+		compat_adapter adapter(config_for(server));
 		auto got = co_await run_stream(adapter, chat());
 
 		auto const finish = last_finish(got);
@@ -415,4 +417,69 @@ TEST_CASE("load_config parses per-model call defaults") {
 	CHECK(*model.default_reasoning_effort == "high");
 	REQUIRE(model.system_prompt_update.has_value());
 	CHECK(*model.system_prompt_update == "in-history");
+}
+
+TEST_CASE("messages protocol assembles a streamed text answer") {
+	harness h;
+	h.run([&]() -> araya::task<void> {
+		test_server server(h.io.get_executor());
+		server.on_request = [](http::request<http::string_body> const& request) {
+			CHECK(request.target() == "/v1/messages");
+			http::response<http::string_body> response{http::status::ok, 11};
+			response.body() = sse(
+				{
+					R"({"type":"message_start","message":{"usage":{"input_tokens":3,"output_tokens":0}}})",
+					R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})",
+					R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}})",
+					R"({"type":"content_block_stop","index":0})",
+					R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}})",
+					R"({"type":"message_stop"})",
+				},
+				false);
+			response.prepare_payload();
+			return response;
+		};
+		h.serve(server);
+
+		auto config = config_for(server);
+		config.protocol = compat_protocol::messages;
+		config.fallback_max_tokens = 64;
+		compat_adapter adapter(config);
+		auto got = co_await run_stream(adapter, chat("m"));
+
+		CHECK(std::any_of(got.begin(), got.end(), [](stream_chunk const& chunk) {
+			auto const* text = std::get_if<text_delta_chunk>(&chunk);
+			return text && text->text == "Hello";
+		}));
+		auto const finish = last_finish(got);
+		REQUIRE(finish.has_value());
+		CHECK(finish->why == finish_chunk::reason::stop);
+	});
+}
+
+TEST_CASE("messages against a live Anthropic-compatible endpoint (opt-in)") {
+	char const* base = std::getenv("ARAYA_COMPAT_BASE_URL");
+	char const* model = std::getenv("ARAYA_COMPAT_MODEL");
+	if (base == nullptr || model == nullptr)
+		SKIP("set ARAYA_COMPAT_BASE_URL and ARAYA_COMPAT_MODEL to exercise a live endpoint");
+	harness h;
+	h.run([&]() -> araya::task<void> {
+		compat_config config;
+		config.protocol = compat_protocol::messages;
+		config.base_url = base;
+		config.fallback_max_tokens = 64;
+		compat_adapter adapter(config);
+
+		generate_options options;
+		options.provider = "local";
+		options.model = model;
+		options.max_tokens = 32;
+		options.messages = {{message_role::user, {text_block{"Reply with exactly: hello"}}, std::nullopt}};
+		auto got = co_await run_stream(adapter, options);
+
+		auto const finish = last_finish(got);
+		REQUIRE(finish.has_value());
+		CHECK(finish->why != finish_chunk::reason::error);
+		CHECK_FALSE(got.empty());
+	});
 }
