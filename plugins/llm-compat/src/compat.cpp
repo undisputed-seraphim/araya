@@ -83,6 +83,34 @@ compat_config load_config(araya::plugin_config const& config) {
 		result.fallback_max_tokens = *value;
 	if (auto value = json::opt_uint(object, "thinking_budget_tokens"))
 		result.thinking_budget_tokens = *value;
+	if (auto const* policy = json::get_object(object, "retryPolicy")) {
+		araya::llm::retry_policy parsed;
+		if (auto value = json::opt_string(*policy, "mode")) {
+			if (*value == "always")
+				parsed.mode = araya::llm::retry_mode::always;
+			else if (*value == "normal")
+				parsed.mode = araya::llm::retry_mode::normal;
+			else
+				throw std::invalid_argument("llm-compat: retryPolicy.mode must be \"normal\" or \"always\"");
+		}
+		if (auto value = json::opt_uint(*policy, "maxRetries"))
+			parsed.max_retries = static_cast<std::uint32_t>(*value);
+		if (auto const* codes = json::get_array(*policy, "retryableCodes")) {
+			for (auto const& code : *codes) {
+				if (code.is_string())
+					parsed.retryable_codes.push_back(std::string(code.as_string()));
+			}
+		}
+		if (auto const* backoff = json::get_object(*policy, "backoff")) {
+			if (auto value = json::opt_uint(*backoff, "initialDelayMs"))
+				parsed.initial_delay = std::chrono::milliseconds(*value);
+			if (auto value = json::opt_uint(*backoff, "maxDelayMs"))
+				parsed.max_delay = std::chrono::milliseconds(*value);
+			if (auto value = json::opt_double(*backoff, "jitterRatio"))
+				parsed.jitter_ratio = *value;
+		}
+		result.retry = std::move(parsed);
+	}
 	if (auto const* models = json::get_object(object, "models")) {
 		for (auto const& [id, entry] : *models) {
 			compat_model model;
@@ -237,6 +265,10 @@ araya::llm::model_info compat_adapter::resolve_model(std::string_view provider, 
 araya::llm::provider_info compat_adapter::describe_provider(std::string_view provider) {
 	return araya::llm::provider_info{
 		std::string(provider), config_.protocol == compat_protocol::messages ? "Messages" : "OpenAI"};
+}
+
+std::optional<araya::llm::retry_policy> compat_adapter::provider_retry_policy(std::string_view) {
+	return config_.retry;
 }
 
 } // namespace araya::llm_compat

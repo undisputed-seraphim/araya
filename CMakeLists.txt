@@ -57,7 +57,7 @@ option(ARAYA_WERROR
 # The bridge lives at llm/bridge; its friendly list name is llm-bridge.
 set(ARAYA_PLUGINS
     agent-instructions agent-loop attachment coreutil fs fs-observation-policy
-    goal goal-round-driver jobs llm llm-bridge llm-mock llm-openai logger
+    goal goal-round-driver jobs llm llm-bridge llm-mock llm-compat llm-retry logger
     lsp lsp-stdio mcp-client mcp-resources persistence sandbox sandbox-policy
     session shell skill subagent-fork subagents system-prompt timer
     tool-ask-user tool-goal tool-jobs tool-lsp tool-read-image tool-skill

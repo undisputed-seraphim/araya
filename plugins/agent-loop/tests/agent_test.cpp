@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "araya/agent-loop/agent.hpp"
+#include "araya/llm-retry/llm_retry.hpp"
 #include "araya/llm/bridge.hpp"
 #include "araya/llm/llm.hpp"
 #include "araya/plugin.hpp"
@@ -52,6 +53,10 @@ struct scripted_adapter : llm_adapter {
 	std::optional<double> default_temperature;
 	std::optional<std::string> default_reasoning_effort;
 	std::optional<std::string> system_prompt_update;
+	// The route's retry policy, returned to the llm-retry executor.
+	std::optional<retry_policy> policy;
+
+	std::optional<retry_policy> provider_retry_policy(std::string_view) override { return policy; }
 
 	araya::task<void> stream(generate_options const& options, chunk_sink const& sink) override {
 		seen.push_back(options);
@@ -155,6 +160,8 @@ struct harness : araya_test::plugin_harness {
 	araya::component_spec agent_spec(araya::plugin_config cfg = {}) {
 		return spec(&araya::agent::plugin_descriptor(), std::move(cfg));
 	}
+
+	araya::component_spec retry_spec() { return spec(&araya::llm_retry::plugin_descriptor()); }
 };
 
 // Mounts session + llm + the scripted adapter + the prompt registry + the
@@ -1266,5 +1273,36 @@ TEST_CASE("a ceiling finish is max_tokens without max_tokens_as_success") {
 
 		auto outcome = co_await r.agent->run(options_for("hello"));
 		CHECK(outcome.status == run_status::max_tokens);
+	});
+}
+
+TEST_CASE("a retryable provider failure is retried in the same turn") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		g_scripted = std::make_shared<scripted_adapter>();
+		retry_policy policy;
+		policy.mode = retry_mode::normal;
+		policy.max_retries = 3;
+		policy.initial_delay = 1ms;
+		policy.max_delay = 2ms;
+		policy.jitter_ratio = 0.0;
+		g_scripted->policy = policy;
+		g_scripted->script = {
+			{{stream_chunk{
+				finish_chunk{finish_chunk::reason::error, llm_failure{llm_error_code::server, "boom"}, std::nullopt}}}},
+			{text_stream("recovered")},
+		};
+		rig r{h};
+		co_await r.mount(rt);
+		co_await rt.mount(h.retry_spec());
+		co_await rt.wait_idle();
+
+		auto outcome = co_await r.agent->run(options_for("hi"));
+
+		CHECK(outcome.status == run_status::completed);
+		CHECK(g_scripted->calls == 2);
+		CHECK(surface_roles(*r.session) == std::vector<std::string>{"user", "assistant"});
+		// The discarded first attempt never reaches the durable surface.
+		CHECK(count_type(*r.session, "assistant/attempt") == 0);
 	});
 }

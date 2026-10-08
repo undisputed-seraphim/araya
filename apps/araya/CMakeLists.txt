@@ -40,7 +40,8 @@ target_link_libraries(araya_app PRIVATE
     araya::llm
     araya::llm-bridge
     araya::llm-mock
-    araya::llm-openai
+    araya::llm-compat
+    araya::llm-retry
     araya::logger
     araya::lsp
     araya::lsp-stdio

@@ -108,6 +108,13 @@ provider_info llm_service::describe_provider(std::string_view provider) const {
 	return found->second.adapter->describe_provider(provider);
 }
 
+std::optional<retry_policy> llm_service::provider_retry_policy(std::string_view provider) const {
+	auto const found = routes_.find(provider);
+	if (found == routes_.end())
+		return std::nullopt;
+	return found->second.adapter->provider_retry_policy(provider);
+}
+
 std::vector<model_info> llm_adapter::list_models(std::string_view) { return {}; }
 
 model_info llm_adapter::resolve_model(std::string_view provider, std::string_view model) {

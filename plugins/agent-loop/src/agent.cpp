@@ -763,14 +763,40 @@ araya::task<std::optional<run_status>> agent_service::run_step(
 	state->request_surface_generation = session.surface().generation();
 
 	step_accumulator accumulator;
-	araya::llm::chunk_sink chunk_sink = [&](stream_chunk const& chunk) -> araya::task<void> {
-		// Forward the raw chunk by reference; the accumulator folds it.
-		if (state->exec.on_chunk)
-			co_await state->exec.on_chunk(chunk);
-		accumulator.push(chunk);
-		co_return;
-	};
-	co_await llm_->stream(build_generate(state->exec, session, prompt), chunk_sink);
+	auto generate = build_generate(state->exec, session, prompt);
+	std::uint32_t attempt = 0;
+	for (;;) {
+		accumulator.reset();
+		araya::llm::chunk_sink chunk_sink = [&](stream_chunk const& chunk) -> araya::task<void> {
+			// Forward the raw chunk by reference; the accumulator folds it.
+			if (state->exec.on_chunk)
+				co_await state->exec.on_chunk(chunk);
+			accumulator.push(chunk);
+			co_return;
+		};
+		co_await llm_->stream(generate, chunk_sink);
+
+		// A terminal provider failure with nothing committed may be retried at
+		// this step boundary: the request already lives in durable history, so
+		// the retry re-streams the same call in the same open turn.
+		bool const retryable = accumulator.why == finish_chunk::reason::error && accumulator.failure.has_value() &&
+							   !state->exec.stop.stop_requested();
+		if (!retryable)
+			break;
+		request_error_msg message;
+		message.session = session.id();
+		message.turn = turn;
+		message.step = step;
+		message.provider = state->exec.provider;
+		message.model = state->exec.model;
+		message.attempt = attempt;
+		message.failure = *accumulator.failure;
+		message.stop = state->exec.stop;
+		auto const resolved = co_await bus_->dispatch(request_error_key, message, state->realm_scope.get());
+		if (!resolved.retry)
+			break;
+		++attempt;
+	}
 
 	auto commit = commit_model_outcome(session, turn, step, accumulator, max_tokens_as_success_);
 	if (commit.terminal) {

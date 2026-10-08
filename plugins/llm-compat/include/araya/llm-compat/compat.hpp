@@ -63,6 +63,9 @@ struct compat_config {
 	// `thinking: {type:"enabled", budget_tokens:N}` instead of the
 	// DeepSeek-style `output_config.effort`.
 	std::uint64_t thinking_budget_tokens = 0;
+	// The route's retry policy (`retryPolicy` in config); nullopt uses the
+	// normal defaults.
+	std::optional<araya::llm::retry_policy> retry;
 	std::vector<compat_model> models;
 };
 
@@ -82,6 +85,8 @@ public:
 	araya::llm::model_info resolve_model(std::string_view provider, std::string_view model) override;
 
 	araya::llm::provider_info describe_provider(std::string_view provider) override;
+
+	std::optional<araya::llm::retry_policy> provider_retry_policy(std::string_view provider) override;
 
 private:
 	compat_config config_;

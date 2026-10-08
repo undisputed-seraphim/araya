@@ -11,8 +11,9 @@
 #include "araya/goal-round-driver/goal_round_driver.hpp"
 #include "araya/goal/goal.hpp"
 #include "araya/jobs/jobs.hpp"
+#include "araya/llm-compat/compat.hpp"
 #include "araya/llm-mock/mock.hpp"
-#include "araya/llm-openai/openai.hpp"
+#include "araya/llm-retry/llm_retry.hpp"
 #include "araya/llm/llm.hpp"
 #include "araya/logger/logger.hpp"
 #include "araya/lsp-stdio/lsp_stdio.hpp"
@@ -257,7 +258,7 @@ constexpr command_entry g_commands[]{
 	{"ls", "ls", "print the fiber tree", &cmd_ls},
 	{"load",
 	 "load <component> [json config]",
-	 "add logger | timer | session | persistence | llm | llm-openai | llm-mock | system-prompt | "
+	 "add logger | timer | session | persistence | llm | llm-compat | llm-mock | llm-retry | system-prompt | "
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | mcp-client | mcp-resources | "
 	 "lsp | lsp-stdio | tool-lsp | "
@@ -339,10 +340,12 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::persistence::plugin_descriptor();
 	if (name == "llm")
 		return &araya::llm::plugin_descriptor();
-	if (name == "llm-openai")
-		return &araya::llm_openai::plugin_descriptor();
+	if (name == "llm-compat")
+		return &araya::llm_compat::plugin_descriptor();
 	if (name == "llm-mock")
 		return &araya::llm_mock::plugin_descriptor();
+	if (name == "llm-retry")
+		return &araya::llm_retry::plugin_descriptor();
 	if (name == "system-prompt")
 		return &araya::system_prompt::plugin_descriptor();
 	if (name == "agent-instructions")
@@ -469,6 +472,8 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	ctx.desired["session"] = desired_entry{&araya::session::plugin_descriptor(), {}};
 	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", cfg.sessions_dir}}};
 	ctx.desired["llm"] = desired_entry{&araya::llm::plugin_descriptor(), {}};
+	// Retry executor for failed model steps (provider-owned policies).
+	ctx.desired["llm-retry"] = desired_entry{&araya::llm_retry::plugin_descriptor(), {}};
 	// The prompt and tool registries the agent loop assembles from. The
 	// standard coding-agent persona is the built-in default; a config or
 	// ARAYA_SYSTEM_PROMPT persona_prefix overlays it below.
@@ -548,11 +553,11 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	ctx.desired["workflow"] = desired_entry{&araya::workflow::plugin_descriptor(), {}};
 	ctx.desired["tool-workflow"] = desired_entry{&araya::tool_workflow::plugin_descriptor(), {}};
 	if (cfg.llm_config_file)
-		ctx.desired["llm-openai"] =
-			desired_entry{&araya::llm_openai::plugin_descriptor(), {{"config_file", *cfg.llm_config_file}}};
+		ctx.desired["llm-compat"] =
+			desired_entry{&araya::llm_compat::plugin_descriptor(), {{"config_file", *cfg.llm_config_file}}};
 	else if (cfg.llm_config_json)
-		ctx.desired["llm-openai"] =
-			desired_entry{&araya::llm_openai::plugin_descriptor(), {{"config", *cfg.llm_config_json}}};
+		ctx.desired["llm-compat"] =
+			desired_entry{&araya::llm_compat::plugin_descriptor(), {{"config", *cfg.llm_config_json}}};
 	// External MCP servers: mounted only when configured (one `mcp-client`
 	// instance owns every server in the `mcp` document).
 	if (cfg.mcp_config_json)
@@ -769,7 +774,7 @@ std::optional<active_model> active_route(app_context& ctx, std::string* why) {
 	auto provider = service->first_provider();
 	if (!provider) {
 		if (why)
-			*why = "llm service has no provider routes (load llm-mock or configure llm-openai)";
+			*why = "llm service has no provider routes (load llm-mock or configure llm-compat)";
 		return std::nullopt;
 	}
 	auto model = service->resolve_model(*provider, "");

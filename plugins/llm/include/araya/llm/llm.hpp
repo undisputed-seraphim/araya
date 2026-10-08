@@ -191,8 +191,18 @@ struct provider_info {
 
 // The provider-owned retry policy captured with a route; adapters return
 // nullopt to use the normal defaults. The retry arc consumes this.
+enum class retry_mode : std::uint8_t {
+	normal, // retry only the eligible transient codes, bounded by max_retries
+	always, // retry every model-request failure until success/cancellation
+};
+
 struct retry_policy {
+	retry_mode mode = retry_mode::normal;
 	std::uint32_t max_retries = 5;
+	// Stable failure-code names (llm_error::code_name) eligible in normal
+	// mode; empty means the built-in transient set (empty_response,
+	// rate_limit, server, timeout, transport).
+	std::vector<std::string> retryable_codes;
 	std::chrono::milliseconds initial_delay{500};
 	std::chrono::milliseconds max_delay{10000};
 	double jitter_ratio = 0.1;
@@ -360,6 +370,10 @@ public:
 
 	// A provider's display identity. Unknown providers fall back to {id, id}.
 	provider_info describe_provider(std::string_view provider) const;
+
+	// The provider's resolved retry policy, or nullopt when its adapter
+	// declares none (the retry executor then uses the normal defaults).
+	std::optional<retry_policy> provider_retry_policy(std::string_view provider) const;
 
 private:
 	struct route {

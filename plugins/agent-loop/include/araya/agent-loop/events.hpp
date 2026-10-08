@@ -1,11 +1,13 @@
 #pragma once
 
 #include "araya/events.hpp"
+#include "araya/llm/llm.hpp"
 #include "araya/session/projection.hpp"
 #include "araya/session/session_types.hpp"
 
 #include <boost/json/value.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <stop_token>
@@ -116,6 +118,27 @@ inline constexpr araya::event_key<agent_inbox_discarded_msg, araya::dispatch_mod
 	1};
 inline constexpr araya::event_key<agent_turn_stopping_msg, araya::dispatch_mode::serial> agent_turn_stopping_key{
 	"agent/turn-stopping",
+	1};
+
+// 'agent/request-error' (waterfall): a model step failed terminally before
+// anything was committed. A listener may set `retry` (optionally after
+// awaiting a backoff) to re-run the same step in this open turn; the loop
+// then re-streams over the already-committed request. `attempt` counts the
+// failed attempts already made for this step (0 on the first failure).
+struct request_error_msg {
+	araya::session::session_id session;
+	std::uint64_t turn = 0;
+	std::uint64_t step = 0;
+	std::string provider;
+	std::string model;
+	std::uint32_t attempt = 0;
+	araya::llm::llm_failure failure;
+	std::stop_token stop;
+	bool retry = false;
+	std::chrono::milliseconds delay{0};
+};
+inline constexpr araya::event_key<request_error_msg, araya::dispatch_mode::waterfall> request_error_key{
+	"agent/request-error",
 	1};
 inline constexpr araya::event_key<pre_step_msg, araya::dispatch_mode::waterfall> pre_step_key{"agent/pre-step", 1};
 
