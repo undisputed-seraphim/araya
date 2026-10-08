@@ -51,6 +51,7 @@ target_link_libraries(araya_app PRIVATE
     araya::sandbox
     araya::sandbox-policy
     araya::session
+    araya::session-query
     araya::shell
     araya::skill
     araya::subagent-fork

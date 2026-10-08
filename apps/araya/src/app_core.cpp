@@ -23,6 +23,7 @@
 #include "araya/persistence/persistence.hpp"
 #include "araya/sandbox-policy/sandbox_policy.hpp"
 #include "araya/sandbox/sandbox.hpp"
+#include "araya/session-query/query.hpp"
 #include "araya/session/events.hpp"
 #include "araya/shell/shell.hpp"
 #include "araya/skill/skill.hpp"
@@ -258,7 +259,8 @@ constexpr command_entry g_commands[]{
 	{"ls", "ls", "print the fiber tree", &cmd_ls},
 	{"load",
 	 "load <component> [json config]",
-	 "add logger | timer | session | persistence | llm | llm-compat | llm-mock | llm-retry | system-prompt | "
+	 "add logger | timer | session | session-query | persistence | llm | llm-compat | llm-mock | llm-retry | "
+	 "system-prompt | "
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | mcp-client | mcp-resources | "
 	 "lsp | lsp-stdio | tool-lsp | "
@@ -336,6 +338,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::timer::plugin_descriptor();
 	if (name == "session")
 		return &araya::session::plugin_descriptor();
+	if (name == "session-query")
+		return &araya::session_query::plugin_descriptor();
 	if (name == "persistence")
 		return &araya::persistence::plugin_descriptor();
 	if (name == "llm")
@@ -471,6 +475,8 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	ctx.desired["timer"] = desired_entry{&araya::timer::plugin_descriptor(), {}};
 	ctx.desired["session"] = desired_entry{&araya::session::plugin_descriptor(), {}};
 	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", cfg.sessions_dir}}};
+	// Session search over live + persisted history (in-memory engine).
+	ctx.desired["session-query"] = desired_entry{&araya::session_query::plugin_descriptor(), {}};
 	ctx.desired["llm"] = desired_entry{&araya::llm::plugin_descriptor(), {}};
 	// Retry executor for failed model steps (provider-owned policies).
 	ctx.desired["llm-retry"] = desired_entry{&araya::llm_retry::plugin_descriptor(), {}};
