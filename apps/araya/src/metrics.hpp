@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,6 +31,38 @@ inline std::string context_percent_text(std::uint64_t context_tokens, std::uint6
 		return "--%";
 	auto const percent = (context_tokens * 100 + context_window / 2) / context_window;
 	return std::to_string(percent) + "%";
+}
+
+// The cumulative inputs for the cost line: session totals plus the active
+// route's advisory prices (USD per million tokens).
+struct cost_input {
+	std::uint64_t input_tokens = 0;
+	std::uint64_t output_tokens = 0;
+	std::uint64_t cache_read_tokens = 0;
+	std::uint64_t cache_write_tokens = 0;
+	std::optional<double> input_price;
+	std::optional<double> output_price;
+	std::optional<double> cache_read_price;
+	std::optional<double> cache_write_price;
+};
+
+// Formats the cumulative estimated cost. A route with no prices (a local or
+// free endpoint) shows "$0.00"; otherwise the total with four decimals.
+inline std::string cost_text(cost_input const& input) {
+	double total = 0.0;
+	auto add = [&total](std::uint64_t tokens, std::optional<double> const& price) {
+		if (price)
+			total += static_cast<double>(tokens) * *price / 1'000'000.0;
+	};
+	add(input.input_tokens, input.input_price);
+	add(input.output_tokens, input.output_price);
+	add(input.cache_read_tokens, input.cache_read_price);
+	add(input.cache_write_tokens, input.cache_write_price);
+	if (total <= 0.0)
+		return "$0.00";
+	char buffer[32] = {};
+	std::snprintf(buffer, sizeof buffer, "$%.4f", total);
+	return buffer;
 }
 
 // A short display form of `text`: the head plus an ellipsis once it

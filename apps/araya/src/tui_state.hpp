@@ -56,6 +56,16 @@ struct token_metrics {
 	std::uint64_t context_tokens = 0;
 	std::uint64_t context_window = 0;
 	bool has_usage = false;
+	// Cumulative session usage (every settled assistant turn), for cost.
+	std::uint64_t total_input_tokens = 0;
+	std::uint64_t total_output_tokens = 0;
+	std::uint64_t total_cache_read_tokens = 0;
+	std::uint64_t total_cache_write_tokens = 0;
+	// The active route's advisory prices (USD per million tokens).
+	std::optional<double> input_price;
+	std::optional<double> output_price;
+	std::optional<double> cache_read_price;
+	std::optional<double> cache_write_price;
 
 	friend bool operator==(token_metrics const&, token_metrics const&) = default;
 };

@@ -188,3 +188,18 @@ TEST_CASE("spinner_glyph: cycles the ascii and braille frames") {
 	CHECK(araya::app::spinner_glyph(0, false) == "\u280b");
 	CHECK(araya::app::spinner_glyph(10, false) == "\u280b");
 }
+
+TEST_CASE("cost_text: cumulative prices or a zero placeholder") {
+	araya::app::cost_input input;
+	CHECK(araya::app::cost_text(input) == "$0.00");
+
+	input.input_tokens = 1'000'000;
+	input.output_tokens = 1'000'000;
+	input.input_price = 0.27;
+	input.output_price = 1.10;
+	CHECK(araya::app::cost_text(input) == "$1.3700");
+
+	input.cache_read_tokens = 1'000'000;
+	input.cache_read_price = 0.07;
+	CHECK(araya::app::cost_text(input) == "$1.4400");
+}

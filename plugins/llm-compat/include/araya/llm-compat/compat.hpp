@@ -4,9 +4,11 @@
 #include "araya/plugin.hpp"
 
 #include <chrono>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The compatibility LLM adapter: one instance speaks both wire protocols
@@ -45,6 +47,11 @@ struct compat_model {
 	std::optional<std::string> system_prompt_update;
 	std::vector<std::string> reasoning_efforts;
 	bool supports_image = false;
+	// USD per million tokens; absent for a free/local endpoint.
+	std::optional<double> input_price;
+	std::optional<double> output_price;
+	std::optional<double> cache_read_price;
+	std::optional<double> cache_write_price;
 };
 
 struct compat_config {
@@ -71,12 +78,23 @@ struct compat_config {
 
 // Loads the config from the plugin config map (the `config_file` /
 // `config` convention). Throws std::invalid_argument on unreadable
-// files or malformed JSON - the mounting fiber reports it.
+// files or malformed JSON - the mounting fiber reports it. With a
+// `providers` map this returns the first profile (use `load_routes` for
+// every route).
 compat_config load_config(araya::plugin_config const& config);
+
+// One or more provider routes: the provider id (route key) and its profile.
+// A flat config yields a single route under the profile's `provider`; a
+// `providers` map yields one route per key.
+using compat_routes = std::vector<std::pair<std::string, compat_config>>;
+compat_routes load_routes(araya::plugin_config const& config);
 
 class compat_adapter : public araya::llm::llm_adapter {
 public:
+	// A single-route adapter: the profile registers under its `provider`.
 	explicit compat_adapter(compat_config config);
+	// A dispatcher over multiple provider routes.
+	explicit compat_adapter(compat_routes routes);
 
 	araya::task<void> stream(araya::llm::generate_options const& options, araya::llm::chunk_sink const& sink) override;
 
@@ -89,7 +107,9 @@ public:
 	std::optional<araya::llm::retry_policy> provider_retry_policy(std::string_view provider) override;
 
 private:
-	compat_config config_;
+	compat_config const& profile_for(std::string_view provider) const;
+
+	std::map<std::string, compat_config, std::less<>> profiles_;
 };
 
 // The plugin descriptor: requires `llm`, registers the adapter under the

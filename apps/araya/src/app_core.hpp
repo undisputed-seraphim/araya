@@ -96,6 +96,11 @@ struct active_model {
 	std::string model;
 	std::string name;
 	std::uint64_t context_window = 0;
+	// USD per million tokens; the active route's advisory prices.
+	std::optional<double> input_price;
+	std::optional<double> output_price;
+	std::optional<double> cache_read_price;
+	std::optional<double> cache_write_price;
 };
 
 std::optional<active_model> active_route(app_context& ctx, std::string* why = nullptr);

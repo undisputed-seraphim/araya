@@ -483,3 +483,104 @@ TEST_CASE("messages against a live Anthropic-compatible endpoint (opt-in)") {
 		CHECK_FALSE(got.empty());
 	});
 }
+
+TEST_CASE("load_config parses per-model prices and applies built-in defaults") {
+	auto config =
+		load_config({{"config", R"({"models":{"m":{"input_price":1.5,"output_price":2.0},"deepseek-chat":{}}})"}});
+	bool saw_custom = false;
+	bool saw_builtin = false;
+	for (auto const& model : config.models) {
+		if (model.id == "m") {
+			saw_custom = true;
+			REQUIRE(model.input_price.has_value());
+			CHECK(*model.input_price == 1.5);
+			REQUIRE(model.output_price.has_value());
+			CHECK(*model.output_price == 2.0);
+		}
+		if (model.id == "deepseek-chat") {
+			saw_builtin = true;
+			REQUIRE(model.input_price.has_value());
+			CHECK(*model.input_price == 0.27);
+			REQUIRE(model.output_price.has_value());
+			CHECK(*model.output_price == 1.10);
+		}
+	}
+	CHECK(saw_custom);
+	CHECK(saw_builtin);
+}
+
+TEST_CASE("load_routes parses a providers map and a flat config") {
+	auto routes = load_routes(
+		{{"config",
+		  R"({"providers":{"openai":{"base_url":"https://api.openai.com/v1","models":{"gpt":{"context_window":128000}}},"local":{"protocol":"messages","default_model":"m"}}})"}});
+	REQUIRE(routes.size() == 2);
+	compat_adapter adapter(std::move(routes));
+	CHECK(adapter.resolve_model("openai", "gpt").context_window == 128000);
+	CHECK(adapter.resolve_model("local", "").model == "m");
+	CHECK(adapter.describe_provider("openai").name == "OpenAI");
+	CHECK(adapter.describe_provider("local").name == "Messages");
+
+	auto const flat = load_routes({{"config", R"({"provider":"mine","base_url":"http://x"})"}});
+	REQUIRE(flat.size() == 1);
+	CHECK(flat.front().first == "mine");
+}
+
+TEST_CASE("a multi-route adapter dispatches by provider and protocol") {
+	harness h;
+	h.run([&]() -> araya::task<void> {
+		test_server chat_server(h.io.get_executor());
+		chat_server.on_request = [](http::request<http::string_body> const& request) {
+			CHECK(request.target() == "/chat/completions");
+			http::response<http::string_body> response{http::status::ok, 11};
+			response.body() = sse({R"({"choices":[{"delta":{"content":"chat"}}]})"});
+			response.prepare_payload();
+			return response;
+		};
+		test_server messages_server(h.io.get_executor());
+		messages_server.on_request = [](http::request<http::string_body> const& request) {
+			CHECK(request.target() == "/v1/messages");
+			http::response<http::string_body> response{http::status::ok, 11};
+			response.body() = sse(
+				{
+					R"({"type":"message_start","message":{}})",
+					R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})",
+					R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"msg"}})",
+					R"({"type":"content_block_stop","index":0})",
+					R"({"type":"message_delta","delta":{"stop_reason":"end_turn"}})",
+					R"({"type":"message_stop"})",
+				},
+				false);
+			response.prepare_payload();
+			return response;
+		};
+		h.serve(chat_server);
+		h.serve(messages_server);
+
+		compat_routes routes;
+		compat_config chat_profile;
+		chat_profile.provider = "a";
+		chat_profile.base_url = "http://127.0.0.1:" + std::to_string(chat_server.port());
+		routes.emplace_back("a", chat_profile);
+		compat_config messages_profile;
+		messages_profile.provider = "b";
+		messages_profile.protocol = compat_protocol::messages;
+		messages_profile.fallback_max_tokens = 64;
+		messages_profile.base_url = "http://127.0.0.1:" + std::to_string(messages_server.port());
+		routes.emplace_back("b", messages_profile);
+		compat_adapter adapter(std::move(routes));
+
+		auto chat_options = chat();
+		chat_options.provider = "a";
+		auto const chat_out = co_await run_stream(adapter, chat_options);
+		auto const chat_finish = last_finish(chat_out);
+		REQUIRE(chat_finish.has_value());
+		CHECK(chat_finish->why == finish_chunk::reason::stop);
+
+		auto messages_options = chat();
+		messages_options.provider = "b";
+		auto const messages_out = co_await run_stream(adapter, messages_options);
+		auto const messages_finish = last_finish(messages_out);
+		REQUIRE(messages_finish.has_value());
+		CHECK(messages_finish->why == finish_chunk::reason::stop);
+	});
+}

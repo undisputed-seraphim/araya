@@ -2,31 +2,41 @@
 
 #include <memory>
 #include <span>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace araya::llm_compat {
 namespace {
 
-// The adapter provider: apply() registers the configured route with the
-// llm service; teardown of this fiber erases it.
+// The adapter provider: apply() resolves every configured route and registers
+// them on the llm service with one dispatching adapter; teardown of this fiber
+// erases them.
 struct compat_plugin : araya::plugin {
-	explicit compat_plugin(compat_config config)
+	explicit compat_plugin(araya::plugin_config config)
 		: config(std::move(config)) {}
 
 	araya::task<void> apply(araya::plugin_context& ctx) override {
 		auto service = ctx.require<araya::llm::llm_service>(araya::llm::llm_key);
-		auto adapter = std::make_shared<compat_adapter>(config);
-		registration = service->register_adapter({config.provider}, std::move(adapter), ctx);
+		auto routes = load_routes(config);
+		if (routes.empty())
+			throw std::invalid_argument("llm-compat: no provider routes configured");
+		std::vector<std::string> providers;
+		providers.reserve(routes.size());
+		for (auto const& [id, profile] : routes)
+			providers.push_back(id);
+		auto adapter = std::make_shared<compat_adapter>(std::move(routes));
+		registration = service->register_adapter(std::move(providers), std::move(adapter), ctx);
 		co_return;
 	}
 
-	compat_config config;
+	araya::plugin_config config;
 	araya::registration registration;
 };
 
 std::unique_ptr<araya::plugin> make_compat(araya::plugin_config const& config) {
-	// load_config throws std::invalid_argument on bad config: the fiber
-	// fails to load and the host reports the error.
-	return std::make_unique<compat_plugin>(load_config(config));
+	return std::make_unique<compat_plugin>(config);
 }
 
 static const araya::dependency_spec g_llm_dep[]{{araya::service_id{"llm", 1}, true, {}}};

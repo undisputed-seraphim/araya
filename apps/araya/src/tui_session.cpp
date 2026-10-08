@@ -157,9 +157,8 @@ ftxui::Element build_prompt(render_context const& rc, snapshot const& snap) {
 	return prompt_box(vbox({rc.input->Render(), std::move(meta)}), rc.theme.ascii);
 }
 
-// The sidebar: session title, the token/context metrics (cost is a stub
-// until a pricing pass), the empty MCP/LSP sections, the component list,
-// then cwd and version.
+// The sidebar: session title, the token/context metrics and cumulative cost,
+// the empty MCP/LSP sections, the component list, then cwd and version.
 ftxui::Element build_sidebar(snapshot const& snap, tui_theme const& theme, int sidebar_width) {
 	using namespace ftxui;
 	Elements component_rows;
@@ -188,7 +187,16 @@ ftxui::Element build_sidebar(snapshot const& snap, tui_theme const& theme, int s
 			   text(
 				   "context  " + araya::app::context_percent_text(
 									 snap.tokens.context_tokens, snap.tokens.context_window, snap.tokens.has_usage)),
-			   text("cost     $0.00"),
+			   text(
+				   "cost     " + araya::app::cost_text(araya::app::cost_input{
+									 snap.tokens.total_input_tokens,
+									 snap.tokens.total_output_tokens,
+									 snap.tokens.total_cache_read_tokens,
+									 snap.tokens.total_cache_write_tokens,
+									 snap.tokens.input_price,
+									 snap.tokens.output_price,
+									 snap.tokens.cache_read_price,
+									 snap.tokens.cache_write_price})),
 			   separatorEmpty(),
 			   section("MCP", {}),
 			   section("LSP", {}),

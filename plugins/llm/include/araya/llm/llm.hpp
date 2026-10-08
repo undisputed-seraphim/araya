@@ -182,6 +182,12 @@ struct model_info {
 	std::vector<std::string> reasoning_efforts;
 	// Whether the model accepts image input (routed through `read_image`).
 	bool supports_image = false;
+	// Advisory per-token prices in USD per million tokens; absent when the
+	// route declares none (a local/free endpoint).
+	std::optional<double> input_price;
+	std::optional<double> output_price;
+	std::optional<double> cache_read_price;
+	std::optional<double> cache_write_price;
 };
 
 struct provider_info {

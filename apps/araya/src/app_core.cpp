@@ -783,7 +783,15 @@ std::optional<active_model> active_route(app_context& ctx, std::string* why) {
 			*why = "provider '" + std::string(*provider) + "' did not resolve a default model";
 		return std::nullopt;
 	}
-	return active_model{std::string(*provider), model->model, model->name, model->context_window};
+	return active_model{
+		std::string(*provider),
+		model->model,
+		model->name,
+		model->context_window,
+		model->input_price,
+		model->output_price,
+		model->cache_read_price,
+		model->cache_write_price};
 }
 
 } // namespace araya::app

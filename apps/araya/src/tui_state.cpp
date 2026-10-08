@@ -129,7 +129,13 @@ void fold_messages(engine_state& e) {
 	// The token meter: the most recent settled assistant turn's usage
 	// (the surface drops the sibling, so read it from the raw log).
 	token_metrics metrics;
-	metrics.context_window = e.tokens.context_window;
+	if (e.route) {
+		metrics.context_window = e.route->context_window;
+		metrics.input_price = e.route->input_price;
+		metrics.output_price = e.route->output_price;
+		metrics.cache_read_price = e.route->cache_read_price;
+		metrics.cache_write_price = e.route->cache_write_price;
+	}
 	using araya::util::json::as_object;
 	using araya::util::json::get_object;
 	using araya::util::json::get_uint;
@@ -148,6 +154,11 @@ void fold_messages(engine_state& e) {
 		// cached prefix the provider served from its prompt cache.
 		metrics.context_tokens = metrics.input_tokens + get_uint(*usage, "cache_read_tokens");
 		metrics.has_usage = true;
+		// Cumulative session usage drives the cost line.
+		metrics.total_input_tokens += metrics.input_tokens;
+		metrics.total_output_tokens += metrics.output_tokens;
+		metrics.total_cache_read_tokens += get_uint(*usage, "cache_read_tokens");
+		metrics.total_cache_write_tokens += get_uint(*usage, "cache_write_tokens");
 	}
 	if (metrics != e.tokens) {
 		e.tokens = metrics;
