@@ -36,6 +36,7 @@
 #include "araya/tool-jobs/tool_jobs.hpp"
 #include "araya/tool-lsp/tool_lsp.hpp"
 #include "araya/tool-read-image/tool_read_image.hpp"
+#include "araya/tool-session-query/tool_session_query.hpp"
 #include "araya/tool-skill/tool_skill.hpp"
 #include "araya/tool-subagent-control/tool_subagent_control.hpp"
 #include "araya/tool-subagent/tool_subagent.hpp"
@@ -264,7 +265,8 @@ constexpr command_entry g_commands[]{
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | mcp-client | mcp-resources | "
 	 "lsp | lsp-stdio | tool-lsp | "
-	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-skill | tool-web | "
+	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-session-query | "
+	 "tool-skill | tool-web | "
 	 "subagents | subagent-fork | tool-subagent | tool-subagent-fork | tool-subagent-control | workflow | "
 	 "tool-workflow | console | beacon | "
 	 "watcher",
@@ -386,6 +388,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::tool_goal::plugin_descriptor();
 	if (name == "tool-read-image")
 		return &araya::tool_read_image::plugin_descriptor();
+	if (name == "tool-session-query")
+		return &araya::tool_session_query::plugin_descriptor();
 	if (name == "tool-skill")
 		return &araya::tool_skill::plugin_descriptor();
 	if (name == "user-questions")
@@ -494,6 +498,8 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	ctx.desired["tools"] = desired_entry{&araya::tools::plugin_descriptor(), {}};
 	ctx.desired["tool-todo"] = desired_entry{&araya::tool_todo::plugin_descriptor(), {}};
 	ctx.desired["agent-loop"] = desired_entry{&araya::agent::plugin_descriptor(), {}};
+	// Session query/search tools over the session-query service.
+	ctx.desired["tool-session-query"] = desired_entry{&araya::tool_session_query::plugin_descriptor(), {}};
 	// Background jobs: the registry, then the model-facing controls whose
 	// load attaches the controller producers need.
 	ctx.desired["jobs"] = desired_entry{&araya::jobs::plugin_descriptor(), {}};

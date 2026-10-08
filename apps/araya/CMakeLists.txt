@@ -62,6 +62,7 @@ target_link_libraries(araya_app PRIVATE
     araya::tool-jobs
     araya::tool-lsp
     araya::tool-read-image
+    araya::tool-session-query
     araya::tool-skill
     araya::tool-subagent
     araya::tool-subagent-control

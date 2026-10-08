@@ -60,8 +60,8 @@ set(ARAYA_PLUGINS
     goal goal-round-driver jobs llm llm-bridge llm-mock llm-compat llm-retry logger
     lsp lsp-stdio mcp-client mcp-resources persistence sandbox sandbox-policy
     session session-query shell skill subagent-fork subagents system-prompt timer
-    tool-ask-user tool-goal tool-jobs tool-lsp tool-read-image tool-skill
-    tool-subagent tool-subagent-control tool-todo tool-web tool-workflow
+    tool-ask-user tool-goal tool-jobs tool-lsp tool-read-image tool-session-query
+    tool-skill tool-subagent tool-subagent-control tool-todo tool-web tool-workflow
     tools user-questions web workflow
     CACHE STRING "First-party plugins and support libraries to build")
 
