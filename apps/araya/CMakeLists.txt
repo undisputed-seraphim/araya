@@ -6,6 +6,7 @@
 add_executable(araya_app
     src/app_core.cpp
     src/commands_components.cpp
+    src/commands_export.cpp
     src/commands_goal.cpp
     src/commands_llm.cpp
     src/commands_mem.cpp
@@ -51,6 +52,7 @@ target_link_libraries(araya_app PRIVATE
     araya::sandbox
     araya::sandbox-policy
     araya::session
+    araya::session-log-export
     araya::session-query
     araya::shell
     araya::skill

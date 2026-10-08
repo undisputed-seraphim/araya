@@ -23,6 +23,7 @@
 #include "araya/persistence/persistence.hpp"
 #include "araya/sandbox-policy/sandbox_policy.hpp"
 #include "araya/sandbox/sandbox.hpp"
+#include "araya/session-log-export/export.hpp"
 #include "araya/session-query/query.hpp"
 #include "araya/session/events.hpp"
 #include "araya/shell/shell.hpp"
@@ -260,8 +261,8 @@ constexpr command_entry g_commands[]{
 	{"ls", "ls", "print the fiber tree", &cmd_ls},
 	{"load",
 	 "load <component> [json config]",
-	 "add logger | timer | session | session-query | persistence | llm | llm-compat | llm-mock | llm-retry | "
-	 "system-prompt | "
+	 "add logger | timer | session | session-query | session-log-export | persistence | llm | llm-compat | "
+	 "llm-mock | llm-retry | system-prompt | "
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | mcp-client | mcp-resources | "
 	 "lsp | lsp-stdio | tool-lsp | "
@@ -286,6 +287,7 @@ constexpr command_entry g_commands[]{
 	{"tool", "tool", "list the agent's registered tools", &cmd_tool},
 	{"call", "call <tool> [json args]", "invoke a registered tool directly (script/testing)", &cmd_call},
 	{"mem", "mem [dump <path>]", "print process memory and allocator stats", &cmd_mem},
+	{"export", "export [path]", "download the current session log as a ZIP archive", &cmd_export},
 	{"goal",
 	 "goal [get | create <objective> | pause | resume | complete | disarm | clear]",
 	 "inspect or control the current session goal",
@@ -342,6 +344,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::session::plugin_descriptor();
 	if (name == "session-query")
 		return &araya::session_query::plugin_descriptor();
+	if (name == "session-log-export")
+		return &araya::session_export::plugin_descriptor();
 	if (name == "persistence")
 		return &araya::persistence::plugin_descriptor();
 	if (name == "llm")
@@ -481,6 +485,8 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", cfg.sessions_dir}}};
 	// Session search over live + persisted history (in-memory engine).
 	ctx.desired["session-query"] = desired_entry{&araya::session_query::plugin_descriptor(), {}};
+	// Session log download (ZIP of the canonical log + descendants + images).
+	ctx.desired["session-log-export"] = desired_entry{&araya::session_export::plugin_descriptor(), {}};
 	ctx.desired["llm"] = desired_entry{&araya::llm::plugin_descriptor(), {}};
 	// Retry executor for failed model steps (provider-owned policies).
 	ctx.desired["llm-retry"] = desired_entry{&araya::llm_retry::plugin_descriptor(), {}};

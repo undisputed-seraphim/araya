@@ -33,6 +33,9 @@ araya::task<void> cmd_call(app_context& ctx, line_sink const& out, std::string c
 araya::task<void> cmd_mem(app_context& ctx, line_sink const& out, std::string const& line);
 // The human goal surface (inspect/create/pause/resume/complete/clear).
 araya::task<void> cmd_goal(app_context& ctx, line_sink const& out, std::string const& line);
+// Download the current session log as a ZIP archive to a path (or the
+// default `araya-session-<id>.zip` in the working directory).
+araya::task<void> cmd_export(app_context& ctx, line_sink const& out, std::string const& line);
 // A local conversation turn: appends a user message to the current
 // session (auto-created) without touching the llm service. Plain-text
 // prompt input routes here.
