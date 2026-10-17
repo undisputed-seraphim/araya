@@ -3,6 +3,7 @@
 #include "araya/agent-loop/events.hpp"
 #include "araya/events.hpp"
 #include "araya/llm/llm.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/plugin_context.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
@@ -84,15 +85,36 @@ std::unique_ptr<araya::plugin> make_llm_retry(araya::plugin_config const&) {
 	struct llm_retry_plugin : araya::plugin {
 		araya::task<void> apply(araya::plugin_context& ctx) override {
 			auto llm = ctx.require<llm::llm_service>(llm::llm_key).shared();
+			auto log = araya::logger::from_context(ctx, "llm-retry");
 			auto rng = std::make_shared<std::mt19937>(std::random_device{}());
 			ctx.on(
 				araya::agent::request_error_key,
-				[llm, rng](request_error_msg const& message, araya::waterfall_continuation<request_error_msg> next)
+				[llm, rng, log](request_error_msg const& message, araya::waterfall_continuation<request_error_msg> next)
 					-> boost::asio::awaitable<request_error_msg> {
+					araya::logger::log_context context;
+					context.session = message.session.value;
+					context.turn = message.turn;
+					context.step = message.step;
 					auto const policy = llm->provider_retry_policy(message.provider).value_or(llm::retry_policy{});
 					auto const delay = decide(message, policy, *rng);
-					if (!delay.has_value())
+					if (!delay.has_value()) {
+						log.debug(
+							context,
+							"not retrying provider={} model={} code={} attempt={}",
+							message.provider,
+							message.model,
+							llm::llm_error::code_name(message.failure.code),
+							message.attempt);
 						co_return co_await next(message);
+					}
+					log.debug(
+						context,
+						"retrying provider={} model={} code={} attempt={} delay={}ms",
+						message.provider,
+						message.model,
+						llm::llm_error::code_name(message.failure.code),
+						message.attempt,
+						delay->count());
 
 					auto executor = co_await boost::asio::this_coro::executor;
 					auto timer = std::make_shared<boost::asio::steady_timer>(executor);
@@ -115,7 +137,10 @@ std::unique_ptr<araya::plugin> make_llm_retry(araya::plugin_config const&) {
 	return std::make_unique<llm_retry_plugin>();
 }
 
-static const araya::dependency_spec g_deps[]{{araya::service_id{"llm", 1}, true, {}}};
+static const araya::dependency_spec g_deps[]{
+	{araya::service_id{"llm", 1}, true, {}},
+	{araya::service_id{"logger", 1}, false, {}},
+};
 static constexpr std::span<araya::provision_spec const> g_provs{};
 static const araya::plugin_descriptor g_descriptor{"llm-retry", g_deps, g_provs, &make_llm_retry, {}};
 

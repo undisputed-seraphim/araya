@@ -1,5 +1,7 @@
 #include "araya/llm-compat/compat.hpp"
 
+#include "araya/logger/log.hpp"
+
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -26,7 +28,8 @@ struct compat_plugin : araya::plugin {
 		providers.reserve(routes.size());
 		for (auto const& [id, profile] : routes)
 			providers.push_back(id);
-		auto adapter = std::make_shared<compat_adapter>(std::move(routes));
+		auto adapter =
+			std::make_shared<compat_adapter>(std::move(routes), araya::logger::from_context(ctx, "llm-compat"));
 		registration = service->register_adapter(std::move(providers), std::move(adapter), ctx);
 		co_return;
 	}
@@ -39,7 +42,10 @@ std::unique_ptr<araya::plugin> make_compat(araya::plugin_config const& config) {
 	return std::make_unique<compat_plugin>(config);
 }
 
-static const araya::dependency_spec g_llm_dep[]{{araya::service_id{"llm", 1}, true, {}}};
+static const araya::dependency_spec g_llm_dep[]{
+	{araya::service_id{"llm", 1}, true, {}},
+	{araya::service_id{"logger", 1}, false, {}},
+};
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
 static const araya::plugin_descriptor g_descriptor{"llm-compat", g_llm_dep, g_no_provs, &make_compat};
 

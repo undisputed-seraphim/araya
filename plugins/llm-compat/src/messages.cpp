@@ -1,5 +1,7 @@
 #include "messages.hpp"
 
+#include "logging.hpp"
+
 #include "araya/llm/http.hpp"
 #include "araya/llm/sse.hpp"
 #include "araya/util/json.hpp"
@@ -547,8 +549,10 @@ araya::task<void> run_messages_call(
 	boost::asio::any_io_executor executor,
 	compat_config const& config,
 	compat_model const& model,
-	generate_options const& options,
-	chunk_sink const& sink) {
+	araya::llm::generate_options const& options,
+	araya::llm::chunk_sink const& sink,
+	araya::logger::log_handle log) {
+	log_request_start(log, config.provider, options.model, "messages", config.base_url);
 	std::optional<finish_chunk> terminal;
 	try {
 		auto endpoint = araya::llm::http::parse_url(config.base_url);
@@ -617,6 +621,8 @@ araya::task<void> run_messages_call(
 	} catch (std::exception const& e) {
 		terminal = finish_from(llm_failure{llm_error_code::invalid_request, e.what()});
 	}
+	if (terminal && terminal->failure)
+		log_request_failure(log, config.provider, options.model, *terminal->failure);
 	if (terminal)
 		co_await sink(std::move(*terminal));
 }

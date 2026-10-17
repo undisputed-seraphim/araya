@@ -1,6 +1,7 @@
 #pragma once
 
 #include "araya/llm/llm.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/plugin.hpp"
 
 #include <chrono>
@@ -92,9 +93,9 @@ compat_routes load_routes(araya::plugin_config const& config);
 class compat_adapter : public araya::llm::llm_adapter {
 public:
 	// A single-route adapter: the profile registers under its `provider`.
-	explicit compat_adapter(compat_config config);
+	explicit compat_adapter(compat_config config, araya::logger::log_handle log = {});
 	// A dispatcher over multiple provider routes.
-	explicit compat_adapter(compat_routes routes);
+	explicit compat_adapter(compat_routes routes, araya::logger::log_handle log = {});
 
 	araya::task<void> stream(araya::llm::generate_options const& options, araya::llm::chunk_sink const& sink) override;
 
@@ -110,6 +111,7 @@ private:
 	compat_config const& profile_for(std::string_view provider) const;
 
 	std::map<std::string, compat_config, std::less<>> profiles_;
+	araya::logger::log_handle log_;
 };
 
 // The plugin descriptor: requires `llm`, registers the adapter under the

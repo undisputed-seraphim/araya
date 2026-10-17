@@ -1,8 +1,10 @@
 #include "araya/llm-compat/compat.hpp"
+
 #include "araya/llm/http.hpp"
 #include "araya/llm/sse.hpp"
 #include "araya/util/json.hpp"
 #include "araya/util/plugin_config_json.hpp"
+#include "logging.hpp"
 #include "messages.hpp"
 #include "translate.hpp"
 
@@ -226,9 +228,13 @@ compat_routes load_routes(araya::plugin_config const& config) {
 	return routes;
 }
 
-compat_adapter::compat_adapter(compat_config config) { profiles_.emplace(config.provider, std::move(config)); }
+compat_adapter::compat_adapter(compat_config config, araya::logger::log_handle log)
+	: log_(std::move(log)) {
+	profiles_.emplace(config.provider, std::move(config));
+}
 
-compat_adapter::compat_adapter(compat_routes routes) {
+compat_adapter::compat_adapter(compat_routes routes, araya::logger::log_handle log)
+	: log_(std::move(log)) {
 	for (auto& [id, profile] : routes)
 		profiles_.emplace(id, std::move(profile));
 }
@@ -241,6 +247,8 @@ compat_config const& compat_adapter::profile_for(std::string_view provider) cons
 araya::task<void> compat_adapter::stream(generate_options const& options, chunk_sink const& sink) {
 	auto executor = co_await boost::asio::this_coro::executor;
 	compat_config const& config = profile_for(options.provider);
+	auto const protocol = config.protocol == compat_protocol::messages ? "messages" : "chat-completions";
+	log_request_start(log_, options.provider, options.model, protocol, config.base_url);
 	if (config.protocol == compat_protocol::messages) {
 		compat_model model;
 		model.id = options.model;
@@ -250,7 +258,7 @@ araya::task<void> compat_adapter::stream(generate_options const& options, chunk_
 				break;
 			}
 		}
-		co_await run_messages_call(executor, config, model, options, sink);
+		co_await run_messages_call(executor, config, model, options, sink, log_);
 		co_return;
 	}
 	// The terminal chunk is emitted after the try/catch: the standard
@@ -330,6 +338,8 @@ araya::task<void> compat_adapter::stream(generate_options const& options, chunk_
 	} catch (std::exception const& e) {
 		terminal = finish_from(llm_failure{llm_error_code::invalid_request, e.what()});
 	}
+	if (terminal && terminal->failure)
+		log_request_failure(log_, options.provider, options.model, *terminal->failure);
 	if (terminal)
 		co_await sink(std::move(*terminal));
 }

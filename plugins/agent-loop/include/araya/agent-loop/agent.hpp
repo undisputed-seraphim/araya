@@ -3,6 +3,7 @@
 #include "araya/agent-loop/events.hpp"
 #include "araya/agent-loop/inbox.hpp"
 #include "araya/llm/llm.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/plugin.hpp"
 #include "araya/plugin_context.hpp"
 #include "araya/service.hpp"
@@ -193,7 +194,8 @@ public:
 		std::shared_ptr<araya::tools::tools_service> tools,
 		araya::session::projection_state<inbox_state> inbox,
 		araya::session::projection_state<turn_state> turn_boundary,
-		bool max_tokens_as_success = false);
+		bool max_tokens_as_success = false,
+		araya::logger::log_handle log = {});
 
 	// -- lifecycle (the plugin wires these to the store's events) --
 
@@ -344,6 +346,7 @@ private:
 	std::vector<std::pair<std::uint64_t, context_producer>> context_producers_;
 	std::uint64_t next_context_producer_id_ = 1;
 	bool max_tokens_as_success_ = false;
+	araya::logger::log_handle log_;
 };
 
 inline constexpr araya::service_key<agent_service> agent_key{"agent", 1};

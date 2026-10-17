@@ -2,6 +2,7 @@
 #include "araya/agent-loop/events.hpp"
 #include "araya/agent-loop/inbox.hpp"
 #include "araya/config.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/session/events.hpp"
 
 #include <boost/json/object.hpp>
@@ -75,7 +76,8 @@ struct agent_plugin : araya::plugin {
 			std::move(tools),
 			std::move(inbox),
 			std::move(turn_boundary),
-			max_tokens_as_success_);
+			max_tokens_as_success_,
+			araya::logger::from_context(ctx, "agent-loop"));
 
 		// Lifecycle: a session acquires a driver when it is announced and
 		// loses it when it is disposed. Both listeners are owned by this
@@ -110,6 +112,7 @@ static const araya::dependency_spec g_agent_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
 	{araya::service_id{"system-prompt", 1}, true, {}},
 	{araya::service_id{"tools", 1}, true, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static const araya::provision_spec g_agent_provs[]{{araya::service_id{"agent", 1}}};
 static const araya::plugin_descriptor g_descriptor{"agent-loop", g_agent_deps, g_agent_provs, &make_agent, g_config};

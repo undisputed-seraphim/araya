@@ -5,7 +5,7 @@
 # system-prompt registry.
 araya_add_plugin(agent-loop
     SOURCES src/agent.cpp src/events.cpp src/inbox.cpp src/plugin.cpp
-    DEPS araya::llm-bridge araya::tools
+    DEPS araya::llm-bridge araya::tools araya::logger
     TEST tests/agent_test.cpp
     TEST_DEPS araya::llm-retry
 )

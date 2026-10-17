@@ -280,6 +280,22 @@ char const* run_status_name(run_status status) noexcept {
 	return index < k_run_status_names.size() ? k_run_status_names[index] : "error";
 }
 
+namespace {
+
+char const* cancel_cause_name(cancel_cause cause) noexcept {
+	switch (cause) {
+	case cancel_cause::user:
+		return "user";
+	case cancel_cause::parent:
+		return "parent";
+	case cancel_cause::disposed:
+		return "disposed";
+	}
+	return "unknown";
+}
+
+} // namespace
+
 std::optional<boost::json::value>
 injected_context(araya::session::session const& session, std::string_view producer, std::string_view content) {
 	if (content.empty())
@@ -341,7 +357,8 @@ agent_service::agent_service(
 	std::shared_ptr<araya::tools::tools_service> tools,
 	araya::session::projection_state<inbox_state> inbox,
 	araya::session::projection_state<turn_state> turn_boundary,
-	bool max_tokens_as_success)
+	bool max_tokens_as_success,
+	araya::logger::log_handle log)
 	: bus_(std::move(bus))
 	, scope_(std::move(scope))
 	, executor_(std::move(executor))
@@ -351,7 +368,8 @@ agent_service::agent_service(
 	, tools_(std::move(tools))
 	, inbox_(std::move(inbox))
 	, turn_boundary_(std::move(turn_boundary))
-	, max_tokens_as_success_(max_tokens_as_success) {}
+	, max_tokens_as_success_(max_tokens_as_success)
+	, log_(std::move(log)) {}
 
 agent_service::state_ptr agent_service::find(araya::session::session_id const& session) const {
 	auto it = states_.find(session);
@@ -547,15 +565,20 @@ void agent_service::kick(state_ptr const& state) {
 
 void agent_service::on_drive_done(state_ptr const& state, std::exception_ptr ep) {
 	if (ep) {
+		std::string message = "agent: unknown failure";
 		try {
 			std::rethrow_exception(ep);
 		} catch (std::exception const& e) {
+			message = e.what();
 			state->last_outcome.status = run_status::error;
 			state->last_outcome.failure = llm_failure{araya::llm::llm_error_code::server, e.what()};
 		} catch (...) {
 			state->last_outcome.status = run_status::error;
 			state->last_outcome.failure = llm_failure{araya::llm::llm_error_code::server, "agent: unknown failure"};
 		}
+		araya::logger::log_context context;
+		context.session = state->session.value;
+		log_.error(context, "drive failed: {}", message);
 	}
 	state->stop_bridge.reset();
 	state->caller_stop = std::stop_token{};
@@ -586,6 +609,10 @@ araya::task<bool> agent_service::turn(state_ptr const& state) {
 	if (!session)
 		co_return false;
 	auto const turn_no = next_turn(*session);
+	araya::logger::log_context context;
+	context.session = session->id().value;
+	context.turn = turn_no;
+	log_.debug(context, "turn {} started", turn_no);
 	state->last_outcome.turn = turn_no;
 	event_sink const& sink = state->exec.on_event;
 	emit(sink, turn_event{turn_no});
@@ -661,6 +688,10 @@ araya::task<bool> agent_service::turn(state_ptr const& state) {
 		"turn/end", turn_end_data(turn_no, ended.value_or(run_status::completed), state->last_outcome.failure));
 	state->last_outcome.status = ended.value_or(run_status::completed);
 	emit(sink, run_finish_event{turn_no, state->last_outcome.status});
+	if (state->last_outcome.status == run_status::aborted)
+		log_.info(context, "turn {} aborted", turn_no);
+	else
+		log_.debug(context, "turn {} ended: {}", turn_no, run_status_name(state->last_outcome.status));
 
 	if (state->exec.stop.stop_requested())
 		co_return false;
@@ -738,6 +769,11 @@ araya::task<std::optional<run_status>> agent_service::run_step(
 	std::vector<boost::json::value> const& messages,
 	bool starts_request_series,
 	event_sink const& sink) {
+	araya::logger::log_context context;
+	context.session = session.id().value;
+	context.turn = turn;
+	context.step = step;
+	log_.debug(context, "step {} started provider={} model={}", step, state->exec.provider, state->exec.model);
 	// The route's system-prompt capability and the facts that start a new
 	// request series: a pre-step listener declared one, the surface was
 	// rewritten since the last request, or the tool set changed.
@@ -765,6 +801,26 @@ araya::task<std::optional<run_status>> agent_service::run_step(
 	step_accumulator accumulator;
 	auto generate = build_generate(state->exec, session, prompt);
 	std::uint32_t attempt = 0;
+	auto log_provider_failure =
+		[this, &context](araya::llm::llm_failure const& failure, std::uint32_t attempt, bool retried) {
+			if (retried) {
+				log_.debug(
+					context,
+					"provider failure {} status={} attempt={} (retrying)",
+					failure.code_string(),
+					failure.status,
+					attempt);
+				return;
+			}
+			log_.warn(
+				context,
+				"provider failure {} status={} request_id='{}' retry_after={}ms attempt={}",
+				failure.code_string(),
+				failure.status,
+				failure.request_id,
+				failure.provider_retry_after ? failure.provider_retry_after->count() : 0,
+				attempt);
+		};
 	for (;;) {
 		accumulator.reset();
 		araya::llm::chunk_sink chunk_sink = [&](stream_chunk const& chunk) -> araya::task<void> {
@@ -781,8 +837,11 @@ araya::task<std::optional<run_status>> agent_service::run_step(
 		// the retry re-streams the same call in the same open turn.
 		bool const retryable = accumulator.why == finish_chunk::reason::error && accumulator.failure.has_value() &&
 							   !state->exec.stop.stop_requested();
-		if (!retryable)
+		if (!retryable) {
+			if (accumulator.failure)
+				log_provider_failure(*accumulator.failure, attempt, false);
 			break;
+		}
 		request_error_msg message;
 		message.session = session.id();
 		message.turn = turn;
@@ -793,8 +852,11 @@ araya::task<std::optional<run_status>> agent_service::run_step(
 		message.failure = *accumulator.failure;
 		message.stop = state->exec.stop;
 		auto const resolved = co_await bus_->dispatch(request_error_key, message, state->realm_scope.get());
-		if (!resolved.retry)
+		if (!resolved.retry) {
+			log_provider_failure(*accumulator.failure, attempt, false);
 			break;
+		}
+		log_provider_failure(*accumulator.failure, attempt, true);
 		++attempt;
 	}
 
@@ -825,11 +887,16 @@ araya::task<tool_batch_outcome> agent_service::execute_tools(
 	std::uint64_t step,
 	std::vector<tool_call_block> const& calls,
 	event_sink const& sink) {
+	araya::logger::log_context context;
+	context.session = session.id().value;
+	context.turn = turn;
+	context.step = step;
 	auto const scope = session.id().value;
 	tool_batch_outcome outcome;
 	for (auto const& call : calls) {
 		session.append("tool/call", tool_call_data(turn, step, call));
 		emit(sink, tool_call_event{turn, step, call.id, call.name});
+		log_.debug(context, "tool '{}' started (call {})", call.name, call.id);
 
 		tool_result result;
 		if (outcome.aborted || state->exec.stop.stop_requested()) {
@@ -857,6 +924,10 @@ araya::task<tool_batch_outcome> agent_service::execute_tools(
 			"tool/result",
 			tool_result_data("t" + std::to_string(session.log().size()), call.id, result.content, result.is_error));
 		emit(sink, tool_done_event{turn, step, call.id, call.name, result.is_error});
+		if (result.is_error && !outcome.aborted && !state->exec.stop.stop_requested())
+			log_.warn(context, "tool '{}' returned an error (call {})", call.name, call.id);
+		else
+			log_.debug(context, "tool '{}' finished (call {})", call.name, call.id);
 	}
 	co_return outcome;
 }
@@ -1127,10 +1198,12 @@ araya::registration agent_service::add_context_producer(araya::plugin_context& c
 }
 
 void agent_service::cancel(araya::session::session_id const& session, cancel_cause cause, bool keep_inbox) {
-	(void)cause;
 	auto state = find(session);
 	if (!state)
 		return;
+	araya::logger::log_context context;
+	context.session = session.value;
+	log_.info(context, "cancel requested ({})", cancel_cause_name(cause));
 	if (!keep_inbox)
 		clear_inbox(state);
 	if (state->running && state->abort)

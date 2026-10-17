@@ -2,6 +2,7 @@
 
 #include "araya/llm-compat/compat.hpp"
 #include "araya/llm/llm.hpp"
+#include "araya/logger/log.hpp"
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/json/value.hpp>
@@ -81,6 +82,7 @@ araya::task<void> run_messages_call(
 	compat_config const& config,
 	compat_model const& model,
 	araya::llm::generate_options const& options,
-	araya::llm::chunk_sink const& sink);
+	araya::llm::chunk_sink const& sink,
+	araya::logger::log_handle log = {});
 
 } // namespace araya::llm_compat

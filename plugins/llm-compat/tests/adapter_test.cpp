@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "araya/llm-compat/compat.hpp"
+#include "araya/logger/log.hpp"
+#include "araya/logger/logger.hpp"
 #include "support/stream_chunks.hpp"
 
 #include <boost/asio/co_spawn.hpp>
@@ -12,14 +14,23 @@
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/http.hpp>
 
+#include <quill/Frontend.h>
+#include <quill/Logger.h>
+#include <quill/sinks/FileSink.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 // The adapter against an in-process Beast SSE server on 127.0.0.1
 // (plain HTTP - the TLS path is exercised manually against a real
@@ -583,4 +594,45 @@ TEST_CASE("a multi-route adapter dispatches by provider and protocol") {
 		REQUIRE(messages_finish.has_value());
 		CHECK(messages_finish->why == finish_chunk::reason::stop);
 	});
+}
+
+TEST_CASE("a provider failure is logged at warn without the response body") {
+	auto const path =
+		std::filesystem::temp_directory_path() / ("araya-compat-log-" + std::to_string(::getpid()) + ".log");
+	std::filesystem::remove(path);
+	auto* backend = quill::Frontend::create_or_get_logger("llm-compat-log", std::make_shared<quill::FileSink>(path));
+	auto service = std::make_shared<araya::logger::logger_service>("llm-compat-log");
+	araya::logger::log_handle log(service, "llm-compat-log");
+
+	harness h;
+	h.run([&]() -> araya::task<void> {
+		test_server server(h.io.get_executor());
+		server.on_request = [](http::request<http::string_body> const&) {
+			http::response<http::string_body> response{http::status::unauthorized, 11};
+			response.body() = R"({"error":{"message":"secret provider body"}})";
+			response.prepare_payload();
+			return response;
+		};
+		h.serve(server);
+
+		compat_adapter adapter(config_for(server), log);
+		auto got = co_await run_stream(adapter, chat());
+		auto const finish = last_finish(got);
+		REQUIRE(finish.has_value());
+		REQUIRE(finish->failure.has_value());
+		CHECK(finish->failure->status == 401);
+	});
+
+	backend->flush_log();
+	std::ifstream in{path};
+	std::ostringstream ss;
+	ss << in.rdbuf();
+	auto const content = ss.str();
+	CHECK(content.find("request provider=openai") != std::string::npos);
+	CHECK(content.find("failed: auth") != std::string::npos);
+	CHECK(content.find("status=401") != std::string::npos);
+	CHECK(content.find("secret provider body") == std::string::npos);
+
+	quill::Frontend::remove_logger_blocking(backend);
+	std::filesystem::remove(path);
 }
