@@ -1,0 +1,4 @@
+/load llm-mock
+/reload agent-loop
+/call echo {"text": "agent-loop survived"}
+quit

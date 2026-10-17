@@ -17,6 +17,7 @@ ftxui::Element render_palette(
 	std::string_view query,
 	int selected,
 	int width,
-	bool ascii);
+	bool ascii,
+	int max_rows);
 
 } // namespace araya::tui

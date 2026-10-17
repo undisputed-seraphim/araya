@@ -54,7 +54,12 @@ ftxui::Element render_entry_screen(render_context const& rc) {
 	centered.push_back(text(""));
 	if (araya::app::palette_open(rc.input_text))
 		centered.push_back(render_palette(
-			rc.commands, araya::app::palette_query(rc.input_text), rc.ui.palette_selected, box_width, rc.theme.ascii));
+			rc.commands,
+			araya::app::palette_query(rc.input_text),
+			rc.ui.palette_selected,
+			box_width,
+			rc.theme.ascii,
+			araya::app::palette_max_rows(rc.height)));
 	centered.push_back(std::move(box));
 	centered.push_back(text(""));
 	centered.push_back(std::move(tip));

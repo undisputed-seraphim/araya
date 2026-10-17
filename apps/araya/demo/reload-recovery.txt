@@ -1,0 +1,4 @@
+/fail logger
+/load logger
+/log info recovered
+quit

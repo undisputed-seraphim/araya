@@ -105,6 +105,36 @@ TEST_CASE("palette_open: open while typing the command token") {
 	CHECK_FALSE(araya::app::palette_open("/session "));
 }
 
+TEST_CASE("palette rows: capped to the screen and scrolled around the selection") {
+	using araya::app::palette_max_rows;
+	using araya::app::palette_window_for;
+	CHECK(palette_max_rows(24) == 8);
+	CHECK(palette_max_rows(9) == 3);
+	CHECK(palette_max_rows(60) == 12);
+
+	// Empty results still render the one-row placeholder.
+	CHECK(palette_window_for(0, 0, 8).first == 0);
+	CHECK(palette_window_for(0, 0, 8).rows == 1);
+	// Short lists show in full.
+	auto short_list = palette_window_for(3, 2, 8);
+	CHECK(short_list.first == 0);
+	CHECK(short_list.rows == 3);
+	// Long lists scroll so the selection stays visible.
+	auto top = palette_window_for(40, 0, 8);
+	CHECK(top.first == 0);
+	CHECK(top.rows == 8);
+	auto middle = palette_window_for(40, 20, 8);
+	CHECK(middle.first == 16);
+	CHECK(middle.rows == 8);
+	auto bottom = palette_window_for(40, 39, 8);
+	CHECK(bottom.first == 32);
+	CHECK(bottom.rows == 8);
+	// The cap can be smaller than the list and still tracks the selection.
+	auto tiny = palette_window_for(40, 5, 3);
+	CHECK(tiny.first == 4);
+	CHECK(tiny.rows == 3);
+}
+
 TEST_CASE("role_marker: unicode and ascii tiers") {
 	CHECK(araya::app::role_marker("user", false) == "\u276f");
 	CHECK(araya::app::role_marker("assistant", false) == "\u25cf");
@@ -179,6 +209,26 @@ TEST_CASE("wrap_lines: greedy word wrap") {
 	CHECK(wrap_lines("a\nb", 10) == std::vector<std::string>{"a", "b"});
 	CHECK(wrap_lines("a\n", 10) == std::vector<std::string>{"a"});
 	CHECK(wrap_lines("a   b", 10) == std::vector<std::string>{"a b"});
+}
+
+TEST_CASE("display_width and wrap_lines: columns, not bytes") {
+	using araya::app::display_width;
+	using araya::app::wrap_lines;
+	CHECK(display_width("abc") == 3);
+	CHECK(display_width("\u00e9") == 1);			 // é: one column, two bytes
+	CHECK(display_width("\u65e5\u672c\u8a9e") == 6); // CJK wide
+	CHECK(display_width("\U0001f642") == 2);		 // emoji wide
+	CHECK(display_width("e\u0301") == 1);			 // combining acute = zero
+	CHECK(display_width("\xff") == 1);				 // invalid byte is still consumed
+
+	// Two CJK glyphs fit in four columns; the third moves to a new line.
+	CHECK(wrap_lines("\u65e5\u672c\u8a9e", 4) == std::vector<std::string>{"\u65e5\u672c", "\u8a9e"});
+	// Three accented letters fit two per line (one column each).
+	CHECK(wrap_lines("\u00e9\u00e9\u00e9", 2) == std::vector<std::string>{"\u00e9\u00e9", "\u00e9"});
+	// Hard splits never cut a codepoint, even when one glyph exceeds the line.
+	CHECK(
+		wrap_lines("\U0001f642\U0001f642\U0001f642", 3) ==
+		std::vector<std::string>{"\U0001f642", "\U0001f642", "\U0001f642"});
 }
 
 TEST_CASE("spinner_glyph: cycles the ascii and braille frames") {

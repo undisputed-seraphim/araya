@@ -38,6 +38,15 @@ TEST_CASE("load_config parses scripts and rejects malformed ones") {
 	CHECK(ok.script[1].is_tool_call == true);
 	CHECK(ok.script[1].text == "t");
 	CHECK(ok.script[1].arguments == "{}");
+
+	// One step can narrate and then call a tool (a real model's shape).
+	auto mixed =
+		load_config({{"script", "[{\"text\":\"narrate\",\"tool_call\":{\"name\":\"t\",\"arguments\":\"{}\"}}]"}});
+	REQUIRE(mixed.script.size() == 1);
+	CHECK(mixed.script[0].is_tool_call);
+	CHECK(mixed.script[0].text == "t");
+	CHECK(mixed.script[0].arguments == "{}");
+	CHECK(mixed.script[0].leading_text == "narrate");
 }
 
 TEST_CASE("the script replays its steps then falls back to the canned response") {

@@ -108,6 +108,35 @@ if(ARAYA_TESTING)
     set_tests_properties(agent_demo PROPERTIES TIMEOUT 60 ENVIRONMENT "${ARAYA_TEST_ENV}"
         PASS_REGULAR_EXPRESSION "assistant: task done")
 
+    # One assistant line per step: a step that narrates and calls a tool must
+    # not concatenate its text with the next step's.
+    add_test(NAME ask_steps
+        COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/ask-steps.txt)
+    set_tests_properties(ask_steps PROPERTIES TIMEOUT 60 ENVIRONMENT "${ARAYA_TEST_ENV}"
+        PASS_REGULAR_EXPRESSION "assistant: task done"
+        FAIL_REGULAR_EXPRESSION "checkingtask done")
+
+    # Host tools are registered by a component, so replacing the tools
+    # service remounts it and re-registers the tool.
+    add_test(NAME reload_agent_loop
+        COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/reload-agent-loop.txt)
+    set_tests_properties(reload_agent_loop PROPERTIES TIMEOUT 60 ENVIRONMENT "${ARAYA_TEST_ENV}"
+        PASS_REGULAR_EXPRESSION "echo tool: agent-loop survived"
+        FAIL_REGULAR_EXPRESSION "unknown tool")
+
+    add_test(NAME reload_tools
+        COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/reload-tools.txt)
+    set_tests_properties(reload_tools PROPERTIES TIMEOUT 60 ENVIRONMENT "${ARAYA_TEST_ENV}"
+        PASS_REGULAR_EXPRESSION "echo tool: tools survived"
+        FAIL_REGULAR_EXPRESSION "unknown tool")
+
+    # /load retries a desired component whose fiber failed (here the logger
+    # was swapped for a crashing provider).
+    add_test(NAME reload_recovery
+        COMMAND araya run ${CMAKE_CURRENT_SOURCE_DIR}/demo/reload-recovery.txt)
+    set_tests_properties(reload_recovery PROPERTIES TIMEOUT 60 ENVIRONMENT "${ARAYA_TEST_ENV}"
+        PASS_REGULAR_EXPRESSION "log: submitted")
+
     add_test(NAME restart_cycle
         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/demo/restart-cycle.sh
             $<TARGET_FILE:araya_app>

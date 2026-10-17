@@ -233,9 +233,19 @@ ftxui::Element render_session_screen(render_context const& rc) {
 	int main_width = std::max(20, rc.width - sidebar_width - 1); // minus the separator
 
 	// The feed gets everything the fixed rows do not: the header, the
-	// output strip, the two-row prompt box, and the cwd line.
+	// output strip, the two-row prompt box, the cwd line, and - when open -
+	// the palette (otherwise its bottom, newest rows are clipped).
+	bool const palette = araya::app::palette_open(rc.input_text);
+	int const palette_rows = araya::app::palette_max_rows(rc.height);
+	int palette_height = 0;
+	if (palette) {
+		auto const matches = araya::app::filter_commands(rc.commands, araya::app::palette_query(rc.input_text));
+		auto const window =
+			araya::app::palette_window_for(static_cast<int>(matches.size()), rc.ui.palette_selected, palette_rows);
+		palette_height = window.rows + 2; // border
+	}
 	int const output_height = std::clamp(rc.height / 4, 5, 12);
-	int const feed_height = std::max(3, rc.height - output_height - 4);
+	int const feed_height = std::max(3, rc.height - output_height - 4 - palette_height);
 
 	std::string connection =
 		snap->provider.empty()
@@ -252,9 +262,14 @@ ftxui::Element render_session_screen(render_context const& rc) {
 	Elements main_elements;
 	main_elements.push_back(build_feed(*snap, stream, rc.ui, main_width, feed_height, rc.theme.ascii) | flex);
 	main_elements.push_back(build_output(*snap, rc.height));
-	if (araya::app::palette_open(rc.input_text))
+	if (palette)
 		main_elements.push_back(render_palette(
-			rc.commands, araya::app::palette_query(rc.input_text), rc.ui.palette_selected, main_width, rc.theme.ascii));
+			rc.commands,
+			araya::app::palette_query(rc.input_text),
+			rc.ui.palette_selected,
+			main_width,
+			rc.theme.ascii,
+			palette_rows));
 	main_elements.push_back(build_prompt(rc, *snap));
 	main_elements.push_back(hbox({text(snap->cwd) | color(dim_text())}));
 

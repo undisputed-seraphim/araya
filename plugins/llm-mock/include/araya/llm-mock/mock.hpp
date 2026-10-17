@@ -26,9 +26,11 @@
 //   delay_ms        pacing between chunks (default 0)
 //   script          JSON array of steps, one consumed per call:
 //                     [{"text": "..."},
-//                      {"tool_call": {"name": "...", "arguments": "..."}}]
-//                   When the script runs out, the canned `response`
-//                   takes over.
+//                      {"tool_call": {"name": "...", "arguments": "..."}},
+//                      {"text": "narrate", "tool_call": {...}}]
+//                   A step may carry both text and a tool call; the text is
+//                   emitted first. When the script runs out, the canned
+//                   `response` takes over.
 //
 // Missing keys fall back to the defaults above; malformed values throw
 // araya::config_error (the typed config accessors are strict).
@@ -40,6 +42,10 @@ struct mock_step {
 	std::string text;
 	// Tool-call arguments, raw JSON exactly as the model would send them.
 	std::string arguments;
+	// Optional assistant text emitted before a tool call (empty = none).
+	// Lets one scripted step reproduce a real model that narrates and then
+	// calls a tool in the same step.
+	std::string leading_text;
 };
 
 struct mock_config {

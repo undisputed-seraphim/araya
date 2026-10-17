@@ -47,6 +47,17 @@ araya::task<void> reconcile_print(app_context& ctx, line_sink const& out, std::s
 		co_await print_status(ctx, out, "console");
 }
 
+// Retires and remounts one desired component with `entry`. Shared by
+// /reload and by /load's retry path (a desired component whose fiber is
+// inactive or absent).
+araya::task<void> remount(app_context& ctx, line_sink const& out, std::string const& name, desired_entry entry) {
+	ctx.desired.erase(name);
+	co_await ctx.rt->reconcile(make_desired(ctx));
+	co_await ctx.rt->wait_idle();
+	ctx.desired[name] = std::move(entry);
+	co_await reconcile_print(ctx, out, name);
+}
+
 } // namespace
 
 araya::task<void> cmd_config(app_context& ctx, line_sink const& out, std::string const& line) {
@@ -108,10 +119,6 @@ araya::task<void> cmd_load(app_context& ctx, line_sink const& out, std::string c
 		out("unknown component '" + name + "'");
 		co_return;
 	}
-	if (ctx.desired.contains(name)) {
-		out(name + ": already loaded");
-		co_return;
-	}
 	araya::plugin_config config = default_config(name);
 	// Optional inline JSON config: load <component> {"key": ...}. Values
 	// that are not strings ride along serialized.
@@ -132,7 +139,31 @@ araya::task<void> cmd_load(app_context& ctx, line_sink const& out, std::string c
 				config[key] = boost::json::serialize(entry);
 		}
 	}
-	ctx.desired[name] = desired_entry{descriptor, std::move(config)};
+	desired_entry entry{descriptor, std::move(config)};
+
+	if (ctx.desired.contains(name)) {
+		// /load is an ensure: a healthy mount with no new config is a
+		// no-op, but an inactive/absent fiber (a failed apply, a lost
+		// dependency, a `/fail` swap) is retried with the real descriptor
+		// and defaults (plus any inline config). An explicit config also
+		// forces a remount so the request is not silently dropped.
+		bool active = false;
+		for (auto const& fiber : co_await ctx.rt->fibers_async()) {
+			if (fiber.name == name) {
+				active = fiber.state == araya::fiber_state::active;
+				break;
+			}
+		}
+		if (active && tail.empty()) {
+			out(name + ": already loaded");
+			co_return;
+		}
+		logger_of(ctx).info("component '{}' reloaded", name);
+		co_await remount(ctx, out, name, std::move(entry));
+		co_return;
+	}
+
+	ctx.desired[name] = std::move(entry);
 	logger_of(ctx).info("component '{}' loaded", name);
 	co_await reconcile_print(ctx, out, name);
 }
@@ -174,12 +205,8 @@ araya::task<void> cmd_reload(app_context& ctx, line_sink const& out, std::string
 		co_return;
 	}
 	auto entry = ctx.desired.at(name);
-	ctx.desired.erase(name);
-	co_await ctx.rt->reconcile(make_desired(ctx));
-	co_await ctx.rt->wait_idle();
-	ctx.desired[name] = entry;
 	logger_of(ctx).info("component '{}' reloaded", name);
-	co_await reconcile_print(ctx, out, name);
+	co_await remount(ctx, out, name, std::move(entry));
 }
 
 araya::task<void> cmd_fail(app_context& ctx, line_sink const& out, std::string const& line) {

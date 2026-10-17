@@ -32,10 +32,12 @@ ftxui::Element render_palette(
 	std::string_view query,
 	int selected,
 	int width,
-	bool /*ascii*/) {
+	bool /*ascii*/,
+	int max_rows) {
 	using namespace ftxui;
 
 	auto matches = araya::app::filter_commands(commands, query);
+	auto const window = araya::app::palette_window_for(static_cast<int>(matches.size()), selected, max_rows);
 	// A fixed name column keeps the summaries aligned; the summaries are
 	// clipped so no row overflows the panel and overlaps its neighbour.
 	int inner = std::max(8, width - 4); // border + one space of padding each side
@@ -50,7 +52,8 @@ ftxui::Element render_palette(
 		rows.push_back(text(" (no matching commands)") | color(dim_text()));
 	} else {
 		int sel = std::clamp(selected, 0, static_cast<int>(matches.size()) - 1);
-		for (int i = 0; i < static_cast<int>(matches.size()); ++i) {
+		for (int offset = 0; offset < window.rows; ++offset) {
+			int const i = window.first + offset;
 			auto const& command = commands[matches[static_cast<std::size_t>(i)]];
 			std::string label = "/" + std::string(command.name);
 			label.append(static_cast<std::size_t>(std::max(0, name_col - display_width(label))), ' ');

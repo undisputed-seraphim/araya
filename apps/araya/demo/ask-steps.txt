@@ -1,0 +1,4 @@
+/load llm-mock {"script": [{"text": "checking", "tool_call": {"name": "echo", "arguments": "{\"text\": \"x\"}"}}, {"text": "task done"}]}
+/ask run the demo tool
+/session show
+quit

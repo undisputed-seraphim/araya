@@ -65,6 +65,8 @@ std::vector<mock_step> parse_script(std::string_view json) {
 			step.is_tool_call = true;
 			step.text = std::string(name->as_string());
 			step.arguments = std::string(arguments->as_string());
+			if (auto const* leading = object->if_contains("text"); leading && leading->is_string())
+				step.leading_text = std::string(leading->as_string());
 			steps.push_back(std::move(step));
 		} else if (auto const* text = object->if_contains("text"); text && text->is_string()) {
 			mock_step step;
@@ -163,11 +165,20 @@ araya::task<void> mock_adapter::stream(generate_options const& options, chunk_si
 	}
 
 	if (scripted && step.is_tool_call) {
+		// A real model can narrate and then call a tool in the same step;
+		// emit the optional leading text as block 0 so the tool call is 1.
+		if (!step.leading_text.empty()) {
+			co_await sink(araya::llm::block_start_chunk{0, content_block_type::text});
+			co_await sink(araya::llm::text_delta_chunk{0, step.leading_text});
+			co_await sink(
+				araya::llm::block_end_chunk{0, araya::llm::content_block{araya::llm::text_block{step.leading_text}}});
+		}
+		std::size_t const tool_block = step.leading_text.empty() ? 0 : 1;
 		auto const call_id = "call-" + std::to_string(index);
-		co_await sink(araya::llm::block_start_chunk{0, content_block_type::tool_call});
-		co_await sink(araya::llm::tool_call_delta_chunk{0, call_id, step.text, step.arguments});
+		co_await sink(araya::llm::block_start_chunk{tool_block, content_block_type::tool_call});
+		co_await sink(araya::llm::tool_call_delta_chunk{tool_block, call_id, step.text, step.arguments});
 		co_await sink(araya::llm::block_end_chunk{
-			0, araya::llm::content_block{araya::llm::tool_call_block{call_id, step.text, step.arguments}}});
+			tool_block, araya::llm::content_block{araya::llm::tool_call_block{call_id, step.text, step.arguments}}});
 		araya::llm::token_usage usage;
 		usage.input_tokens = config_.input_tokens;
 		usage.output_tokens = config_.output_tokens;

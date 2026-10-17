@@ -192,13 +192,27 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 		// The durable-inbox path: queue the human message, drive to
 		// quiescence, then read the last turn's outcome. The tag marks it as
 		// direct human input for provenance-keyed authorities.
+		// One assistant line per step. The collector spans the whole drive,
+		// so flush at the step boundary (and before the first tool line of
+		// a step) instead of printing all steps' text as one blob.
+		auto flush_assistant = [&] {
+			if (collector.assembled.empty())
+				return;
+			out("assistant: " + collector.assembled);
+			collector.assembled.clear();
+		};
+
 		araya::agent::drive_options exec;
 		exec.provider = resolved->provider;
 		exec.model = resolved->model;
 		exec.on_event = [&](araya::agent::agent_event const& event) {
 			std::visit(
 				overloaded{
-					[&](araya::agent::tool_call_event const& call) { out("tool: " + call.name); },
+					[&](araya::agent::step_event const&) { flush_assistant(); },
+					[&](araya::agent::tool_call_event const& call) {
+						flush_assistant();
+						out("tool: " + call.name);
+					},
 					[&](araya::agent::tool_done_event const& done) {
 						out(std::string("tool: ") + done.name + (done.is_error ? " (error)" : " done"));
 					},
@@ -219,12 +233,11 @@ araya::task<void> cmd_ask(app_context& ctx, line_sink const& out, std::string co
 		// The agent loop owns its session appends; make the whole turn
 		// durable once it settles.
 		co_await s->flush();
+		flush_assistant();
 
 		if (outcome.failure)
 			out("ask: " + std::string(araya::llm::llm_error::code_name(outcome.failure->code)) + ": " +
 				outcome.failure->message);
-		if (!collector.assembled.empty())
-			out("assistant: " + collector.assembled);
 		out(std::string("ask: ") + araya::agent::run_status_name(outcome.status));
 	} catch (std::exception const& e) {
 		out(std::string("ask: ") + e.what());

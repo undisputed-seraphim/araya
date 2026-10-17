@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -115,6 +116,28 @@ inline bool palette_open(std::string_view input) {
 
 inline std::string_view palette_query(std::string_view input) {
 	return input.empty() ? std::string_view{} : input.substr(1);
+}
+
+// The palette's row cap for one screen: a third of the height, bounded so
+// a short terminal still shows a few rows and a tall one does not push the
+// feed off-screen.
+inline int palette_max_rows(int screen_height) { return std::clamp(screen_height / 3, 3, 12); }
+
+// The visible window into the filtered matches. `rows` excludes the border;
+// the empty-result placeholder counts as one row. The selected row is kept
+// centered where possible so arrow-key navigation cannot move off-screen.
+struct palette_window {
+	int first = 0;
+	int rows = 1;
+};
+
+inline palette_window palette_window_for(int match_count, int selected, int max_rows) {
+	if (match_count <= 0)
+		return {0, 1};
+	int const rows = std::min(match_count, std::max(1, max_rows));
+	int const sel = std::clamp(selected, 0, match_count - 1);
+	int const first = std::clamp(sel - rows / 2, 0, match_count - rows);
+	return {first, rows};
 }
 
 // The feed's per-role prefix. The unicode tier uses the opencode-style

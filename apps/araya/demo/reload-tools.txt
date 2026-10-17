@@ -1,0 +1,4 @@
+/load llm-mock
+/reload tools
+/call echo {"text": "tools survived"}
+quit

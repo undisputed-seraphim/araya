@@ -61,6 +61,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <memory>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -91,8 +93,10 @@ araya::logger::log_level parse_level(std::string_view word) {
 	throw std::invalid_argument("level is one of error, warn, info, debug");
 }
 
-// The app's demo tool: registered at boot so the scripted agent demo has
-// something to call. Real hosts register their own tools from plugins.
+// The app's demo tool: registered by a component (not the root context) so
+// the registration is owned by a fiber that is a consumer of `tools`. A
+// tools reload then retires and remounts this component, re-registering the
+// tool against the new registry.
 araya::task<araya::tools::tool_result> demo_echo(araya::tools::tool_context const& ctx) {
 	std::string text;
 	if (auto const* object = ctx.arguments.if_object()) {
@@ -101,6 +105,37 @@ araya::task<araya::tools::tool_result> demo_echo(araya::tools::tool_context cons
 	}
 	co_return araya::tools::tool_result{boost::json::array{{{"type", "text"}, {"text", "echo tool: " + text}}}, false};
 }
+
+struct demo_tools_plugin : araya::plugin {
+	araya::task<void> apply(araya::plugin_context& ctx) override {
+		auto tools = ctx.require<araya::tools::tools_service>(araya::tools::tools_key).shared();
+		tools->register_tool(
+			ctx,
+			araya::tools::tool_definition{
+				"echo",
+				"echoes the text argument",
+				boost::json::value{
+					{"type", "object"},
+					{"properties",
+					 boost::json::object{
+						 {"text", boost::json::object{{"type", "string"}, {"description", "the text to echo"}}}}},
+					{"required", boost::json::array{"text"}}}},
+			&demo_echo);
+		co_return;
+	}
+};
+
+std::unique_ptr<araya::plugin> make_demo_tools(araya::plugin_config const&) {
+	return std::make_unique<demo_tools_plugin>();
+}
+
+static const araya::dependency_spec g_demo_tools_deps[]{{araya::service_id{"tools", 1}, true, {}}};
+static constexpr std::span<araya::provision_spec const> g_demo_tools_provs{};
+static const araya::plugin_descriptor g_demo_tools_desc{
+	"demo-tools",
+	g_demo_tools_deps,
+	g_demo_tools_provs,
+	&make_demo_tools};
 
 // -- the misc commands (timer, log) ---------------------------------------
 
@@ -265,7 +300,8 @@ constexpr command_entry g_commands[]{
 	 "load <component> [json config]",
 	 "add logger | timer | session | session-query | session-query-sqlite | session-log-export | persistence | "
 	 "llm | llm-compat | llm-mock | llm-retry | system-prompt | "
-	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
+	 "agent-instructions | tools | demo-tools | tool-todo | agent-loop | attachment | coreutil | "
+	 "fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | mcp-client | mcp-resources | "
 	 "lsp | lsp-stdio | tool-lsp | "
 	 "skill | shell | user-questions | web | tool-ask-user | tool-jobs | tool-read-image | tool-session-query | "
@@ -366,6 +402,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::agent_instructions::plugin_descriptor();
 	if (name == "tools")
 		return &araya::tools::plugin_descriptor();
+	if (name == "demo-tools")
+		return &g_demo_tools_desc;
 	if (name == "tool-todo")
 		return &araya::tool_todo::plugin_descriptor();
 	if (name == "agent-loop")
@@ -513,6 +551,10 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	// Workspace instructions (AGENTS.md) as an agent context producer.
 	ctx.desired["agent-instructions"] = desired_entry{&araya::agent_instructions::plugin_descriptor(), {}};
 	ctx.desired["tools"] = desired_entry{&araya::tools::plugin_descriptor(), {}};
+	// The demo host tool is owned by a component (a consumer of `tools`) so a
+	// tools reload remounts it and re-registers the tool. Real hosts follow
+	// the same pattern from their own plugins.
+	ctx.desired["demo-tools"] = desired_entry{&g_demo_tools_desc, {}};
 	ctx.desired["tool-todo"] = desired_entry{&araya::tool_todo::plugin_descriptor(), {}};
 	ctx.desired["agent-loop"] = desired_entry{&araya::agent::plugin_descriptor(), {}};
 	// Session query/search tools over the session-query service.
@@ -762,24 +804,6 @@ araya::task<void> boot(app_context& ctx, line_sink const& out) {
 					m.event.type);
 			},
 			0);
-
-		// The app's demo tool, registered on the host fiber so the
-		// scripted agent demo has something to call. Real hosts register
-		// their tools from plugins.
-		auto root = ctx.rt->root_context();
-		auto tools = root.require<araya::tools::tools_service>(araya::tools::tools_key).shared();
-		tools->register_tool(
-			root,
-			araya::tools::tool_definition{
-				"echo",
-				"echoes the text argument",
-				boost::json::value{
-					{"type", "object"},
-					{"properties",
-					 boost::json::object{
-						 {"text", boost::json::object{{"type", "string"}, {"description", "the text to echo"}}}}},
-					{"required", boost::json::array{"text"}}}},
-			&demo_echo);
 	});
 }
 
