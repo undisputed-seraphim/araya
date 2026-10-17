@@ -298,13 +298,15 @@ subagents_service::subagents_service(
 	std::shared_ptr<araya::agent::agent_service> agent,
 	std::shared_ptr<araya::tools::tools_service> tools,
 	std::shared_ptr<araya::system_prompt::system_prompt_service> prompts,
-	std::uint32_t max_depth)
+	std::uint32_t max_depth,
+	araya::logger::log_handle log)
 	: executor_(std::move(executor))
 	, store_(std::move(store))
 	, agent_(std::move(agent))
 	, tools_(std::move(tools))
 	, prompts_(std::move(prompts))
-	, max_depth_(max_depth) {}
+	, max_depth_(max_depth)
+	, log_(std::move(log)) {}
 
 void subagents_service::set_context_factory(std::function<araya::plugin_context()> factory) {
 	context_factory_ = std::move(factory);
@@ -431,8 +433,10 @@ araya::task<result> subagents_service::run(std::string_view provider_name, start
 	try {
 		child = create_child(provider_name, req, state);
 	} catch (std::exception const& e) {
+		log_.warn("subagent spawn via '{}' failed", provider_name);
 		co_return error_result(e.what());
 	}
+	log_.debug("subagent '{}' spawned via '{}'", child->id().value, provider_name);
 	// One-shot children are not retained, so their scoped composition is
 	// released when this run's frame unwinds.
 	composition_guard composition{&state.composition};
@@ -482,6 +486,10 @@ araya::task<result> subagents_service::run(std::string_view provider_name, start
 		r.stop_reason = "error";
 		r.error = e.what();
 	}
+	if (r.is_error)
+		log_.warn("subagent '{}' failed ({})", r.child, r.stop_reason);
+	else
+		log_.debug("subagent '{}' finished: {}", r.child, r.stop_reason);
 	if (capture) {
 		if (capture->recorded) {
 			r.structure = *capture->value;
@@ -510,11 +518,14 @@ araya::task<result> subagents_service::start_continuable(std::string_view provid
 	try {
 		child = create_child(provider_name, req, state);
 	} catch (std::exception const& e) {
-		co_return error_result(e.what());
+		(void)e;
+		log_.warn("continuable subagent spawn via '{}' failed", provider_name);
+		co_return error_result("subagent spawn failed");
 	}
 
 	state.label = req.label;
 	auto const id = child->id().value;
+	log_.debug("continuable subagent '{}' started via '{}'", id, provider_name);
 	children_[id] = std::move(state);
 	auto const& created = children_[id];
 

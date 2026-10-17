@@ -3,6 +3,6 @@
 # OpenSSL for https). Header-first; the one source implements the service.
 araya_add_plugin(web
     SOURCES src/web.cpp
-    DEPS araya::araya araya::llm
+    DEPS araya::araya araya::llm araya::logger
     TEST tests/web_test.cpp
 )

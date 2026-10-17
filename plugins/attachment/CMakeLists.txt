@@ -4,6 +4,6 @@ find_package(OpenSSL REQUIRED)
 
 araya_add_plugin(attachment
     SOURCES src/attachment.cpp
-    DEPS araya::araya OpenSSL::Crypto
+    DEPS araya::araya araya::logger OpenSSL::Crypto
     TEST tests/attachment_test.cpp
 )

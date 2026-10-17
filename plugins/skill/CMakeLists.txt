@@ -4,6 +4,6 @@
 # loads bodies on demand. Header-first; the one source implements discovery.
 araya_add_plugin(skill
     SOURCES src/skill.cpp
-    DEPS araya::araya
+    DEPS araya::araya araya::logger
     TEST tests/skill_test.cpp
 )

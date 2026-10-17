@@ -3,6 +3,7 @@
 #include "araya/config.hpp"
 #include "araya/effects.hpp"
 #include "araya/jobs/jobs.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/sandbox-policy/sandbox_policy.hpp"
 #include "araya/sandbox/sandbox.hpp"
 #include "araya/session/store.hpp"
@@ -440,7 +441,11 @@ araya::task<tool_result> handle_bash(
 	shell_config config,
 	std::shared_ptr<araya::sandbox::sandbox_provider> sandbox,
 	std::shared_ptr<araya::sandbox_policy::sandbox_policy_service> policy,
-	tool_context const& ctx) {
+	tool_context const& ctx,
+	araya::logger::log_handle log) {
+	araya::logger::log_context log_context;
+	log_context.session = ctx.session;
+	log_context.call = ctx.call_id;
 	auto const* args = ctx.arguments.if_object();
 	auto command = args ? araya::util::json::get_string(*args, "command") : std::string{};
 	if (command.empty())
@@ -477,6 +482,7 @@ araya::task<tool_result> handle_bash(
 		try {
 			confinement = sandbox->confine(policy->resolve(workspace_root));
 		} catch (araya::sandbox::sandbox_unavailable const& e) {
+			log.warn(log_context, "sandbox confinement unavailable: {}", e.what());
 			co_return text_result(std::string("Error: SANDBOX_UNAVAILABLE: ") + e.what(), true);
 		}
 	}
@@ -537,15 +543,22 @@ araya::task<tool_result> handle_bash(
 
 	auto result = co_await run_shell(executor, config, std::move(command), std::move(workdir), ctx.stop, confinement);
 	if (!result.launched) {
-		if (result.sandbox_unavailable)
+		if (result.sandbox_unavailable) {
+			log.warn(log_context, "sandbox confinement unavailable; the command did not run");
 			co_return text_result(
 				"Error: SANDBOX_UNAVAILABLE: sandbox confinement could not be applied; the command did not run", true);
+		}
+		log.warn(log_context, "command failed to launch");
 		co_return text_result("Error: failed to launch command: " + result.error, true);
 	}
-	if (result.aborted)
+	if (result.aborted) {
+		log.debug(log_context, "command aborted");
 		co_return text_result("Error: command aborted", true);
-	if (!result.error.empty())
+	}
+	if (!result.error.empty()) {
+		log.warn(log_context, "command failed");
 		co_return text_result("Error: " + result.error, true);
+	}
 
 	std::string body = result.stdout_text;
 	if (!result.stderr_text.empty()) {
@@ -569,12 +582,17 @@ araya::task<tool_result> handle_bash(
 		markers.push_back("[full stdout: " + result.stdout_spill + "]");
 	if (!result.stderr_spill.empty())
 		markers.push_back("[full stderr: " + result.stderr_spill + "]");
-	if (result.timed_out)
+	if (result.timed_out) {
+		log.warn(log_context, "command timed out after {}ms", config.timeout_ms);
 		markers.push_back("[timed out after " + std::to_string(config.timeout_ms) + "ms]");
-	if (result.signal != 0)
+	}
+	if (result.signal != 0) {
+		log.warn(log_context, "command killed by signal {}", result.signal);
 		markers.push_back("[killed by signal: " + std::to_string(result.signal) + "]");
-	else if (result.exit_code != 0)
+	} else if (result.exit_code != 0) {
+		log.debug(log_context, "command exited with code {}", result.exit_code);
 		markers.push_back("[exit code: " + std::to_string(result.exit_code) + "]");
+	}
 
 	for (auto const& marker : markers) {
 		if (!body.empty() && body.back() != '\n')
@@ -606,6 +624,7 @@ struct shell_plugin : araya::plugin {
 						  .value_or(nullptr);
 		auto executor = ctx.executor();
 		auto config = config_;
+		auto log = araya::logger::from_context(ctx, "shell");
 
 		// Background processes outlive a plugin reload only if something kills
 		// them; teardown cancels every live one (the jobs registry also cancels
@@ -672,8 +691,8 @@ struct shell_plugin : araya::plugin {
 					{"type", "object"},
 					{"properties", std::move(properties)},
 					{"required", boost::json::array{"command"}}}},
-			[executor, store, jobs, live, config, sandbox, policy](tool_context const& call) {
-				return handle_bash(executor, store, jobs, live, config, sandbox, policy, call);
+			[executor, store, jobs, live, config, sandbox, policy, log](tool_context const& call) {
+				return handle_bash(executor, store, jobs, live, config, sandbox, policy, call, log);
 			});
 		co_return;
 	}
@@ -697,6 +716,7 @@ static const araya::dependency_spec g_shell_deps[]{
 	// bash runs confined; without them it runs unconstrained.
 	{araya::sandbox::sandbox_key.id, false, {}},
 	{araya::sandbox_policy::sandbox_policy_key.id, false, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_shell_provs{};
 static const araya::plugin_descriptor g_descriptor{"shell", g_shell_deps, g_shell_provs, &make_shell, g_config};

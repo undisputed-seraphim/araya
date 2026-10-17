@@ -1,5 +1,7 @@
 #include "araya/attachment/attachment.hpp"
 
+#include "araya/logger/log.hpp"
+
 #include "araya/config.hpp"
 #include "araya/plugin_context.hpp"
 
@@ -103,28 +105,38 @@ std::string sha256_hex(std::string const& data) {
 
 class local_attachments : public attachment_service {
 public:
-	explicit local_attachments(fs::path root)
-		: root_(std::move(root)) {}
+	local_attachments(fs::path root, araya::logger::log_handle log = {})
+		: root_(std::move(root))
+		, log_(std::move(log)) {}
 
 	image_ref save_image(std::string const& data, std::string const& media_type, std::string const& name) override {
 		auto info = sniff(data);
-		if (!info)
+		if (!info) {
+			log_.warn("rejected image '{}': unsupported format", name);
 			throw std::runtime_error("unsupported image format (PNG/JPEG/GIF only)");
-		if (!media_type.empty() && media_type != info->media_type)
+		}
+		if (!media_type.empty() && media_type != info->media_type) {
+			log_.warn("rejected image '{}': declared media type does not match the signature", name);
 			throw std::runtime_error(
 				"declared media type " + media_type + " does not match the file signature " + info->media_type);
+		}
 		std::error_code ec;
 		fs::create_directories(root_, ec);
-		if (ec)
+		if (ec) {
+			log_.warn("cannot create attachment root: {}", ec.message());
 			throw std::runtime_error("cannot create attachment root: " + ec.message());
+		}
 		auto const id = sha256_hex(data);
 		auto const path = root_ / id;
 		if (!fs::exists(path, ec)) {
 			std::ofstream stream(path, std::ios::binary);
-			if (!stream)
+			if (!stream) {
+				log_.warn("cannot write attachment '{}'", id);
 				throw std::runtime_error("cannot write attachment " + id);
+			}
 			stream.write(data.data(), static_cast<std::streamsize>(data.size()));
 		}
+		log_.debug("stored image '{}' ({} bytes, {})", id, data.size(), info->media_type);
 		return image_ref{id, info->media_type, data.size(), info->width, info->height, name};
 	}
 
@@ -142,6 +154,7 @@ public:
 
 private:
 	fs::path root_;
+	araya::logger::log_handle log_;
 };
 
 std::unique_ptr<araya::plugin> make_attachment(araya::plugin_config const& config) {
@@ -153,7 +166,8 @@ std::unique_ptr<araya::plugin> make_attachment(araya::plugin_config const& confi
 		}
 
 		araya::task<void> apply(araya::plugin_context& ctx) override {
-			std::shared_ptr<attachment_service> impl = std::make_shared<local_attachments>(std::filesystem::path(root));
+			std::shared_ptr<attachment_service> impl = std::make_shared<local_attachments>(
+				std::filesystem::path(root), araya::logger::from_context(ctx, "attachment"));
 			ctx.provide(attachments_key, std::move(impl));
 			co_return;
 		}
@@ -163,7 +177,7 @@ std::unique_ptr<araya::plugin> make_attachment(araya::plugin_config const& confi
 	return std::make_unique<attachment_plugin>(config);
 }
 
-static constexpr std::span<araya::dependency_spec const> g_deps{};
+static const araya::dependency_spec g_deps[]{{araya::service_id{"logger", 1}, false, {}}};
 static const araya::provision_spec g_provs[]{{araya::service_id{"attachments", 1}}};
 static const araya::plugin_descriptor g_descriptor{"attachment", g_deps, g_provs, &make_attachment, g_config};
 

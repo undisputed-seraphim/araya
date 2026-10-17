@@ -1,5 +1,7 @@
 #include "araya/skill/skill.hpp"
 
+#include "araya/logger/log.hpp"
+
 #include "araya/config.hpp"
 #include "araya/plugin_context.hpp"
 #include "araya/util/string.hpp"
@@ -239,8 +241,9 @@ std::vector<candidate> discover_root(skill_root const& root) {
 
 class filesystem_skills : public skills_service {
 public:
-	explicit filesystem_skills(std::vector<std::string> custom_dirs)
-		: custom_dirs_(std::move(custom_dirs)) {}
+	filesystem_skills(std::vector<std::string> custom_dirs, araya::logger::log_handle log = {})
+		: custom_dirs_(std::move(custom_dirs))
+		, log_(std::move(log)) {}
 
 	std::vector<skill_summary> list(std::string const& cwd) const override {
 		auto const base = cwd.empty() ? fs::current_path() : fs::path(cwd);
@@ -279,8 +282,10 @@ public:
 			if (summary.name != name)
 				continue;
 			auto parsed = parse_skill_file(fs::path(summary.path));
-			if (!parsed || parsed->name != name)
+			if (!parsed || parsed->name != name) {
+				log_.warn("skill '{}' is unreadable or invalid", name);
 				return std::nullopt;
+			}
 			skill_definition definition;
 			definition.summary = summary;
 			definition.content = std::move(parsed->content);
@@ -291,6 +296,7 @@ public:
 
 private:
 	std::vector<std::string> custom_dirs_;
+	araya::logger::log_handle log_;
 };
 
 std::unique_ptr<araya::plugin> make_skill(araya::plugin_config const& config) {
@@ -313,7 +319,8 @@ std::unique_ptr<araya::plugin> make_skill(araya::plugin_config const& config) {
 		}
 
 		araya::task<void> apply(araya::plugin_context& ctx) override {
-			std::shared_ptr<skills_service> impl = std::make_shared<filesystem_skills>(custom_dirs);
+			std::shared_ptr<skills_service> impl =
+				std::make_shared<filesystem_skills>(custom_dirs, araya::logger::from_context(ctx, "skill"));
 			ctx.provide(skills_key, std::move(impl));
 			co_return;
 		}
@@ -323,7 +330,7 @@ std::unique_ptr<araya::plugin> make_skill(araya::plugin_config const& config) {
 	return std::make_unique<skill_plugin>(config);
 }
 
-static constexpr std::span<araya::dependency_spec const> g_deps{};
+static const araya::dependency_spec g_deps[]{{araya::service_id{"logger", 1}, false, {}}};
 static const araya::provision_spec g_provs[]{{araya::service_id{"skills", 1}}};
 static const araya::plugin_descriptor g_descriptor{"skill", g_deps, g_provs, &make_skill, g_config};
 

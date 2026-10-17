@@ -1,6 +1,7 @@
 #include "araya/jobs/jobs.hpp"
 
 #include "araya/config.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/session/events.hpp"
 
 #include <boost/asio/post.hpp>
@@ -61,9 +62,10 @@ struct tracked_job {
 
 class job_registry : public jobs_service, public std::enable_shared_from_this<job_registry> {
 public:
-	job_registry(boost::asio::any_io_executor executor, std::size_t max_concurrent)
+	job_registry(boost::asio::any_io_executor executor, std::size_t max_concurrent, araya::logger::log_handle log = {})
 		: executor_(std::move(executor))
-		, max_concurrent_(max_concurrent) {}
+		, max_concurrent_(max_concurrent)
+		, log_(std::move(log)) {}
 
 	job_id start(job_start spec) override {
 		if (controllers_ == 0)
@@ -88,6 +90,7 @@ public:
 		job->id = spec.kind + "-" + std::to_string(++counters_[spec.kind]);
 		job->in_store = true;
 		store_.emplace(job->id, job);
+		log_.debug("job '{}' started (kind={})", job->id, job->kind);
 
 		std::weak_ptr<job_registry> weak_registry = weak_from_this();
 		std::weak_ptr<tracked_job> weak_job = job;
@@ -335,6 +338,10 @@ private:
 		job->detail = std::move(outcome.detail);
 		job->output = std::move(outcome.output);
 		job->finished_at_ms = araya::session::now_ms();
+		if (job->status == job_status::failed)
+			log_.warn("job '{}' failed", job->id);
+		else
+			log_.debug("job '{}' finished: {}", job->id, job_status_name(job->status));
 		if (!job->waiters.empty())
 			job->reported = true;
 		release_waiters(*job);
@@ -365,6 +372,7 @@ private:
 	std::size_t max_concurrent_;
 	std::size_t controllers_ = 0;
 	bool listeners_closed_ = false;
+	araya::logger::log_handle log_;
 	std::uint64_t next_listener_ = 1;
 	std::map<job_id, std::shared_ptr<tracked_job>> store_;
 	std::map<std::string, std::uint64_t> counters_;
@@ -381,7 +389,8 @@ std::unique_ptr<araya::plugin> make_jobs(araya::plugin_config const& config) {
 		}
 
 		araya::task<void> apply(araya::plugin_context& ctx) override {
-			auto registry = std::make_shared<job_registry>(ctx.executor(), max_concurrent);
+			auto registry = std::make_shared<job_registry>(
+				ctx.executor(), max_concurrent, araya::logger::from_context(ctx, "jobs"));
 			ctx.provide(jobs_key, std::shared_ptr<jobs_service>(registry));
 			ctx.on(araya::session::disposed_key, [registry](araya::session::session_disposed_msg const& msg) {
 				registry->dispose_owner(msg.id.value);
@@ -397,6 +406,7 @@ std::unique_ptr<araya::plugin> make_jobs(araya::plugin_config const& config) {
 
 static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static const araya::provision_spec g_provs[]{{araya::service_id{"jobs", 1}}};
 static const araya::plugin_descriptor g_descriptor{"jobs", g_deps, g_provs, &make_jobs, g_config};

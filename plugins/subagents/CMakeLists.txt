@@ -4,7 +4,7 @@
 # llm bridge whose final-output fold and settlement message it uses).
 araya_add_plugin(subagents
     SOURCES src/subagents.cpp src/plugin.cpp
-    DEPS araya::agent-loop
+    DEPS araya::agent-loop araya::logger
     TEST tests/subagents_test.cpp
     TEST_DEPS araya::llm-mock
 )

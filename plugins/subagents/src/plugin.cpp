@@ -2,6 +2,7 @@
 
 #include "araya/agent-loop/events.hpp"
 #include "araya/config.hpp"
+#include "araya/logger/log.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -35,7 +36,8 @@ struct subagents_plugin : araya::plugin {
 		if (auto configured = araya::plugin_config_view(config_).try_get(max_depth_key))
 			max_depth = *configured;
 
-		auto service = std::make_shared<subagents_service>(ctx.executor(), store, agent, tools, prompts, max_depth);
+		auto service = std::make_shared<subagents_service>(
+			ctx.executor(), store, agent, tools, prompts, max_depth, araya::logger::from_context(ctx, "subagents"));
 		auto activation = ctx.activation_ptr();
 		service->set_context_factory([activation] { return araya::plugin_context{activation}; });
 		service->register_provider(ctx, "spawn", make_spawn_provider(store));
@@ -64,6 +66,7 @@ static const araya::dependency_spec g_subagents_deps[]{
 	{araya::service_id{"agent", 1}, true, {}},
 	{araya::service_id{"tools", 1}, true, {}},
 	{araya::service_id{"system-prompt", 1}, true, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static const araya::provision_spec g_subagents_provs[]{{araya::service_id{"subagents", 1}}};
 static const araya::plugin_descriptor

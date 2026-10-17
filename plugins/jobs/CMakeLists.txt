@@ -3,6 +3,6 @@
 # 'session/disposed' event the registry cleans up owners on.
 araya_add_plugin(jobs
     SOURCES src/jobs.cpp
-    DEPS araya::session
+    DEPS araya::session araya::logger
     TEST tests/jobs_test.cpp
 )

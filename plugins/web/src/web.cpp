@@ -2,6 +2,7 @@
 
 #include "araya/config.hpp"
 #include "araya/llm/http.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/plugin_context.hpp"
 
 #include <boost/beast/http/verb.hpp>
@@ -192,13 +193,15 @@ std::optional<search_source> source_from_json(boost::json::value const& value) {
 
 class http_web : public web_service {
 public:
-	http_web(boost::asio::any_io_executor executor, web_config config)
+	http_web(boost::asio::any_io_executor executor, web_config config, araya::logger::log_handle log = {})
 		: executor_(std::move(executor))
-		, config_(std::move(config)) {}
+		, config_(std::move(config))
+		, log_(std::move(log)) {}
 
 	bool has_search() const override { return !config_.search_endpoint.empty(); }
 
 	araya::task<fetch_result> fetch(fetch_request request, std::stop_token stop) override {
+		log_.debug("fetch {}", araya::logger::safe_url(request.url));
 		auto endpoint = araya::llm::http::parse_url(request.url);
 		araya::llm::http::request http_request;
 		http_request.server = endpoint;
@@ -255,6 +258,8 @@ public:
 	araya::task<search_result> search(search_request request, std::stop_token stop) override {
 		if (!has_search())
 			throw std::runtime_error("no web search provider is configured");
+		log_.debug(
+			"search via {} (max_results={})", araya::logger::safe_url(config_.search_endpoint), request.max_results);
 		auto endpoint = araya::llm::http::parse_url(config_.search_endpoint);
 		araya::llm::http::request http_request;
 		http_request.server = endpoint;
@@ -333,6 +338,7 @@ public:
 private:
 	boost::asio::any_io_executor executor_;
 	web_config config_;
+	araya::logger::log_handle log_;
 };
 
 std::unique_ptr<araya::plugin> make_web(araya::plugin_config const& config) {
@@ -341,7 +347,8 @@ std::unique_ptr<araya::plugin> make_web(araya::plugin_config const& config) {
 			: config(parse_config(cfg)) {}
 
 		araya::task<void> apply(araya::plugin_context& ctx) override {
-			std::shared_ptr<web_service> impl = std::make_shared<http_web>(ctx.executor(), config);
+			std::shared_ptr<web_service> impl =
+				std::make_shared<http_web>(ctx.executor(), config, araya::logger::from_context(ctx, "web"));
 			ctx.provide(web_key, std::move(impl));
 			co_return;
 		}
@@ -351,7 +358,7 @@ std::unique_ptr<araya::plugin> make_web(araya::plugin_config const& config) {
 	return std::make_unique<web_plugin>(config);
 }
 
-static constexpr std::span<araya::dependency_spec const> g_deps{};
+static const araya::dependency_spec g_deps[]{{araya::service_id{"logger", 1}, false, {}}};
 static const araya::provision_spec g_provs[]{{araya::service_id{"web", 1}}};
 static const araya::plugin_descriptor g_descriptor{"web", g_deps, g_provs, &make_web, g_config};
 

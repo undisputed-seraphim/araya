@@ -1,6 +1,7 @@
 #pragma once
 
 #include "araya/agent-loop/agent.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/plugin.hpp"
 #include "araya/plugin_context.hpp"
 #include "araya/service.hpp"
@@ -136,7 +137,8 @@ public:
 		std::shared_ptr<araya::agent::agent_service> agent,
 		std::shared_ptr<araya::tools::tools_service> tools,
 		std::shared_ptr<araya::system_prompt::system_prompt_service> prompts,
-		std::uint32_t max_depth);
+		std::uint32_t max_depth,
+		araya::logger::log_handle log = {});
 
 	// The plugin hands the service a factory for fresh plugin-context views
 	// over its own activation; the service uses it to register the scoped
@@ -216,6 +218,7 @@ private:
 	std::uint32_t max_depth_;
 	std::map<std::string, std::shared_ptr<subagent_provider>> providers_;
 	std::map<std::string, child_state> children_;
+	araya::logger::log_handle log_;
 };
 
 // The built-in in-process spawn provider: a fresh child session with no
