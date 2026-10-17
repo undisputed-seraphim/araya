@@ -5,14 +5,17 @@
 
 #include <quill/Backend.h>
 #include <quill/Logger.h>
+#include <quill/sinks/Sink.h>
 
 #include <cstdint>
 #include <format>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace araya::logger {
 
@@ -20,6 +23,29 @@ namespace araya::logger {
 // Debug/Info/Warning/Error; quill's frontend performs the gating, so a
 // filtered call costs one branch before the queue push.
 enum class log_level : std::uint8_t { error, warn, info, debug };
+
+// Correlation fields attached to one record. Views must remain valid for the
+// duration of the call (construct one inline from live ids). `turn`/`step`
+// are omitted when zero.
+struct log_context {
+	std::string_view session;
+	std::string_view call;
+	std::uint64_t turn = 0;
+	std::uint64_t step = 0;
+};
+
+// Renders a context as `[ses=… t=… s=… call=…]`, or an empty string.
+std::string render_context(log_context const& context);
+
+// The process-wide sinks used when a logger name is created on demand. The
+// app registers its shared file/console sinks before boot so plugin loggers
+// land in the same file; when empty, the service keeps the console fallback
+// (tests and demos).
+void set_default_sinks(std::vector<std::shared_ptr<quill::Sink>> sinks);
+
+// Strips userinfo, query, and fragment from a URL so an endpoint can be
+// logged without leaking credentials or tokens.
+std::string safe_url(std::string_view url);
 
 // Parses a level word ("error"|"warn"|"info"|"debug"); nullopt on an
 // unknown spelling. Shared by the config parser and flag/env handling.
@@ -34,14 +60,26 @@ class logger_service;
 // backend thread.
 class named_logger {
 public:
+	// Whether a record at this level would be emitted (the cheap gate that
+	// lets callers skip formatting work entirely).
+	bool enabled(log_level level) const noexcept;
+
+	// The generic form the small `log_handle` helper (araya/logger/log.hpp)
+	// forwards to; the named methods below are the usual call sites.
 	template <class... Args>
-	void error(std::string_view fmt, Args&&... args) const {
-		log(log_level::error, fmt, std::forward<Args>(args)...);
+	void log(log_level level, std::string_view fmt, Args&&... args) const;
+
+	template <class... Args>
+	void log(log_level level, log_context const& context, std::string_view fmt, Args&&... args) const;
+
+	template <class... Args>
+	void debug(std::string_view fmt, Args&&... args) const {
+		log(log_level::debug, fmt, std::forward<Args>(args)...);
 	}
 
 	template <class... Args>
-	void warn(std::string_view fmt, Args&&... args) const {
-		log(log_level::warn, fmt, std::forward<Args>(args)...);
+	void debug(log_context const& context, std::string_view fmt, Args&&... args) const {
+		log(log_level::debug, context, fmt, std::forward<Args>(args)...);
 	}
 
 	template <class... Args>
@@ -50,8 +88,28 @@ public:
 	}
 
 	template <class... Args>
-	void debug(std::string_view fmt, Args&&... args) const {
-		log(log_level::debug, fmt, std::forward<Args>(args)...);
+	void info(log_context const& context, std::string_view fmt, Args&&... args) const {
+		log(log_level::info, context, fmt, std::forward<Args>(args)...);
+	}
+
+	template <class... Args>
+	void warn(std::string_view fmt, Args&&... args) const {
+		log(log_level::warn, fmt, std::forward<Args>(args)...);
+	}
+
+	template <class... Args>
+	void warn(log_context const& context, std::string_view fmt, Args&&... args) const {
+		log(log_level::warn, context, fmt, std::forward<Args>(args)...);
+	}
+
+	template <class... Args>
+	void error(std::string_view fmt, Args&&... args) const {
+		log(log_level::error, fmt, std::forward<Args>(args)...);
+	}
+
+	template <class... Args>
+	void error(log_context const& context, std::string_view fmt, Args&&... args) const {
+		log(log_level::error, context, fmt, std::forward<Args>(args)...);
 	}
 
 private:
@@ -61,9 +119,6 @@ private:
 		: service_(service)
 		, backend_(backend)
 		, name_(std::move(name)) {}
-
-	template <class... Args>
-	void log(log_level level, std::string_view fmt, Args&&... args) const;
 
 	// Both are borrowed, never null: the service owns the handle, quill
 	// owns the backend.
@@ -92,6 +147,12 @@ public:
 
 	log_level level() const noexcept { return level_; }
 
+	// Whether a record at this level would pass the threshold. Callers use
+	// this to skip formatting work for filtered statements.
+	bool enabled(log_level level) const noexcept {
+		return static_cast<unsigned>(level) <= static_cast<unsigned>(level_);
+	}
+
 	// The underlying quill logger, for attaching custom sinks or quill
 	// features directly. Returns null when the name is unknown.
 	quill::Logger* backend(std::string const& name) const;
@@ -112,19 +173,45 @@ private:
 
 inline constexpr araya::service_key<logger_service> logger_key{"logger", 1};
 
+inline bool named_logger::enabled(log_level level) const noexcept { return service_.enabled(level); }
+
+namespace detail {
+
+// Formats one record; a bad format string or an unformattable argument never
+// throws into the caller's log statement.
+template <class... Args>
+std::string format_message(std::string_view fmt, Args&&... args) {
+	try {
+		return std::vformat(fmt, std::make_format_args(args...));
+	} catch (std::format_error const&) {
+		return std::string(fmt) + " <format error>";
+	}
+}
+
+} // namespace detail
+
 // The plugin descriptor: apply() constructs the service (default logger
 // name and level from config) and provides it under logger_key.
 araya::plugin_descriptor const& plugin_descriptor();
 
 template <class... Args>
 void named_logger::log(log_level level, std::string_view fmt, Args&&... args) const {
-	std::string text;
-	try {
-		text = std::vformat(fmt, std::make_format_args(args...));
-	} catch (std::format_error const&) {
-		// A bad format string or an unformattable argument never throws
-		// into the caller's log statement.
-		text = std::string(fmt) + " <format error>";
+	if (!service_.enabled(level))
+		return;
+	service_.submit(&backend_, level, detail::format_message(fmt, std::forward<Args>(args)...));
+}
+
+template <class... Args>
+void named_logger::log(log_level level, log_context const& context, std::string_view fmt, Args&&... args) const {
+	if (!service_.enabled(level))
+		return;
+	std::string text = render_context(context);
+	std::string message = detail::format_message(fmt, std::forward<Args>(args)...);
+	if (text.empty()) {
+		text = std::move(message);
+	} else {
+		text += ' ';
+		text += message;
 	}
 	service_.submit(&backend_, level, std::move(text));
 }

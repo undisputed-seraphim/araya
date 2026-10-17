@@ -21,6 +21,10 @@
 // run on the control strand: appends buffer in memory, flush is the
 // durability point (fsync), and file I/O in listeners is small bounded
 // work by design.
+namespace araya::logger {
+class logger_service;
+}
+
 namespace araya::persistence {
 
 // One durable snapshot of a stored session: the header as recorded at
@@ -67,9 +71,11 @@ public:
 inline constexpr araya::service_key<session_persistence> persistence_key{"session.persistence", 1};
 
 // The JSONL backend factory: the plugin's apply() constructs its backend
-// through this, and tests can build one directly. A future backend
+// through this, and tests can build one directly. The optional logger
+// receives recovery warnings and durability failures. A future backend
 // (sqlite) would add its own factory without touching this header.
-std::shared_ptr<session_persistence> make_jsonl_backend(std::filesystem::path root);
+std::shared_ptr<session_persistence>
+make_jsonl_backend(std::filesystem::path root, std::shared_ptr<araya::logger::logger_service> logger = {});
 
 // The plugin descriptor: apply() constructs the backend from config
 // ("root": storage directory) and subscribes to the session firehose.

@@ -157,3 +157,58 @@ TEST_CASE("the default logger name comes from config") {
 	auto content = read_file(file.path);
 	CHECK(content.find("rooted") != std::string::npos);
 }
+
+TEST_CASE("enabled reflects the configured threshold") {
+	auto file = make_file_logger("enabled-check");
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.logger_spec());
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto service = root_ctx.require<logger_service>(logger_key).shared();
+		service->set_level(log_level::info);
+		CHECK(service->enabled(log_level::error));
+		CHECK(service->enabled(log_level::info));
+		CHECK_FALSE(service->enabled(log_level::debug));
+		CHECK(service->named("enabled-check").enabled(log_level::warn));
+	});
+}
+
+TEST_CASE("on-demand loggers use the registered default sinks") {
+	auto path =
+		std::filesystem::temp_directory_path() / ("araya-logger-default-" + std::to_string(::getpid()) + ".log");
+	std::filesystem::remove(path);
+	auto sink = std::make_shared<quill::FileSink>(path);
+	set_default_sinks({sink});
+
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		co_await rt.mount(h.logger_spec({{"name", "default-root"}}));
+		co_await rt.wait_idle();
+
+		auto root_ctx = rt.root_context();
+		auto service = root_ctx.require<logger_service>(logger_key).shared();
+		service->named("component-x").info("routed to the file");
+		service->named("component-x")
+			.info(log_context{.session = "ses1", .call = "call1", .turn = 2, .step = 3}, "with context");
+		auto* component = service->backend("component-x");
+		REQUIRE(component != nullptr);
+		component->flush_log();
+		auto* root = service->backend("default-root");
+		REQUIRE(root != nullptr);
+		root->flush_log();
+	});
+
+	auto const content = read_file(path);
+	CHECK(content.find("routed to the file") != std::string::npos);
+	CHECK(content.find("[ses=ses1 t=2 s=3 call=call1]") != std::string::npos);
+	set_default_sinks({});
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("render_context omits empty fields") {
+	CHECK(render_context({}).empty());
+	CHECK(render_context({.session = "s", .call = "", .turn = 0, .step = 0}) == "[ses=s]");
+	CHECK(render_context({.session = "s", .call = "c", .turn = 1, .step = 2}) == "[ses=s t=1 s=2 call=c]");
+}

@@ -3,6 +3,6 @@
 # plugin supplies both its headers and the engine.
 araya_add_plugin(persistence
     SOURCES src/jsonl.cpp src/plugin.cpp
-    DEPS araya::session
+    DEPS araya::session araya::logger
     TEST tests/persistence_test.cpp
 )

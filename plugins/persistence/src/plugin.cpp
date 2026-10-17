@@ -1,4 +1,5 @@
 #include "araya/config.hpp"
+#include "araya/logger/logger.hpp"
 #include "araya/persistence/persistence.hpp"
 
 #include "araya/plugin_context.hpp"
@@ -31,10 +32,13 @@ struct persistence_plugin : araya::plugin {
 		: root_(std::move(root)) {}
 
 	araya::task<void> apply(araya::plugin_context& ctx) override {
+		std::shared_ptr<araya::logger::logger_service> logger;
+		if (auto lease = ctx.find<araya::logger::logger_service>(araya::logger::logger_key))
+			logger = lease->shared();
 		// The provision returns a live copy for the listeners: capturing
 		// the local that provide() consumed would be the null-shared_ptr
 		// trap the handle exists to remove.
-		auto p = ctx.provide(persistence_key, make_jsonl_backend(root_));
+		auto p = ctx.provide(persistence_key, make_jsonl_backend(root_, std::move(logger)));
 		auto backend = p.value;
 
 		ctx.on(
@@ -56,14 +60,16 @@ std::unique_ptr<araya::plugin> make_persistence(araya::plugin_config const& conf
 	return std::make_unique<persistence_plugin>(std::move(root));
 }
 
-static constexpr std::span<araya::dependency_spec const> g_no_deps{};
+// The logger is optional: the backend logs durability failures and recovery
+// warnings when it is mounted, and stays silent otherwise.
+static const araya::dependency_spec g_deps[]{{araya::service_id{"logger", 1}, false, {}}};
 static const araya::provision_spec g_persistence_prov[]{{araya::service_id{"session.persistence", 1}}};
 
 constexpr araya::config_field g_config[] = {
 	{"root", "string", "Session JSONL root directory.", "araya-sessions", false, nullptr},
 };
 static const araya::plugin_descriptor
-	g_descriptor{"persistence", g_no_deps, g_persistence_prov, &make_persistence, g_config};
+	g_descriptor{"persistence", g_deps, g_persistence_prov, &make_persistence, g_config};
 
 } // namespace
 

@@ -1,5 +1,7 @@
 #include "log_setup.hpp"
 
+#include "araya/logger/logger.hpp"
+
 #include <quill/Backend.h>
 #include <quill/Frontend.h>
 #include <quill/Logger.h>
@@ -18,11 +20,6 @@
 
 namespace araya::app {
 namespace {
-
-// The logger names the app pre-creates; the logger service adopts an
-// existing quill logger by name, so anything logging under one of these
-// lands in the shared file sink.
-constexpr std::string_view kLoggerNames[] = {"araya", "console", "watcher", "main", "timer"};
 
 // Rotate before the file grows unbounded: 5 MiB per file, keeping three
 // backups (araya-tui.log.1 .. .3). quill's defaults disable both.
@@ -54,17 +51,28 @@ void install_log_sinks(log_settings const& settings) {
 	if (settings.console)
 		console_sink = std::make_shared<quill::ConsoleSink>(quill::ConsoleSinkConfig{});
 
-	for (auto const name : kLoggerNames) {
-		// Build the sink list with reserve/push_back: a braced-init vector of
-		// one element trips a GCC -Warray-bounds false positive in the
-		// libstdc++ shared_ptr machinery under the sanitizer builds.
-		std::vector<std::shared_ptr<quill::Sink>> sinks;
-		sinks.reserve(console_sink ? 2 : 1);
-		sinks.push_back(file_sink);
-		if (console_sink)
-			sinks.push_back(console_sink);
-		quill::Frontend::create_or_get_logger(std::string{name}, std::move(sinks));
-	}
+	// Build the sink list with reserve/push_back: a braced-init vector of
+	// one element trips a GCC -Warray-bounds false positive in the
+	// libstdc++ shared_ptr machinery under the sanitizer builds.
+	std::vector<std::shared_ptr<quill::Sink>> sinks;
+	sinks.reserve(console_sink ? 2 : 1);
+	sinks.push_back(file_sink);
+	if (console_sink)
+		sinks.push_back(console_sink);
+
+	// TODO(json sink): when machine-readable logs are needed, add an opt-in
+	// RotatingJsonFileSink (e.g. `log.json_file`) to this list. Quill's JSON
+	// sink does not carry custom tags, so either include the context in the
+	// message (as log_context does) or use named-argument macros at the
+	// call sites.
+
+	// The root logger carries the app's sinks; the logger service adopts it
+	// by name at boot.
+	quill::Frontend::create_or_get_logger("araya", sinks);
+
+	// Every later on-demand logger (one per component id) gets the same
+	// sinks instead of the service's console fallback.
+	araya::logger::set_default_sinks(sinks);
 }
 
 void shutdown_logging() {

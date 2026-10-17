@@ -2,6 +2,8 @@
 
 #include "demo_plugins.hpp"
 
+#include "araya/logger/log.hpp"
+
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
@@ -31,9 +33,15 @@ araya::task<void> print_status(app_context& ctx, line_sink const& out, std::stri
 	out(status ? *status : std::string(path) + ": absent");
 }
 
+araya::logger::log_handle logger_of(app_context& ctx) {
+	auto root = ctx.rt->root_context();
+	return araya::logger::from_context(root, "runtime");
+}
+
 araya::task<void> reconcile_print(app_context& ctx, line_sink const& out, std::string_view touched) {
 	co_await ctx.rt->reconcile(make_desired(ctx));
 	co_await ctx.rt->wait_idle();
+	log_failed_fibers(ctx);
 	co_await print_status(ctx, out, touched);
 	if (touched != "console" && ctx.desired.contains("console"))
 		co_await print_status(ctx, out, "console");
@@ -63,6 +71,8 @@ araya::task<void> cmd_config(app_context& ctx, line_sink const& out, std::string
 			build_tree(ctx, out);
 			co_await ctx.rt->reconcile(make_desired(ctx));
 			co_await ctx.rt->wait_idle();
+			log_failed_fibers(ctx);
+			logger_of(ctx).info("configuration reloaded");
 			out("config: reloaded");
 		} catch (std::exception const& e) {
 			out(std::string("config: ") + e.what());
@@ -123,6 +133,7 @@ araya::task<void> cmd_load(app_context& ctx, line_sink const& out, std::string c
 		}
 	}
 	ctx.desired[name] = desired_entry{descriptor, std::move(config)};
+	logger_of(ctx).info("component '{}' loaded", name);
 	co_await reconcile_print(ctx, out, name);
 }
 
@@ -142,6 +153,8 @@ araya::task<void> cmd_unload(app_context& ctx, line_sink const& out, std::string
 	ctx.desired.erase(name);
 	co_await ctx.rt->reconcile(make_desired(ctx));
 	co_await ctx.rt->wait_idle();
+	log_failed_fibers(ctx);
+	logger_of(ctx).info("component '{}' unloaded", name);
 	out(name + ": retired");
 	if (name != "console" && ctx.desired.contains("console"))
 		co_await print_status(ctx, out, "console");
@@ -165,6 +178,7 @@ araya::task<void> cmd_reload(app_context& ctx, line_sink const& out, std::string
 	co_await ctx.rt->reconcile(make_desired(ctx));
 	co_await ctx.rt->wait_idle();
 	ctx.desired[name] = entry;
+	logger_of(ctx).info("component '{}' reloaded", name);
 	co_await reconcile_print(ctx, out, name);
 }
 

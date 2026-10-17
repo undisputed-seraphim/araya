@@ -118,6 +118,10 @@ std::string cwd_branch_line(std::string const& cwd);
 // the runtime's own teardown contract applies afterwards.
 araya::task<void> boot(app_context& ctx, line_sink const& out);
 
+// Logs every mounted fiber whose apply/teardown failed at error level
+// (no-op when the logger is not mounted). Call while the runtime is idle.
+void log_failed_fibers(app_context& ctx);
+
 // (Re)builds ctx.desired from the resolved configuration: the default tree
 // plus the layered component overrides and disables. Does not reconcile.
 void build_tree(app_context& ctx, line_sink const& out);

@@ -15,6 +15,7 @@
 #include "araya/llm-mock/mock.hpp"
 #include "araya/llm-retry/llm_retry.hpp"
 #include "araya/llm/llm.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/logger/logger.hpp"
 #include "araya/lsp-stdio/lsp_stdio.hpp"
 #include "araya/lsp/lsp.hpp"
@@ -632,10 +633,59 @@ void build_tree(app_context& ctx, line_sink const& out) {
 		out("config: " + warning.source + ": " + warning.detail);
 }
 
+namespace {
+
+std::string diagnostic_text(araya::diagnostic const& diagnostic) {
+	std::string fibers;
+	for (auto const id : diagnostic.fibers) {
+		if (!fibers.empty())
+			fibers += ',';
+		fibers += std::to_string(id);
+	}
+	return std::string(diagnostic.kind == araya::diagnostic_kind::conflict ? "conflict" : "cycle") + " on '" +
+		   diagnostic.key_name + "' v" + std::to_string(diagnostic.key_version) + " (fibers: " + fibers + ")";
+}
+
+} // namespace
+
+void log_failed_fibers(app_context& ctx) {
+	auto root = ctx.rt->root_context();
+	auto log = araya::logger::from_context(root, "runtime");
+	if (!log)
+		return;
+	for (auto const& fiber : ctx.rt->fibers()) {
+		if (!fiber.error)
+			continue;
+		std::string const name = fiber.name.empty() ? fiber.descriptor : fiber.name;
+		log.error("component '{}' ({}) failed: {}", name, fiber.descriptor, error_text(fiber.error));
+	}
+}
+
 araya::task<void> boot(app_context& ctx, line_sink const& out) {
 	build_tree(ctx, out);
+
+	// Collect boot-time graph diagnostics before the logger exists; report
+	// them (and all later ones) once the tree is up.
+	auto diagnostics = std::make_shared<std::vector<araya::diagnostic>>();
+	ctx.rt->on_diagnostic([diagnostics](araya::diagnostic const& d) { diagnostics->push_back(d); });
+
 	co_await ctx.rt->reconcile(make_desired(ctx));
 	co_await ctx.rt->wait_idle();
+
+	{
+		auto root = ctx.rt->root_context();
+		auto log = araya::logger::from_context(root, "runtime");
+		if (log) {
+			for (auto const& diagnostic : *diagnostics)
+				log.error("dependency {}", diagnostic_text(diagnostic));
+			ctx.rt->on_diagnostic([log](araya::diagnostic const& diagnostic) {
+				log.error("dependency {}", diagnostic_text(diagnostic));
+			});
+		} else {
+			ctx.rt->on_diagnostic([](araya::diagnostic const&) {});
+		}
+	}
+	log_failed_fibers(ctx);
 
 	// The script/console answerer for `ask_user_question`: render the
 	// questions, read one answer line from the surface, and map it onto the

@@ -1,5 +1,7 @@
 #include "araya/persistence/persistence.hpp"
 
+#include "araya/logger/log.hpp"
+
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
@@ -115,11 +117,11 @@ std::string read_all(std::filesystem::path const& path) {
 }
 
 // Truncates an incomplete trailing record: when the file does not end in
-// '\n', drop everything after the last newline.
-void truncate_torn_tail(std::filesystem::path const& path) {
+// '\n', drop everything after the last newline. Returns true when it did.
+bool truncate_torn_tail(std::filesystem::path const& path) {
 	auto contents = read_all(path);
 	if (contents.empty() || contents.back() == '\n')
-		return;
+		return false;
 	auto last = contents.rfind('\n');
 	contents.resize(last == std::string::npos ? 0 : last + 1);
 	int fd = ::open(path.c_str(), O_WRONLY | O_TRUNC | O_CLOEXEC);
@@ -127,6 +129,7 @@ void truncate_torn_tail(std::filesystem::path const& path) {
 		fail("cannot reopen '" + path.string() + "': " + std::strerror(errno));
 	write_all(fd, contents);
 	::close(fd);
+	return true;
 }
 
 boost::json::object header_record(session_header const& h) {
@@ -171,8 +174,9 @@ struct writer_state {
 
 class jsonl_backend : public session_persistence {
 public:
-	explicit jsonl_backend(std::filesystem::path root)
-		: root_(std::move(root)) {}
+	jsonl_backend(std::filesystem::path root, std::shared_ptr<araya::logger::logger_service> logger)
+		: root_(std::move(root))
+		, log_(std::move(logger), "persistence") {}
 
 	~jsonl_backend() override {
 		// detach() erases from writers_, so collect the keys first.
@@ -185,31 +189,38 @@ public:
 	}
 
 	void attach(session_header const& header) override {
-		if (writers_.contains(header.id))
-			fail("session '" + header.id.value + "' already attached");
-		auto dir = session_dir(header.id);
-		std::filesystem::create_directories(dir);
-		auto path = session_file(header.id);
-		if (std::filesystem::exists(path)) {
-			truncate_torn_tail(path);
-		} else {
-			boost::json::value record = header_record(header);
-			int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
-			if (fd < 0)
-				fail("cannot create '" + path.string() + "': " + std::strerror(errno));
-			std::string line = boost::json::serialize(record) + "\n";
-			try {
-				write_all(fd, line);
-			} catch (...) {
+		try {
+			if (writers_.contains(header.id))
+				fail("session '" + header.id.value + "' already attached");
+			auto dir = session_dir(header.id);
+			std::filesystem::create_directories(dir);
+			auto path = session_file(header.id);
+			if (std::filesystem::exists(path)) {
+				if (truncate_torn_tail(path))
+					log_.warn("session '{}': truncated a torn tail in '{}'", header.id.value, path.string());
+			} else {
+				boost::json::value record = header_record(header);
+				int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+				if (fd < 0)
+					fail("cannot create '" + path.string() + "': " + std::strerror(errno));
+				std::string line = boost::json::serialize(record) + "\n";
+				try {
+					write_all(fd, line);
+				} catch (...) {
+					::close(fd);
+					throw;
+				}
 				::close(fd);
-				throw;
 			}
-			::close(fd);
+			int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
+			if (fd < 0)
+				fail("cannot open '" + path.string() + "': " + std::strerror(errno));
+			writers_.emplace(header.id, writer_state{fd, {}});
+			log_.debug("attached session '{}' at '{}'", header.id.value, path.string());
+		} catch (std::exception const& error) {
+			log_.error("attach of session '{}' failed: {}", header.id.value, error.what());
+			throw;
 		}
-		int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
-		if (fd < 0)
-			fail("cannot open '" + path.string() + "': " + std::strerror(errno));
-		writers_.emplace(header.id, writer_state{fd, {}});
 	}
 
 	void append(session_id const& id, session_event const& ev) override {
@@ -217,17 +228,28 @@ public:
 		if (it == writers_.end())
 			return;
 		it->second.buffer += boost::json::serialize(event_record(ev)) + "\n";
-		if (it->second.buffer.size() >= k_flush_threshold)
-			drain(it->second);
+		if (it->second.buffer.size() >= k_flush_threshold) {
+			try {
+				drain(it->second);
+			} catch (std::exception const& error) {
+				log_.error("write of session '{}' failed: {}", id.value, error.what());
+				throw;
+			}
+		}
 	}
 
 	void flush(session_id const& id) override {
 		auto it = writers_.find(id);
 		if (it == writers_.end())
 			return;
-		drain(it->second);
-		if (::fsync(it->second.fd) != 0)
-			fail("fsync failed: " + std::string(std::strerror(errno)));
+		try {
+			drain(it->second);
+			if (::fsync(it->second.fd) != 0)
+				fail("fsync failed: " + std::string(std::strerror(errno)));
+		} catch (std::exception const& error) {
+			log_.error("flush of session '{}' failed: {}", id.value, error.what());
+			throw;
+		}
 	}
 
 	void detach(session_id const& id) override {
@@ -237,45 +259,51 @@ public:
 		flush(id);
 		::close(it->second.fd);
 		writers_.erase(it);
+		log_.debug("detached session '{}'", id.value);
 	}
 
 	std::optional<stored_session> read(session_id const& id) const override {
 		auto path = session_file(id);
 		if (!std::filesystem::exists(path))
 			return std::nullopt;
-		auto contents = read_all(path);
-		stored_session stored;
-		bool saw_header = false;
-		std::size_t begin = 0;
-		while (begin < contents.size()) {
-			auto end = contents.find('\n', begin);
-			if (end == std::string::npos)
-				end = contents.size();
-			if (end > begin) {
-				auto line = std::string_view(contents).substr(begin, end - begin);
-				boost::json::value record = boost::json::parse(line);
-				if (!record.is_object())
-					fail("malformed record in '" + path.string() + "'");
-				auto const& obj = record.as_object();
-				auto type_it = obj.find("type");
-				if (type_it == obj.end() || !type_it->value().is_string())
-					fail("record without a type in '" + path.string() + "'");
-				if (type_it->value() == "session") {
-					if (saw_header)
-						fail("duplicate header record in '" + path.string() + "'");
-					saw_header = true;
-					stored.header = parse_header(obj, path);
-				} else {
-					if (!saw_header)
-						fail("event before header record in '" + path.string() + "'");
-					stored.events.push_back(parse_event(obj, path));
+		try {
+			auto contents = read_all(path);
+			stored_session stored;
+			bool saw_header = false;
+			std::size_t begin = 0;
+			while (begin < contents.size()) {
+				auto end = contents.find('\n', begin);
+				if (end == std::string::npos)
+					end = contents.size();
+				if (end > begin) {
+					auto line = std::string_view(contents).substr(begin, end - begin);
+					boost::json::value record = boost::json::parse(line);
+					if (!record.is_object())
+						fail("malformed record in '" + path.string() + "'");
+					auto const& obj = record.as_object();
+					auto type_it = obj.find("type");
+					if (type_it == obj.end() || !type_it->value().is_string())
+						fail("record without a type in '" + path.string() + "'");
+					if (type_it->value() == "session") {
+						if (saw_header)
+							fail("duplicate header record in '" + path.string() + "'");
+						saw_header = true;
+						stored.header = parse_header(obj, path);
+					} else {
+						if (!saw_header)
+							fail("event before header record in '" + path.string() + "'");
+						stored.events.push_back(parse_event(obj, path));
+					}
 				}
+				begin = end + 1;
 			}
-			begin = end + 1;
+			if (!saw_header)
+				fail("missing header record in '" + path.string() + "'");
+			return stored;
+		} catch (std::exception const& error) {
+			log_.warn("read of session '{}' failed: {}", id.value, error.what());
+			throw;
 		}
-		if (!saw_header)
-			fail("missing header record in '" + path.string() + "'");
-		return stored;
 	}
 
 	std::vector<session_id> list() const override {
@@ -378,6 +406,7 @@ private:
 
 	std::filesystem::path root_;
 	std::map<session_id, writer_state> writers_;
+	araya::logger::log_handle log_;
 };
 
 } // namespace
@@ -385,8 +414,9 @@ private:
 
 namespace araya::persistence {
 
-std::shared_ptr<session_persistence> make_jsonl_backend(std::filesystem::path root) {
-	return std::make_shared<jsonl_backend>(std::move(root));
+std::shared_ptr<session_persistence>
+make_jsonl_backend(std::filesystem::path root, std::shared_ptr<araya::logger::logger_service> logger) {
+	return std::make_shared<jsonl_backend>(std::move(root), std::move(logger));
 }
 
 } // namespace araya::persistence

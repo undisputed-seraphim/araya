@@ -7,8 +7,63 @@
 
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace araya::logger {
+
+std::string render_context(log_context const& context) {
+	std::string out;
+	auto add = [&out](std::string_view key, std::string_view value) {
+		if (value.empty())
+			return;
+		if (!out.empty())
+			out += ' ';
+		out += key;
+		out += '=';
+		out += value;
+	};
+	add("ses", context.session);
+	if (context.turn)
+		add("t", std::to_string(context.turn));
+	if (context.step)
+		add("s", std::to_string(context.step));
+	add("call", context.call);
+	if (out.empty())
+		return {};
+	return "[" + out + "]";
+}
+
+namespace {
+
+std::vector<std::shared_ptr<quill::Sink>>& default_sinks() {
+	static std::vector<std::shared_ptr<quill::Sink>> sinks;
+	return sinks;
+}
+
+} // namespace
+
+void set_default_sinks(std::vector<std::shared_ptr<quill::Sink>> sinks) { default_sinks() = std::move(sinks); }
+
+std::string safe_url(std::string_view url) {
+	auto const scheme_end = url.find("://");
+	if (scheme_end == std::string_view::npos) {
+		auto const cut = url.find_first_of("?#");
+		return std::string(url.substr(0, cut));
+	}
+	std::string out(url.substr(0, scheme_end + 3));
+	auto rest = url.substr(scheme_end + 3);
+	auto const authority_end = rest.find_first_of("/?#");
+	auto authority = rest.substr(0, authority_end);
+	if (auto const at = authority.rfind('@'); at != std::string_view::npos)
+		authority.remove_prefix(at + 1);
+	out += authority;
+	if (authority_end != std::string_view::npos) {
+		auto const path = rest.substr(authority_end);
+		auto const cut = path.find_first_of("?#");
+		out += path.substr(0, cut);
+	}
+	return out;
+}
 
 std::optional<log_level> parse_level(std::string_view word) {
 	if (word == "error")
@@ -64,12 +119,19 @@ quill::Logger* logger_service::get_or_create(std::string const& name) {
 	if (found != loggers_.end())
 		return found->second;
 
-	// Adopt an existing quill logger (power users pre-create one with
-	// custom sinks) or create one with the console sink.
+	// Adopt an existing quill logger (the app pre-creates the root logger
+	// with its shared file/console sinks), else create one with the
+	// registered default sinks so plugin loggers land in the same file.
+	// With no defaults (tests/demos) keep the console fallback.
 	quill::Logger* backend = quill::Frontend::get_logger(name);
 	if (!backend) {
-		backend = quill::Frontend::create_or_get_logger(
-			name, std::make_shared<quill::ConsoleSink>(quill::ConsoleSinkConfig{}));
+		auto const& sinks = default_sinks();
+		if (!sinks.empty()) {
+			backend = quill::Frontend::create_or_get_logger(name, sinks);
+		} else {
+			backend = quill::Frontend::create_or_get_logger(
+				name, std::make_shared<quill::ConsoleSink>(quill::ConsoleSinkConfig{}));
+		}
 	}
 	backend->set_log_level(to_quill(level_));
 	loggers_.emplace(name, backend);

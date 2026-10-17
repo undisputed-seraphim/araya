@@ -25,10 +25,11 @@ struct log_settings {
 // `base` (a set, non-empty variable wins).
 log_settings resolve_log_settings(log_settings base = {});
 
-// Pre-creates the app's known quill loggers with a rotating file sink (and,
-// when `console`, a stdout console sink) so the logger service adopts them by
-// name at boot. Call before the desired tree is mounted; the logger plugin's
-// apply() adopts existing quill loggers instead of attaching a console sink.
+// Creates the root (`araya`) logger with a rotating file sink (and, when
+// `console`, a stdout console sink) and registers those sinks as the logger
+// service's defaults, so on-demand component loggers land in the same file.
+// Call before the desired tree is mounted; the logger plugin adopts the root
+// logger by name instead of attaching its own console sink.
 void install_log_sinks(log_settings const& settings);
 
 // Flushes every known logger and stops quill's backend thread. Call once at
