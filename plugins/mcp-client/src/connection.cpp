@@ -47,12 +47,14 @@ std::uint64_t backoff_ms(reconnect_config const& policy, std::uint64_t attempt) 
 server_connection::server_connection(
 	boost::asio::any_io_executor executor,
 	server_config config,
-	connection_observer observer)
+	connection_observer observer,
+	araya::logger::log_handle log)
 	: executor_(std::move(executor))
 	, config_(std::move(config))
 	, observer_(std::move(observer))
 	, wake_(std::make_shared<signal_channel>(executor_, 1))
-	, ready_(executor_, 1) {}
+	, ready_(executor_, 1)
+	, log_(std::move(log)) {}
 
 void server_connection::start() {
 	auto self = shared_from_this();
@@ -65,6 +67,7 @@ araya::task<std::exception_ptr> server_connection::ready() {
 
 void server_connection::stop() {
 	stopped_ = true;
+	log_.debug("server '{}' stopped", config_.name);
 	if (channel_)
 		channel_->close();
 }
@@ -72,6 +75,7 @@ void server_connection::stop() {
 araya::task<void> server_connection::run() {
 	std::uint64_t attempt = 0;
 	for (;;) {
+		log_.debug("server '{}' connecting (attempt {})", config_.name, attempt + 1);
 		std::exception_ptr error;
 		bool opened = false;
 		try {
@@ -90,6 +94,8 @@ araya::task<void> server_connection::run() {
 			} catch (...) {
 				error = std::current_exception();
 			}
+			if (!error)
+				log_.debug("server '{}' connected", config_.name);
 		}
 
 		if (!ready_sent_) {
@@ -100,10 +106,14 @@ araya::task<void> server_connection::run() {
 			fail_pending();
 
 		if (!opened) {
-			if (stopped_ || !config_.reconnect.enabled)
+			if (stopped_ || !config_.reconnect.enabled) {
+				log_.debug("server '{}' connect failed", config_.name);
 				break;
-			if (++attempt >= config_.reconnect.max_attempts)
+			}
+			if (++attempt >= config_.reconnect.max_attempts) {
+				log_.warn("server '{}' reconnect attempts exhausted", config_.name);
 				break;
+			}
 			co_await delay(backoff_ms(config_.reconnect, attempt));
 			continue;
 		}
@@ -126,16 +136,19 @@ araya::task<void> server_connection::run() {
 
 		if (stopped_)
 			break;
+		log_.warn("server '{}' session lost", config_.name);
 		fail_pending();
 		if (channel_)
 			channel_->close();
 
 		if (!config_.reconnect.enabled) {
+			log_.debug("server '{}' session closed (reconnect disabled)", config_.name);
 			stopped_ = true;
 			break;
 		}
 		if (error) {
 			if (++attempt >= config_.reconnect.max_attempts) {
+				log_.warn("server '{}' reconnect attempts exhausted", config_.name);
 				stopped_ = true;
 				break;
 			}

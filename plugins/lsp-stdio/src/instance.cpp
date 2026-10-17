@@ -47,16 +47,22 @@ boost::json::object client_capabilities() {
 
 } // namespace
 
-lsp_instance::lsp_instance(boost::asio::any_io_executor executor, server_config config, host_workspace workspace)
+lsp_instance::lsp_instance(
+	boost::asio::any_io_executor executor,
+	server_config config,
+	host_workspace workspace,
+	araya::logger::log_handle log)
 	: executor_(std::move(executor))
 	, config_(std::move(config))
 	, workspace_(std::move(workspace))
-	, ready_(executor_, 1) {
+	, ready_(executor_, 1)
+	, log_(std::move(log)) {
 	config_.cwd = workspace_.canonical_path;
-	connection_ = std::make_shared<lsp_connection>(executor_, config_);
+	connection_ = std::make_shared<lsp_connection>(executor_, config_, log_);
 }
 
 void lsp_instance::start() {
+	log_.debug("server '{}' starting", config_.id);
 	boost::asio::co_spawn(executor_, [self = shared_from_this()] { return self->initialize(); }, boost::asio::detached);
 }
 
@@ -89,6 +95,8 @@ araya::task<void> lsp_instance::initialize() {
 	}
 	ready_done_ = true;
 	ready_error_ = error;
+	if (error)
+		log_.warn("server '{}' initialize failed", config_.id);
 	ready_.try_send(boost::system::error_code{}, error);
 }
 

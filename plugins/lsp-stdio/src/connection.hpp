@@ -1,5 +1,6 @@
 #pragma once
 
+#include "araya/logger/log.hpp"
 #include "araya/task.hpp"
 #include "config.hpp"
 
@@ -29,7 +30,7 @@ namespace araya::lsp_stdio {
 // fails every pending request and marks the connection unusable.
 class lsp_connection : public std::enable_shared_from_this<lsp_connection> {
 public:
-	lsp_connection(boost::asio::any_io_executor executor, server_config config);
+	lsp_connection(boost::asio::any_io_executor executor, server_config config, araya::logger::log_handle log = {});
 
 	// Launches the process and starts reading. Throws on spawn failure.
 	void start();
@@ -82,6 +83,7 @@ private:
 	std::string read_buffer_;
 	std::map<std::int64_t, std::shared_ptr<response_channel>> pending_;
 	std::int64_t next_id_ = 1;
+	araya::logger::log_handle log_;
 };
 
 } // namespace araya::lsp_stdio

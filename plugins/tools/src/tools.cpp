@@ -157,9 +157,15 @@ tools_service::invoke(std::string_view name, tool_context context, std::optional
 			break;
 		}
 	}
-	if (!found)
+	if (!found) {
+		log_.debug("no visible tool named '{}' (scope '{}')", name, scope.value_or(std::string{}));
 		co_return std::nullopt;
+	}
 	if (auto reason = guard_reason(context, scope)) {
+		araya::logger::log_context log_context;
+		log_context.session = context.session;
+		log_context.call = context.call_id;
+		log_.debug(log_context, "guard denied tool '{}': {}", name, *reason);
 		tool_result denied = error_result(*reason);
 		notify_result(context, denied, scope);
 		co_return denied;

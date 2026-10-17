@@ -5,6 +5,8 @@
 #include "jsonrpc.hpp"
 #include "naming.hpp"
 
+#include "araya/logger/log.hpp"
+#include "araya/logger/logger.hpp"
 #include "araya/task.hpp"
 
 #include <boost/asio/co_spawn.hpp>
@@ -16,10 +18,15 @@
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
 
+#include <quill/Frontend.h>
+#include <quill/Logger.h>
+#include <quill/sinks/FileSink.h>
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -284,4 +291,36 @@ TEST_CASE("mcp client re-discovers when the server tool list changes") {
 	REQUIRE(generations.size() >= 2);
 	REQUIRE(generations.back().size() == 2);
 	std::filesystem::remove(fixture);
+}
+
+TEST_CASE("mcp reconnection exhaustion is logged at warn") {
+	auto const path = std::filesystem::temp_directory_path() / ("araya-mcp-log-" + std::to_string(::getpid()) + ".log");
+	std::filesystem::remove(path);
+	auto* backend = quill::Frontend::create_or_get_logger("mcp-log", std::make_shared<quill::FileSink>(path));
+	auto service = std::make_shared<araya::logger::logger_service>("mcp-log");
+	araya::logger::log_handle log(service, "mcp-log");
+
+	boost::asio::io_context io;
+	server_config config;
+	config.name = "missing";
+	config.command = {"/nonexistent/mcp-server-binary"};
+	config.reconnect.enabled = true;
+	config.reconnect.max_attempts = 1;
+	auto connection = std::make_shared<server_connection>(io.get_executor(), config, connection_observer{}, log);
+	run_coro(io, [&]() -> araya::task<void> {
+		connection->start();
+		(void)co_await connection->ready();
+		connection->stop();
+	});
+
+	backend->flush_log();
+	std::ifstream in{path};
+	std::ostringstream ss;
+	ss << in.rdbuf();
+	auto const content = ss.str();
+	CHECK(content.find("server 'missing'") != std::string::npos);
+	CHECK(content.find("reconnect attempts exhausted") != std::string::npos);
+
+	quill::Frontend::remove_logger_blocking(backend);
+	std::filesystem::remove(path);
 }

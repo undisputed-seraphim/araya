@@ -1,6 +1,7 @@
 #pragma once
 
 #include "araya/effects.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/plugin.hpp"
 #include "araya/plugin_context.hpp"
 #include "araya/service.hpp"
@@ -98,6 +99,9 @@ struct tool_restriction {
 
 class tools_service {
 public:
+	explicit tools_service(araya::logger::log_handle log = {})
+		: log_(std::move(log)) {}
+
 	// Registers a tool; a duplicate name in the same scope throws. A
 	// non-empty `scope` shadows a same-named global for that scope only.
 	// The registration is owned by `caller`.
@@ -187,6 +191,7 @@ private:
 	std::vector<guard_entry> guards_;
 	std::uint64_t next_result_id_ = 1;
 	std::vector<result_entry> result_listeners_;
+	araya::logger::log_handle log_;
 };
 
 inline constexpr araya::service_key<tools_service> tools_key{"tools", 1};

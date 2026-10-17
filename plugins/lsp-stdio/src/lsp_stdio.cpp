@@ -1,7 +1,7 @@
 #include "araya/lsp-stdio/lsp_stdio.hpp"
 
 #include "araya/config.hpp"
-#include "araya/logger/logger.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/lsp/lsp.hpp"
 #include "araya/plugin_context.hpp"
 
@@ -38,13 +38,7 @@ std::unique_ptr<araya::plugin> make_lsp_stdio(araya::plugin_config const& config
 			auto parsed = parse_config(config);
 
 			// An optional logger for graceful-degradation warnings.
-			std::shared_ptr<araya::logger::logger_service> logger;
-			if (auto lease = ctx.find<araya::logger::logger_service>(araya::logger::logger_key))
-				logger = lease->shared();
-			auto warn = [logger](std::string const& message) {
-				if (logger)
-					logger->named("lsp-stdio").warn("{}", message);
-			};
+			auto log = araya::logger::from_context(ctx, "lsp-stdio");
 
 			// Resolve each command now and skip one that is not installed, so a
 			// missing toolchain degrades gracefully instead of failing the whole
@@ -53,10 +47,10 @@ std::unique_ptr<araya::plugin> make_lsp_stdio(araya::plugin_config const& config
 			providers.reserve(parsed.servers.size());
 			for (auto& server : parsed.servers) {
 				if (!find_executable(server.command)) {
-					warn("lsp-stdio: skipping '" + server.id + "': '" + server.command + "' is not installed");
+					log.warn("skipping '{}': '{}' is not installed", server.id, server.command);
 					continue;
 				}
-				providers.push_back(std::make_shared<stdio_lsp_provider>(ctx.executor(), std::move(server)));
+				providers.push_back(std::make_shared<stdio_lsp_provider>(ctx.executor(), std::move(server), log));
 			}
 
 			// The disposal effect is registered before the provider routes so,

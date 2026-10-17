@@ -1,5 +1,6 @@
 #pragma once
 
+#include "araya/logger/log.hpp"
 #include "araya/task.hpp"
 #include "config.hpp"
 #include "transport.hpp"
@@ -44,7 +45,11 @@ struct connection_observer {
 // All methods run on the owning strand.
 class server_connection : public std::enable_shared_from_this<server_connection> {
 public:
-	server_connection(boost::asio::any_io_executor executor, server_config config, connection_observer observer);
+	server_connection(
+		boost::asio::any_io_executor executor,
+		server_config config,
+		connection_observer observer,
+		araya::logger::log_handle log = {});
 
 	// Spawns the supervisor. Follow with ready() to observe the first attempt.
 	void start();
@@ -98,6 +103,7 @@ private:
 	bool session_lost_ = false;
 	bool resync_queued_ = false;
 	ready_channel ready_;
+	araya::logger::log_handle log_;
 };
 
 } // namespace araya::mcp

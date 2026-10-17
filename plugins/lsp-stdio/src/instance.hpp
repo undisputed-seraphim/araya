@@ -1,5 +1,6 @@
 #pragma once
 
+#include "araya/logger/log.hpp"
 #include "araya/lsp/lsp.hpp"
 #include "araya/task.hpp"
 #include "config.hpp"
@@ -23,7 +24,11 @@ namespace araya::lsp_stdio {
 // queries, and teardown.
 class lsp_instance : public std::enable_shared_from_this<lsp_instance> {
 public:
-	lsp_instance(boost::asio::any_io_executor executor, server_config config, host_workspace workspace);
+	lsp_instance(
+		boost::asio::any_io_executor executor,
+		server_config config,
+		host_workspace workspace,
+		araya::logger::log_handle log = {});
 
 	// Starts the process and the initialize handshake. Call once, after the
 	// instance is owned by a shared_ptr.
@@ -59,6 +64,7 @@ private:
 	bool disposed_ = false;
 	bool locked_ = false;
 	std::deque<std::shared_ptr<done_channel>> waiters_;
+	araya::logger::log_handle log_;
 };
 
 } // namespace araya::lsp_stdio

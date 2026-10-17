@@ -65,12 +65,16 @@ std::vector<std::string> build_child_env(std::vector<std::pair<std::string, std:
 
 } // namespace
 
-lsp_connection::lsp_connection(boost::asio::any_io_executor executor, server_config config)
+lsp_connection::lsp_connection(
+	boost::asio::any_io_executor executor,
+	server_config config,
+	araya::logger::log_handle log)
 	: executor_(std::move(executor))
 	, config_(std::move(config))
 	, out_(executor_)
 	, in_(executor_)
-	, err_(executor_) {}
+	, err_(executor_)
+	, log_(std::move(log)) {}
 
 void lsp_connection::start() {
 	std::string const program = resolve_program(config_.command);
@@ -116,6 +120,7 @@ araya::task<void> lsp_connection::drain_writes() {
 		if (item.done)
 			item.done->try_send(ec);
 		if (ec) {
+			log_.warn("server '{}' write failed", config_.id);
 			fail("lsp-stdio: write to the language server failed");
 			break;
 		}
@@ -147,14 +152,17 @@ araya::task<void> lsp_connection::reader() {
 		auto const read = co_await out_.async_read_some(
 			boost::asio::buffer(chunk), boost::asio::redirect_error(boost::asio::use_awaitable, ec));
 		if (ec || read == 0) {
-			if (!closed_)
+			if (!closed_) {
+				log_.warn("server '{}' exited", config_.id);
 				fail("language server exited" + (stderr_tail_.empty() ? std::string{} : "; stderr: " + stderr_tail_));
+			}
 			co_return;
 		}
 		std::vector<boost::json::value> messages;
 		try {
 			messages = decoder.push(std::string_view(chunk.data(), read));
 		} catch (std::exception const& e) {
+			log_.warn("server '{}' sent a malformed message", config_.id);
 			fail(e.what());
 			close();
 			co_return;
@@ -289,10 +297,12 @@ lsp_connection::await_response(std::shared_ptr<response_channel> channel, std::s
 		stop, [executor = executor_, channel] { boost::asio::post(executor, [channel] { channel->close(); }); });
 	auto outcome =
 		co_await (channel->async_receive(boost::asio::use_awaitable) || timer.async_wait(boost::asio::use_awaitable));
-	if (outcome.index() == 1)
+	if (outcome.index() == 1) {
+		log_.warn("server '{}' request timed out after {}ms", config_.id, config_.request_timeout_ms);
 		throw std::runtime_error(
 			"lsp-stdio: request to '" + config_.id + "' timed out after " + std::to_string(config_.request_timeout_ms) +
 			" ms");
+	}
 	rpc_response response = std::get<0>(std::move(outcome));
 	if (response.is_error)
 		throw std::runtime_error(response.error);

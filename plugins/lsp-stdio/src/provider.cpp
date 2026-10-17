@@ -10,9 +10,13 @@
 
 namespace araya::lsp_stdio {
 
-stdio_lsp_provider::stdio_lsp_provider(boost::asio::any_io_executor executor, server_config config)
+stdio_lsp_provider::stdio_lsp_provider(
+	boost::asio::any_io_executor executor,
+	server_config config,
+	araya::logger::log_handle log)
 	: executor_(std::move(executor))
-	, config_(std::move(config)) {
+	, config_(std::move(config))
+	, log_(std::move(log)) {
 	for (auto const& [ext, language] : config_.extension_to_language)
 		mapping_.emplace(ext, language);
 }
@@ -22,9 +26,10 @@ stdio_lsp_provider::instance_for(std::string const& key, host_workspace const& w
 	auto const it = instances_.find(key);
 	if (it != instances_.end())
 		return it->second;
-	auto instance = std::make_shared<lsp_instance>(executor_, config_, workspace);
+	auto instance = std::make_shared<lsp_instance>(executor_, config_, workspace, log_);
 	instance->start();
 	instances_.emplace(key, instance);
+	log_.debug("server '{}' instance created for '{}'", config_.id, key);
 	return instance;
 }
 
@@ -54,6 +59,7 @@ stdio_lsp_provider::query(araya::lsp::lsp_provider_query const& request, std::st
 		retry = true;
 	}
 	if (retry) {
+		log_.debug("server '{}' retrying on a fresh instance after a dead transport", config_.id);
 		instance->close();
 		instances_.erase(key);
 		auto fresh = instance_for(key, workspace);
@@ -64,6 +70,7 @@ stdio_lsp_provider::query(araya::lsp::lsp_provider_query const& request, std::st
 
 void stdio_lsp_provider::dispose() {
 	disposed_ = true;
+	log_.debug("server '{}' provider disposed", config_.id);
 	for (auto& [key, instance] : instances_)
 		instance->close();
 	instances_.clear();

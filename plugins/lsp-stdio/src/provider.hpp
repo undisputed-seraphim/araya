@@ -1,5 +1,6 @@
 #pragma once
 
+#include "araya/logger/log.hpp"
 #include "araya/lsp/lsp.hpp"
 #include "araya/task.hpp"
 #include "config.hpp"
@@ -19,7 +20,7 @@ namespace araya::lsp_stdio {
 // and runs transient-open navigation queries through it.
 class stdio_lsp_provider : public araya::lsp::lsp_provider, public std::enable_shared_from_this<stdio_lsp_provider> {
 public:
-	stdio_lsp_provider(boost::asio::any_io_executor executor, server_config config);
+	stdio_lsp_provider(boost::asio::any_io_executor executor, server_config config, araya::logger::log_handle log = {});
 
 	std::string_view id() const override { return config_.id; }
 	std::map<std::string, std::string> const& extension_to_language() const override { return mapping_; }
@@ -38,6 +39,7 @@ private:
 	std::map<std::string, std::string> mapping_;
 	std::map<std::string, std::shared_ptr<lsp_instance>> instances_;
 	bool disposed_ = false;
+	araya::logger::log_handle log_;
 };
 
 } // namespace araya::lsp_stdio

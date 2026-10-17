@@ -13,7 +13,7 @@ araya_add_plugin(mcp-client
         src/mcp_client.cpp
         src/naming.cpp
         src/stdio_transport.cpp
-    DEPS araya::araya araya::tools araya::system-prompt araya::llm
+    DEPS araya::araya araya::tools araya::system-prompt araya::llm araya::logger
          OpenSSL::Crypto ${ARAYA_BOOST_PROCESS_LIBS}
     TESTS tests/mcp_test.cpp tests/mcp_http_test.cpp
     TEST_INCLUDES src

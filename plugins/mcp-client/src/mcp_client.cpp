@@ -1,6 +1,7 @@
 #include "araya/mcp-client/mcp.hpp"
 
 #include "araya/config.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/plugin_context.hpp"
 #include "araya/system-prompt/system_prompt.hpp"
 #include "araya/tools/tools.hpp"
@@ -197,6 +198,7 @@ std::unique_ptr<araya::plugin> make_mcp_client(plugin_config const& config) {
 		araya::task<void> apply(plugin_context& ctx) override {
 			auto tools = ctx.require<tools_service>(tools_key).shared();
 			auto prompts = ctx.require<system_prompt_service>(system_prompt_key).shared();
+			auto log = araya::logger::from_context(ctx, "mcp-client");
 			auto parsed = parse_config(config);
 			auto service = std::make_shared<mcp_service_impl>();
 			ctx.provide(mcp_key, std::shared_ptr<mcp_service>{service});
@@ -214,7 +216,8 @@ std::unique_ptr<araya::plugin> make_mcp_client(plugin_config const& config) {
 				observer.on_tools = [state, name](std::vector<mcp_tool> const& discovered) {
 					apply_tools(*state, name, discovered);
 				};
-				state->connection = std::make_shared<server_connection>(ctx.executor(), server, std::move(observer));
+				state->connection =
+					std::make_shared<server_connection>(ctx.executor(), server, std::move(observer), log);
 				service->add(name, state->connection);
 				apply_section(*state, name);
 
@@ -228,8 +231,13 @@ std::unique_ptr<araya::plugin> make_mcp_client(plugin_config const& config) {
 
 				state->connection->start();
 				std::exception_ptr const outcome = co_await state->connection->ready();
-				if (outcome && server.fail_on_startup_error)
-					std::rethrow_exception(outcome);
+				if (outcome) {
+					if (server.fail_on_startup_error)
+						std::rethrow_exception(outcome);
+					log.warn("server '{}' failed to start; continuing without it", name);
+				} else {
+					log.debug("server '{}' ready", name);
+				}
 			}
 			co_return;
 		}
@@ -242,6 +250,7 @@ std::unique_ptr<araya::plugin> make_mcp_client(plugin_config const& config) {
 static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"tools", 1}, true, {}},
 	{araya::service_id{"system-prompt", 1}, true, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static const araya::provision_spec g_provs[]{{araya::service_id{"mcp", 1}}};
 static const araya::plugin_descriptor g_descriptor{"mcp-client", g_deps, g_provs, &make_mcp_client, g_config};
