@@ -247,6 +247,38 @@ The SQLite backend is a plugin knob block too: when mounted explicitly through
 (`{"session-query-sqlite": {"path": "..."}}`). Mount only one provider at a
 time.
 
+## Logging
+
+Diagnostic logging is separate from the durable session log. Records go to a
+rotating file (`log.file`, 5 MiB per file, three backups) and, only on a TTY,
+a console mirror; the TUI never writes logs over its canvas. `--log-file` /
+`ARAYA_LOG_FILE` select the path, `--log-level` / `ARAYA_LOG_LEVEL` /
+`/log level` the threshold. The default level is `info`.
+
+| Level | Use |
+|---|---|
+| `error` | Unrecoverable: a component's `apply` threw, an exception escaped a drive, or durability (write/fsync) was lost. The operation cannot continue. |
+| `warn` | Recoverable: a retry, fallback, or degradation succeeded; a provider/tool call failed and the error was returned; a reconnect/restart is under way; a policy denied an action; a corrupt tail was repaired. |
+| `info` | Notable lifecycle and state changes: explicit component load/unload, goal transitions, session export, cancellation. |
+| `debug` | Flow and decisions: turns/steps, tool start/finish, request start/status, retry decisions, MCP/LSP lifecycle, stream scheduling. |
+
+One logger name is used per component id (`agent-loop`, `llm-compat`,
+`mcp-client`, `shell`, …). Request-scoped records carry a compact context
+prefix (`[ses=… t=… s=… call=…]`) instead of creating per-session loggers.
+A failure is logged once, at the boundary that classifies it; low-level
+transport detail stays at debug.
+
+**Redaction.** Records may contain ids, names, statuses, error codes, counts,
+durations, sizes, safe endpoints (`safe_url` strips userinfo/query/fragment),
+exit codes, and paths. They never contain prompt/message content, tool
+arguments/results, image bytes, shell argv or child stderr, MCP headers/env,
+LSP document text, web search queries, API keys, or raw provider bodies.
+
+Machine-readable JSON output is not implemented yet; the place to add it is
+marked with `// TODO(json sink)` in `apps/araya/src/log_setup.cpp`. Note that
+quill's JSON sink does not carry custom tags, so context would either remain in
+the message prefix or need a custom sink.
+
 ## Runtime commands
 
 | Command | Effect |
