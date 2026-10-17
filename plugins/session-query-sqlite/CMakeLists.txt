@@ -3,6 +3,6 @@
 # is the vendored amalgamation (thirdparty/sqlite.cmake) with FTS5 enabled.
 araya_add_plugin(session-query-sqlite
     SOURCES src/sqlite.cpp
-    DEPS araya::session araya::persistence araya::session-query araya::sqlite3
+    DEPS araya::session araya::persistence araya::session-query araya::sqlite3 araya::logger
     TEST tests/sqlite_test.cpp
 )

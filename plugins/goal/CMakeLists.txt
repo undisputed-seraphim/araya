@@ -2,7 +2,7 @@
 # projection. araya::session supplies the store/projection.
 araya_add_plugin(goal
     SOURCES src/goal.cpp src/plugin.cpp
-    DEPS araya::session
+    DEPS araya::session araya::logger
     TEST tests/goal_test.cpp
     TEST_DEPS araya::llm-bridge
 )

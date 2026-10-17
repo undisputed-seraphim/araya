@@ -1,5 +1,6 @@
 #pragma once
 
+#include "araya/logger/log.hpp"
 #include "araya/plugin.hpp"
 #include "araya/service.hpp"
 #include "araya/session/session_types.hpp"
@@ -250,7 +251,8 @@ inline constexpr araya::service_key<session_query_service> session_query_key{"se
 // the two ranked search entry points.
 std::shared_ptr<session_query_service> make_in_memory_engine(
 	std::shared_ptr<session::session_store> store,
-	std::shared_ptr<araya::persistence::session_persistence> persistence);
+	std::shared_ptr<araya::persistence::session_persistence> persistence,
+	araya::logger::log_handle log = {});
 
 // The plugin descriptor: apply() resolves `sessions` (required) and
 // `session.persistence` (optional) and provides `session-query`.

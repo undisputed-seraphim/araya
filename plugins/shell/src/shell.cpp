@@ -574,8 +574,10 @@ araya::task<tool_result> handle_bash(
 	// one-shot approved wider-mode retry here (the model's sandbox_permissions
 	// + justification resolved before re-running confined). Deferred.
 	if (confinement && confinement->active && result.exit_code != 0 &&
-		araya::sandbox::matches_denial(result.exit_code, result.stderr_text, confinement->denial_signature))
+		araya::sandbox::matches_denial(result.exit_code, result.stderr_text, confinement->denial_signature)) {
+		log.warn(log_context, "sandbox denied the command");
 		markers.push_back(araya::sandbox::denial_marker(confinement->mode));
+	}
 	if (result.stdout_dropped > 0 || result.stderr_dropped > 0)
 		markers.push_back(truncation_notice(result.stdout_dropped + result.stderr_dropped));
 	if (!result.stdout_spill.empty())

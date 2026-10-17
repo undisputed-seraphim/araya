@@ -368,6 +368,7 @@ public:
 	std::shared_ptr<session_store> store;
 	std::shared_ptr<session_persistence> persistence;
 	unsigned read_window_max = 50;
+	araya::logger::log_handle log;
 
 	std::vector<session_record> list_sessions() const override {
 		std::map<std::string, session_record> by_id;
@@ -379,6 +380,7 @@ public:
 						by_id[stored->header.id.value] = session_record{stored->header, false, true};
 				} catch (...) {
 					// An unreadable stored session is skipped, not fatal.
+					log.warn("cannot read stored session '{}'", id.value);
 				}
 			}
 		}
@@ -412,6 +414,7 @@ public:
 					try {
 						persisted = persistence->read(id).has_value();
 					} catch (...) {
+						log.warn("cannot read stored session '{}'", id.value);
 					}
 				}
 				return session_source{session->header(), session->log(), true, persisted};
@@ -422,6 +425,7 @@ public:
 				if (auto stored = persistence->read(id))
 					return session_source{stored->header, stored->events, false, true};
 			} catch (...) {
+				log.warn("cannot read stored session '{}'", id.value);
 			}
 		}
 		return std::nullopt;
@@ -684,6 +688,7 @@ struct session_query_plugin : araya::plugin {
 		engine->store = ctx.require<session_store>(sessions_key).shared();
 		if (auto lease = ctx.find<session_persistence>(persistence_key))
 			engine->persistence = lease->shared();
+		engine->log = araya::logger::from_context(ctx, "session-query");
 		ctx.provide(session_query_key, std::shared_ptr<session_query_service>(std::move(engine)));
 		co_return;
 	}
@@ -696,17 +701,21 @@ std::unique_ptr<araya::plugin> make_session_query(araya::plugin_config const&) {
 static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
 	{araya::service_id{"session.persistence", 1}, false, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static const araya::provision_spec g_provs[]{{araya::service_id{"session-query", 1}}};
 static const araya::plugin_descriptor g_descriptor{"session-query", g_deps, g_provs, &make_session_query};
 
 } // namespace
 
-std::shared_ptr<session_query_service>
-make_in_memory_engine(std::shared_ptr<session_store> store, std::shared_ptr<session_persistence> persistence) {
+std::shared_ptr<session_query_service> make_in_memory_engine(
+	std::shared_ptr<session_store> store,
+	std::shared_ptr<session_persistence> persistence,
+	araya::logger::log_handle log) {
 	auto engine = std::make_shared<in_memory_engine>();
 	engine->store = std::move(store);
 	engine->persistence = std::move(persistence);
+	engine->log = std::move(log);
 	return engine;
 }
 

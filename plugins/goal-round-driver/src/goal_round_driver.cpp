@@ -4,7 +4,9 @@
 #include "araya/agent-loop/events.hpp"
 #include "araya/agent-loop/inbox.hpp"
 #include "araya/goal/goal.hpp"
+
 #include "araya/llm/bridge.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/session/events.hpp"
 #include "araya/util/json.hpp"
 
@@ -85,6 +87,7 @@ struct driver : std::enable_shared_from_this<driver> {
 	boost::asio::any_io_executor executor;
 	std::shared_ptr<goal_service> goals;
 	std::shared_ptr<agent_service> agent;
+	araya::logger::log_handle log;
 	std::map<std::string, std::shared_ptr<session_state>> states;
 	bool stopping = false;
 
@@ -135,7 +138,10 @@ struct driver : std::enable_shared_from_this<driver> {
 		}
 		if (!goal || goal->phase != goal_phase::active || goal->activation != goal_activation::armed)
 			co_return;
+		araya::logger::log_context context;
+		context.session = session;
 		if (goal->rounds_started >= goal->max_goal_rounds) {
+			log.debug(context, "goal round budget exhausted; blocking");
 			swallow([&] {
 				(void)goals->block(
 					session_id{session},
@@ -147,6 +153,7 @@ struct driver : std::enable_shared_from_this<driver> {
 			co_return;
 		}
 		auto const round = goal->rounds_started + 1;
+		log.debug(context, "goal round {} scheduled", round);
 		auto message = user_message_data(
 			"goal-round-" + std::to_string(round),
 			render_goal_round_prompt(*goal, round),
@@ -154,6 +161,7 @@ struct driver : std::enable_shared_from_this<driver> {
 		try {
 			co_await agent->followup(session_id{session}, std::move(message), {});
 		} catch (...) {
+			log.warn(context, "failed to schedule goal round; disarming");
 			swallow([&] { (void)goals->disarm(session_id{session}); });
 		}
 	}
@@ -168,6 +176,7 @@ struct goal_round_driver_plugin : araya::plugin {
 		d->executor = ctx.executor();
 		d->goals = std::move(goals);
 		d->agent = std::move(agent);
+		d->log = araya::logger::from_context(ctx, "goal-round-driver");
 
 		// A goal mutation (create/resume/complete/block/pause/clear) may arm,
 		// change, or end auto-continuation: re-evaluate.
@@ -276,6 +285,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
 	{araya::service_id{"goals", 1}, true, {}},
 	{araya::service_id{"agent", 1}, true, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static constexpr std::span<araya::provision_spec const> g_provs{};
 static const araya::plugin_descriptor g_descriptor{"goal-round-driver", g_deps, g_provs, &make_goal_round_driver};

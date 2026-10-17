@@ -2,6 +2,7 @@
 
 #include "araya/attachment/attachment.hpp"
 #include "araya/config.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/persistence/persistence.hpp"
 #include "araya/session-query/query.hpp"
 #include "araya/session/store.hpp"
@@ -271,12 +272,14 @@ public:
 		std::shared_ptr<session_persistence> persistence,
 		std::shared_ptr<attachment_service> attachments,
 		std::shared_ptr<session_query_service> query,
-		int level)
+		int level,
+		araya::logger::log_handle log = {})
 		: store_(std::move(store))
 		, persistence_(std::move(persistence))
 		, attachments_(std::move(attachments))
 		, query_(std::move(query))
-		, level_(level) {}
+		, level_(level)
+		, log_(std::move(log)) {}
 
 	std::string build_zip(session_id const& session, bool include_descendants) const override {
 		auto root = load(session);
@@ -295,8 +298,10 @@ public:
 					if (!seen.insert(node.node.header.id.value).second)
 						continue;
 					auto stored = load(node.node.header.id);
-					if (!stored)
+					if (!stored) {
+						log_.debug("skipping unreadable descendant '{}'", node.node.header.id.value);
 						continue;
+					}
 					zip.add(
 						"subagents/" + sanitize_id(node.node.header.id.value) + "/session.v1.jsonl",
 						serialize_log(*stored));
@@ -325,6 +330,7 @@ private:
 				if (auto stored = persistence_->read(id))
 					return stored;
 			} catch (...) {
+				log_.warn("cannot read session '{}' for export", id.value);
 			}
 		}
 		return std::nullopt;
@@ -340,6 +346,7 @@ private:
 	std::shared_ptr<attachment_service> attachments_;
 	std::shared_ptr<session_query_service> query_;
 	int level_;
+	araya::logger::log_handle log_;
 };
 
 struct session_log_export_plugin : araya::plugin {
@@ -364,7 +371,12 @@ struct session_log_export_plugin : araya::plugin {
 			query = lease->shared();
 
 		auto engine = std::make_shared<export_engine>(
-			std::move(store), std::move(persistence), std::move(attachments), std::move(query), level_);
+			std::move(store),
+			std::move(persistence),
+			std::move(attachments),
+			std::move(query),
+			level_,
+			araya::logger::from_context(ctx, "session-log-export"));
 		ctx.provide(session_export_key, std::shared_ptr<session_export_service>(std::move(engine)));
 		co_return;
 	}
@@ -382,6 +394,7 @@ static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"session.persistence", 1}, false, {}},
 	{araya::service_id{"attachments", 1}, false, {}},
 	{araya::service_id{"session-query", 1}, false, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static const araya::provision_spec g_provs[]{{araya::service_id{"session-export", 1}}};
 static const araya::plugin_descriptor

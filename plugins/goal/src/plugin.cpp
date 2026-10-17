@@ -1,6 +1,7 @@
 #include "araya/goal/goal.hpp"
 
 #include "araya/config.hpp"
+#include "araya/logger/log.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -35,7 +36,8 @@ struct goal_plugin : araya::plugin {
 			ctx.activation_ptr() ? ctx.activation_ptr()->bus : nullptr,
 			std::move(store),
 			std::move(projection),
-			default_rounds);
+			default_rounds,
+			araya::logger::from_context(ctx, "goal"));
 		ctx.provide(goals_key, std::move(service));
 		co_return;
 	}
@@ -50,6 +52,7 @@ std::unique_ptr<araya::plugin> make_goal(araya::plugin_config const& config) {
 
 static const araya::dependency_spec g_goal_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static const araya::provision_spec g_goal_provs[]{{araya::service_id{"goals", 1}}};
 static const araya::plugin_descriptor g_descriptor{"goal", g_goal_deps, g_goal_provs, &make_goal, g_config};

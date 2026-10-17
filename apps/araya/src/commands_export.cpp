@@ -1,5 +1,6 @@
 #include "commands.hpp"
 
+#include "araya/logger/log.hpp"
 #include "araya/session-log-export/export.hpp"
 #include "araya/session/store.hpp"
 
@@ -52,6 +53,9 @@ araya::task<void> cmd_export(app_context& ctx, line_sink const& out, std::string
 			out("export: write failed for '" + path + "'");
 			co_return;
 		}
+		auto root = ctx.rt->root_context();
+		araya::logger::from_context(root, "session-log-export")
+			.info("exported session '{}' to '{}' ({} bytes)", ctx.current->value, path, bytes.size());
 		out("exported " + ctx.current->value + " to " + path + " (" + std::to_string(bytes.size()) + " bytes)");
 	} catch (std::exception const& error) {
 		out(std::string("export failed: ") + error.what());

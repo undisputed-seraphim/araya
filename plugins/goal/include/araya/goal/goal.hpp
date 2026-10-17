@@ -1,6 +1,7 @@
 #pragma once
 
 #include "araya/events.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/plugin.hpp"
 #include "araya/service.hpp"
 #include "araya/session/projection.hpp"
@@ -146,7 +147,8 @@ public:
 		std::shared_ptr<araya::event_bus> bus,
 		std::shared_ptr<araya::session::session_store> store,
 		araya::session::projection_state<goal_projection_state> projection,
-		std::uint64_t default_max_goal_rounds = 256);
+		std::uint64_t default_max_goal_rounds = 256,
+		araya::logger::log_handle log = {});
 
 	// Create and arm a goal. A completed goal may be replaced; any other
 	// current phase must be cleared or resumed instead.
@@ -213,6 +215,7 @@ private:
 	araya::session::projection_state<goal_projection_state> projection_;
 	std::uint64_t default_max_goal_rounds_;
 	std::map<araya::session::session_id, goal_activation> activations_;
+	araya::logger::log_handle log_;
 };
 
 inline constexpr araya::service_key<goal_service> goals_key{"goals", 1};

@@ -1,5 +1,7 @@
 #include "araya/fs-observation-policy/fs_observation_policy.hpp"
 
+#include "araya/logger/log.hpp"
+
 #include "araya/fs/events.hpp"
 #include "araya/plugin_context.hpp"
 
@@ -90,6 +92,7 @@ private:
 struct fs_observation_policy_plugin : araya::plugin {
 	araya::task<void> apply(araya::plugin_context& ctx) override {
 		auto gate = std::make_shared<observation_gate>();
+		auto log = araya::logger::from_context(ctx, "fs-observation-policy");
 		// Each intent waterfall occupies the single decision slot: the
 		// listener returns its decision and does not chain.
 		ctx.on(
@@ -99,8 +102,11 @@ struct fs_observation_policy_plugin : araya::plugin {
 			});
 		ctx.on(
 			araya::fs::edit_intent_key,
-			[gate](fs_edit_intent const& intent, araya::waterfall_continuation<fs_edit_intent>) -> fs_edit_intent {
-				return gate->decide_edit(intent);
+			[gate, log](fs_edit_intent const& intent, araya::waterfall_continuation<fs_edit_intent>) -> fs_edit_intent {
+				auto decided = gate->decide_edit(intent);
+				if (!decided.error.empty())
+					log.debug("edit guard denied '{}'", intent.target.display_path);
+				return decided;
 			});
 		// fs/observed is emit-mode: synchronous, non-throwing recording.
 		ctx.on(araya::fs::observed_key, [gate](fs_observed_msg const& msg) {
@@ -114,11 +120,11 @@ std::unique_ptr<araya::plugin> make_fs_observation_policy(araya::plugin_config c
 	return std::make_unique<fs_observation_policy_plugin>();
 }
 
-static constexpr std::span<araya::dependency_spec const> g_no_deps{};
+static const araya::dependency_spec g_deps[]{{araya::service_id{"logger", 1}, false, {}}};
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
 static const araya::plugin_descriptor g_descriptor{
 	"fs-observation-policy",
-	g_no_deps,
+	g_deps,
 	g_no_provs,
 	&make_fs_observation_policy};
 

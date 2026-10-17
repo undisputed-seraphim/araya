@@ -4,6 +4,6 @@ find_package(ZLIB REQUIRED)
 
 araya_add_plugin(session-log-export
     SOURCES src/export.cpp
-    DEPS araya::session araya::persistence araya::attachment araya::session-query ZLIB::ZLIB
+    DEPS araya::session araya::persistence araya::attachment araya::session-query araya::logger ZLIB::ZLIB
     TEST tests/export_test.cpp
 )

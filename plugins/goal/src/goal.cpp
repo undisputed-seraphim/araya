@@ -355,11 +355,13 @@ goal_service::goal_service(
 	std::shared_ptr<araya::event_bus> bus,
 	std::shared_ptr<araya::session::session_store> store,
 	araya::session::projection_state<goal_projection_state> projection,
-	std::uint64_t default_max_goal_rounds)
+	std::uint64_t default_max_goal_rounds,
+	araya::logger::log_handle log)
 	: bus_(std::move(bus))
 	, store_(std::move(store))
 	, projection_(std::move(projection))
-	, default_max_goal_rounds_(default_max_goal_rounds) {}
+	, default_max_goal_rounds_(default_max_goal_rounds)
+	, log_(std::move(log)) {}
 
 goal_view goal_service::ensure_session(araya::session::session_id const& session) const {
 	if (!store_->get(session))
@@ -444,6 +446,19 @@ void goal_service::commit_change(
 		message.goal = view_of(state, activation);
 	} else if (state.last_ref) {
 		message.ref = *state.last_ref;
+	}
+	araya::logger::log_context context;
+	context.session = session.value;
+	if (message.goal) {
+		log_.info(
+			context,
+			"goal {} (id={}, phase={}, revision={})",
+			message.operation,
+			message.ref.id,
+			araya::goal::goal_phase_name(message.goal->phase),
+			message.ref.revision);
+	} else {
+		log_.info(context, "goal {} (id={}, revision={})", message.operation, message.ref.id, message.ref.revision);
 	}
 	if (bus_)
 		bus_->dispatch(goal_changed_key, std::move(message));

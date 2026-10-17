@@ -1,6 +1,7 @@
 #include "araya/session-query-sqlite/sqlite.hpp"
 
 #include "araya/config.hpp"
+#include "araya/logger/log.hpp"
 #include "araya/persistence/persistence.hpp"
 #include "araya/session-query/query.hpp"
 #include "araya/session/store.hpp"
@@ -345,11 +346,13 @@ public:
 		std::shared_ptr<session_store> store,
 		std::shared_ptr<session_persistence> persistence,
 		engine_config config,
-		std::shared_ptr<session_query_service> reads)
+		std::shared_ptr<session_query_service> reads,
+		araya::logger::log_handle log = {})
 		: reads_(std::move(reads))
 		, store_(std::move(store))
 		, persistence_(std::move(persistence))
-		, config_(std::move(config)) {}
+		, config_(std::move(config))
+		, log_(std::move(log)) {}
 
 	~sqlite_engine() override {
 		if (db_)
@@ -575,6 +578,7 @@ private:
 			if (db)
 				sqlite3_close(db);
 			opened_ = false;
+			log_.warn("cannot open session index '{}': {}", config_.path, message);
 			fail("cannot open session index '" + config_.path + "': " + message);
 		}
 		db_ = db;
@@ -595,13 +599,17 @@ private:
 			if (query.step())
 				application_id = query.column_int(0);
 		}
-		if (application_id != 0 && application_id != k_application_id)
+		if (application_id != 0 && application_id != k_application_id) {
+			log_.warn("session index '{}' belongs to another application", config_.path);
 			fail("session index '" + config_.path + "' belongs to another application");
+		}
 		if (application_id == 0) {
 			statement query(
 				db_, "SELECT count(*) FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'");
-			if (query.step() && query.column_int(0) != 0)
+			if (query.step() && query.column_int(0) != 0) {
+				log_.warn("session index '{}' is a non-empty unknown database", config_.path);
 				fail("session index '" + config_.path + "' is a non-empty unknown database");
+			}
 		}
 
 		exec_sql(
@@ -658,6 +666,7 @@ private:
 					try {
 						persisted = persistence_->revision(id).has_value();
 					} catch (...) {
+						log_.debug("cannot stat session '{}'", id.value);
 					}
 				}
 				desired[id.value] = wanted_row{live_revision(*session), true, persisted};
@@ -733,6 +742,7 @@ private:
 				if (auto stored = persistence_->read(session_id{id}))
 					return session_source{stored->header, stored->events, false, true};
 			} catch (...) {
+				log_.warn("cannot read session '{}' for the index", id);
 			}
 		}
 		return std::nullopt;
@@ -806,6 +816,7 @@ private:
 	mutable sqlite3* db_ = nullptr;
 	mutable bool opened_ = false;
 	mutable std::uint64_t generation_ = 0;
+	araya::logger::log_handle log_;
 };
 
 struct session_query_sqlite_plugin : araya::plugin {
@@ -836,8 +847,9 @@ struct session_query_sqlite_plugin : araya::plugin {
 		std::shared_ptr<session_persistence> persistence;
 		if (auto lease = ctx.find<session_persistence>(persistence_key))
 			persistence = lease->shared();
-		auto reads = araya::session_query::make_in_memory_engine(store, persistence);
-		auto engine = std::make_shared<sqlite_engine>(store, persistence, config_, std::move(reads));
+		auto log = araya::logger::from_context(ctx, "session-query-sqlite");
+		auto reads = araya::session_query::make_in_memory_engine(store, persistence, log);
+		auto engine = std::make_shared<sqlite_engine>(store, persistence, config_, std::move(reads), log);
 		if (config_.open_at == "startup")
 			engine->warm();
 		ctx.provide(session_query_key, std::shared_ptr<session_query_service>(std::move(engine)));
@@ -855,6 +867,7 @@ std::unique_ptr<araya::plugin> make_session_query_sqlite(araya::plugin_config co
 static const araya::dependency_spec g_deps[]{
 	{araya::service_id{"sessions", 1}, true, {}},
 	{araya::service_id{"session.persistence", 1}, false, {}},
+	{araya::service_id{"logger", 1}, false, {}},
 };
 static const araya::provision_spec g_provs[]{{araya::service_id{"session-query", 1}}};
 static const araya::plugin_descriptor
