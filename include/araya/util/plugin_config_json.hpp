@@ -12,7 +12,7 @@
 #include <string_view>
 
 // The config_file-or-inline-"config" convention for plugins whose
-// configuration is a JSON document (llm-openai today, more adapters
+// configuration is a JSON document (llm-compat today, more adapters
 // later): config_file wins, then the inline config, then empty.
 namespace araya::util {
 
