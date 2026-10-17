@@ -42,6 +42,10 @@ struct app_config {
 	// `lsp: false` disables the LSP stack (which is otherwise on by default,
 	// with built-in default servers that degrade gracefully when absent).
 	bool lsp_disabled = false;
+	// Session search backend (`sessionQuery`): "memory" (default) or "sqlite".
+	std::string session_query_backend = "memory";
+	std::string session_query_path;
+	std::string session_query_open_at = "first-search";
 	// Per-component knob overrides, already stringified.
 	std::map<std::string, araya::plugin_config> components;
 	// Per-component key provenance (source label) for --print-config.

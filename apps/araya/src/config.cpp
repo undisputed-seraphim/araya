@@ -176,6 +176,23 @@ void apply_layer(
 			} else {
 				warnings.push_back({source, "'lsp' must be an object or a boolean"});
 			}
+		} else if (key == "sessionQuery") {
+			require_object(value, source, key);
+			for (auto const& [name, field] : value.as_object()) {
+				if (name == "backend" && field.is_string()) {
+					auto backend = std::string(field.as_string());
+					if (backend != "memory" && backend != "sqlite")
+						throw std::runtime_error(
+							"araya: " + source + ": sessionQuery.backend must be 'memory' or 'sqlite'");
+					cfg.session_query_backend = std::move(backend);
+				} else if (name == "path" && field.is_string()) {
+					cfg.session_query_path = expand_path(std::string(field.as_string()), cfg.state_dir);
+				} else if (name == "openAt" && field.is_string()) {
+					cfg.session_query_open_at = std::string(field.as_string());
+				} else {
+					warnings.push_back({source, "unknown sessionQuery key '" + std::string(name) + "'"});
+				}
+			}
 		} else if (key == "disabled") {
 			require_object(value, source, key);
 			for (auto const& [id, flag] : value.as_object()) {
@@ -255,6 +272,7 @@ app_config resolve_app_config(
 	cfg.sessions_dir = (fs::path(cfg.state_dir) / "sessions").string();
 	cfg.attachments_dir = (fs::path(cfg.state_dir) / "attachments").string();
 	cfg.log_file = (fs::path(cfg.state_dir) / "logs" / "araya.log").string();
+	cfg.session_query_path = (fs::path(cfg.state_dir) / "session-query.sqlite3").string();
 
 	auto const home = fs::path(xdg_config_home()) / "araya" / "config.json";
 	if (fs::exists(home))

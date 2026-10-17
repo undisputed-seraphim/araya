@@ -57,6 +57,11 @@ public:
 
 	// The ids of every session persisted under the root.
 	virtual std::vector<session::session_id> list() const = 0;
+
+	// A cheap opaque change token for one stored session, or nullopt when the
+	// backend cannot provide one or the session is unknown. Derived indexes
+	// use it to skip re-reading unchanged logs; it is not part of the format.
+	virtual std::optional<std::string> revision(session::session_id const&) const { return std::nullopt; }
 };
 
 inline constexpr araya::service_key<session_persistence> persistence_key{"session.persistence", 1};

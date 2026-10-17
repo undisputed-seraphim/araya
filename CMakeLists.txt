@@ -59,7 +59,7 @@ set(ARAYA_PLUGINS
     agent-instructions agent-loop attachment coreutil fs fs-observation-policy
     goal goal-round-driver jobs llm llm-bridge llm-mock llm-compat llm-retry logger
     lsp lsp-stdio mcp-client mcp-resources persistence sandbox sandbox-policy
-    session session-log-export session-query shell skill subagent-fork subagents system-prompt timer
+    session session-log-export session-query session-query-sqlite shell skill subagent-fork subagents system-prompt timer
     tool-ask-user tool-goal tool-jobs tool-lsp tool-read-image tool-session-query
     tool-skill tool-subagent tool-subagent-control tool-todo tool-web tool-workflow
     tools user-questions web workflow
@@ -176,6 +176,9 @@ endif()
 
 if(ARAYA_BUILD_PLUGINS)
     include(thirdparty/quill.cmake)
+    if("session-query-sqlite" IN_LIST ARAYA_PLUGINS)
+        include(thirdparty/sqlite.cmake)
+    endif()
     add_subdirectory(plugins)
 endif()
 

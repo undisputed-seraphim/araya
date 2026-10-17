@@ -293,6 +293,18 @@ public:
 		return out;
 	}
 
+	std::optional<std::string> revision(session_id const& id) const override {
+		auto path = session_file(id);
+		std::error_code ec;
+		auto const modified = std::filesystem::last_write_time(path, ec);
+		if (ec)
+			return std::nullopt;
+		auto const size = std::filesystem::file_size(path, ec);
+		if (ec)
+			return std::nullopt;
+		return std::to_string(modified.time_since_epoch().count()) + ":" + std::to_string(size);
+	}
+
 private:
 	static session_header parse_header(boost::json::object const& obj, std::filesystem::path const& path) {
 		auto version = obj.find("version");

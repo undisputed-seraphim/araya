@@ -48,6 +48,7 @@ state base, absolute paths are used verbatim.
   "llm":   { "config_file": "~/llm.json" },   // or an inline provider object
   "mcp":   { "servers": { "github": { "type": "local", "command": ["github-mcp-server", "stdio"] } } },
   "lsp":   { "servers": { "typescript": { "command": "typescript-language-server", "args": ["--stdio"], "extensionToLanguage": { ".ts": "typescript" } } } },
+  "sessionQuery": { "backend": "sqlite", "path": "session-query.sqlite3" },
   "disabled": { "tool-web": true },
   "components": {
     "system-prompt": { "persona_prefix": "You are a coding agent." },
@@ -67,6 +68,8 @@ state base, absolute paths are used verbatim.
   Absent, no MCP client is mounted.
 - `lsp` — local language servers for the `lsp` tool (see [Language servers](#language-servers)).
   On by default with built-in defaults; `false` disables the whole stack.
+- `sessionQuery` — the session search backend (see [Session search](#session-search)).
+  Defaults to the in-memory engine; `backend: "sqlite"` uses the FTS5 index.
 - `disabled` — a per-component enable switch, merged per id: `true` drops the
   component, `false` re-enables one a lower layer dropped. Kept separate from
   `components` because some plugins take a `disabled` knob of their own.
@@ -210,6 +213,39 @@ Positions from the model are one-based line and character (UTF-16); the tool
 converts them to the protocol's zero-based coordinates. `findReferences`
 always includes the declaration. `${NAME}` references expand from the process
 environment.
+
+## Session search
+
+The session query tools (`session_search`, `session_event_search`,
+`session_trace`, `session_event_trace`, `session_event_read`) run over exactly
+one `session-query` provider. By default that is the in-memory engine, which
+scans the resolved sessions on each query. Setting `backend` to `sqlite` mounts
+`session-query-sqlite` instead: a derived FTS5 index of persisted and live
+sessions, reconciled incrementally from the persistence backend's revision
+tokens. The index is never the source of truth; deleting it is safe (it is
+rebuilt on the next search).
+
+```jsonc
+"sessionQuery": {
+  "backend": "sqlite",                    // "memory" (default) | "sqlite"
+  "path": "session-query.sqlite3",        // relative to the state directory
+  "openAt": "first-search"                // startup | first-search | never
+}
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `backend` | `"memory"` | `memory` scans in place; `sqlite` uses the FTS5 index |
+| `path` | `<state>/session-query.sqlite3` | index file (owner-only; created on demand) |
+| `openAt` | `"first-search"` | open at boot, lazily on the first search, or never (search disabled) |
+| `journalMode` | `"wal"` | `wal`, `delete`, `truncate`, or `persist` |
+| `limit` / `maxLimit` | 20 / 100 | default and maximum page size |
+| `snippetChars` | 240 | snippet cap |
+
+The SQLite backend is a plugin knob block too: when mounted explicitly through
+`/load session-query-sqlite`, pass the same keys through `components`
+(`{"session-query-sqlite": {"path": "..."}}`). Mount only one provider at a
+time.
 
 ## Runtime commands
 

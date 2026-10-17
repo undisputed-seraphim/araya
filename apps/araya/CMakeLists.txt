@@ -54,6 +54,7 @@ target_link_libraries(araya_app PRIVATE
     araya::session
     araya::session-log-export
     araya::session-query
+    araya::session-query-sqlite
     araya::shell
     araya::skill
     araya::subagent-fork

@@ -24,6 +24,7 @@
 #include "araya/sandbox-policy/sandbox_policy.hpp"
 #include "araya/sandbox/sandbox.hpp"
 #include "araya/session-log-export/export.hpp"
+#include "araya/session-query-sqlite/sqlite.hpp"
 #include "araya/session-query/query.hpp"
 #include "araya/session/events.hpp"
 #include "araya/shell/shell.hpp"
@@ -261,8 +262,8 @@ constexpr command_entry g_commands[]{
 	{"ls", "ls", "print the fiber tree", &cmd_ls},
 	{"load",
 	 "load <component> [json config]",
-	 "add logger | timer | session | session-query | session-log-export | persistence | llm | llm-compat | "
-	 "llm-mock | llm-retry | system-prompt | "
+	 "add logger | timer | session | session-query | session-query-sqlite | session-log-export | persistence | "
+	 "llm | llm-compat | llm-mock | llm-retry | system-prompt | "
 	 "agent-instructions | tools | tool-todo | agent-loop | attachment | coreutil | fs-observation-policy | goal | "
 	 "goal-round-driver | tool-goal | jobs | sandbox | sandbox-policy | mcp-client | mcp-resources | "
 	 "lsp | lsp-stdio | tool-lsp | "
@@ -344,6 +345,8 @@ araya::plugin_descriptor const* real_descriptor(std::string_view name) {
 		return &araya::session::plugin_descriptor();
 	if (name == "session-query")
 		return &araya::session_query::plugin_descriptor();
+	if (name == "session-query-sqlite")
+		return &araya::session_query_sqlite::plugin_descriptor();
 	if (name == "session-log-export")
 		return &araya::session_export::plugin_descriptor();
 	if (name == "persistence")
@@ -483,8 +486,15 @@ void build_tree(app_context& ctx, line_sink const& out) {
 	ctx.desired["timer"] = desired_entry{&araya::timer::plugin_descriptor(), {}};
 	ctx.desired["session"] = desired_entry{&araya::session::plugin_descriptor(), {}};
 	ctx.desired["persistence"] = desired_entry{&araya::persistence::plugin_descriptor(), {{"root", cfg.sessions_dir}}};
-	// Session search over live + persisted history (in-memory engine).
-	ctx.desired["session-query"] = desired_entry{&araya::session_query::plugin_descriptor(), {}};
+	// Session search over live + persisted history. Exactly one provider:
+	// the in-memory engine by default, or the FTS5 index when configured.
+	if (cfg.session_query_backend == "sqlite") {
+		ctx.desired["session-query-sqlite"] = desired_entry{
+			&araya::session_query_sqlite::plugin_descriptor(),
+			{{"path", cfg.session_query_path}, {"openAt", cfg.session_query_open_at}}};
+	} else {
+		ctx.desired["session-query"] = desired_entry{&araya::session_query::plugin_descriptor(), {}};
+	}
 	// Session log download (ZIP of the canonical log + descendants + images).
 	ctx.desired["session-log-export"] = desired_entry{&araya::session_export::plugin_descriptor(), {}};
 	ctx.desired["llm"] = desired_entry{&araya::llm::plugin_descriptor(), {}};

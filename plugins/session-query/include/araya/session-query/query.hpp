@@ -12,6 +12,13 @@
 #include <string_view>
 #include <vector>
 
+namespace araya::session {
+class session_store;
+}
+namespace araya::persistence {
+class session_persistence;
+}
+
 // Session query/search: resolve the logical session set (live store +
 // durable persistence), fold each log into searchable event documents, and
 // answer structured + full-text queries over them. The service is
@@ -42,6 +49,7 @@ enum class query_error_code {
 	invalid_surface,
 	source_conflict,
 	index_failed,
+	search_disabled,
 	aborted,
 };
 
@@ -236,6 +244,13 @@ public:
 };
 
 inline constexpr araya::service_key<session_query_service> session_query_key{"session-query", 1};
+
+// The backend-independent engine over `sessions` + (optional) persistence.
+// An index backend can use it for every non-search read and override only
+// the two ranked search entry points.
+std::shared_ptr<session_query_service> make_in_memory_engine(
+	std::shared_ptr<session::session_store> store,
+	std::shared_ptr<araya::persistence::session_persistence> persistence);
 
 // The plugin descriptor: apply() resolves `sessions` (required) and
 // `session.persistence` (optional) and provides `session-query`.

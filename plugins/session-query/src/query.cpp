@@ -702,6 +702,14 @@ static const araya::plugin_descriptor g_descriptor{"session-query", g_deps, g_pr
 
 } // namespace
 
+std::shared_ptr<session_query_service>
+make_in_memory_engine(std::shared_ptr<session_store> store, std::shared_ptr<session_persistence> persistence) {
+	auto engine = std::make_shared<in_memory_engine>();
+	engine->store = std::move(store);
+	engine->persistence = std::move(persistence);
+	return engine;
+}
+
 araya::plugin_descriptor const& plugin_descriptor() { return g_descriptor; }
 
 } // namespace araya::session_query
