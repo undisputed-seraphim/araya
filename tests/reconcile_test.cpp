@@ -17,6 +17,7 @@ struct database {
 };
 
 inline constexpr araya::service_key<database> db_key{"example.db", 1};
+inline constexpr araya::service_key<database> mid_key{"example.mid", 1};
 
 static std::vector<std::string> g_log;
 
@@ -87,6 +88,30 @@ std::unique_ptr<araya::plugin> make_consumer_v2(araya::plugin_config const&) {
 	return std::make_unique<consumer_v2_plugin>();
 }
 
+// A two-hop chain for the cascade-quiescence test: mid consumes db and
+// provides mid; leaf consumes mid.
+struct mid_plugin : araya::plugin {
+	std::shared_ptr<database> service;
+
+	araya::task<void> apply(araya::plugin_context& ctx) override {
+		service = std::make_shared<database>("mid-" + ctx.require<database>(db_key)->name);
+		ctx.provide(mid_key, service);
+		g_log.push_back("mid:" + service->name);
+		co_return;
+	}
+};
+
+std::unique_ptr<araya::plugin> make_mid(araya::plugin_config const&) { return std::make_unique<mid_plugin>(); }
+
+struct leaf_plugin : araya::plugin {
+	araya::task<void> apply(araya::plugin_context& ctx) override {
+		g_log.push_back("leaf:" + ctx.require<database>(mid_key)->name);
+		co_return;
+	}
+};
+
+std::unique_ptr<araya::plugin> make_leaf(araya::plugin_config const&) { return std::make_unique<leaf_plugin>(); }
+
 static constexpr std::span<araya::dependency_spec const> g_no_deps{};
 static constexpr std::span<araya::provision_spec const> g_no_provs{};
 static const araya::dependency_spec g_db_dep[]{{araya::service_id{"example.db", 1}, true}};
@@ -100,6 +125,12 @@ static const araya::plugin_descriptor g_strict_provider_desc{
 	&make_strict_provider};
 static const araya::plugin_descriptor g_consumer_desc{"consumer", g_db_dep, g_no_provs, &make_consumer};
 static const araya::plugin_descriptor g_consumer_v2_desc{"consumer-v2", g_db_dep, g_no_provs, &make_consumer_v2};
+
+static const araya::dependency_spec g_mid_dep[]{{araya::service_id{"example.db", 1}, true}};
+static const araya::provision_spec g_mid_prov[]{{araya::service_id{"example.mid", 1}}};
+static const araya::dependency_spec g_leaf_dep[]{{araya::service_id{"example.mid", 1}, true}};
+static const araya::plugin_descriptor g_mid_desc{"mid", g_mid_dep, g_mid_prov, &make_mid};
+static const araya::plugin_descriptor g_leaf_desc{"leaf", g_leaf_dep, g_no_provs, &make_leaf};
 
 struct harness {
 	boost::asio::io_context io;
@@ -145,6 +176,45 @@ TEST_CASE("reconcile mounts a desired tree") {
 		co_await rt.wait_idle();
 	});
 	CHECK(g_log == std::vector<std::string>{"active:p1", "consume:c1:p1"});
+}
+
+TEST_CASE("wait_idle waits for the reactivation fan-out after a provider returns") {
+	harness h;
+	h.run([&](araya::runtime& rt) -> araya::task<void> {
+		auto tree = [&](bool with_provider) {
+			std::vector<araya::desired_component> desired;
+			if (with_provider)
+				desired.push_back(h.node("db", h.spec(&g_provider_desc, {{"value", "p1"}})));
+			desired.push_back(h.node("mid", h.spec(&g_mid_desc)));
+			desired.push_back(h.node("leaf", h.spec(&g_leaf_desc)));
+			return desired;
+		};
+
+		co_await rt.reconcile(tree(true));
+		co_await rt.wait_idle();
+		REQUIRE(g_log == std::vector<std::string>{"active:p1", "mid:mid-p1", "leaf:mid-p1"});
+
+		// Removing the provider parks the whole chain; re-adding it must
+		// reactivate mid -> leaf before wait_idle returns.
+		co_await rt.reconcile(tree(false));
+		co_await rt.wait_idle();
+		g_log.clear();
+
+		co_await rt.reconcile(tree(true));
+		co_await rt.wait_idle();
+		CHECK(g_log == std::vector<std::string>{"active:p1", "mid:mid-p1", "leaf:mid-p1"});
+
+		bool mid_active = false;
+		bool leaf_active = false;
+		for (auto const& fiber : rt.fibers()) {
+			if (fiber.descriptor == "mid")
+				mid_active = fiber.state == araya::fiber_state::active;
+			if (fiber.descriptor == "leaf")
+				leaf_active = fiber.state == araya::fiber_state::active;
+		}
+		CHECK(mid_active);
+		CHECK(leaf_active);
+	});
 }
 
 TEST_CASE("reconciling the same tree retains all fibers") {

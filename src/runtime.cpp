@@ -537,7 +537,6 @@ void runtime::on_apply_completed(fiber_id id, std::exception_ptr ep) {
 		f->control->cell->state->store(fiber_state::inactive);
 		f->instance.reset();
 		f->committed.clear();
-		transition_finished();
 		// `done->open()` can synchronously run a waiting reconcile that
 		// erases this very fiber (its unique_ptr in the map is destroyed,
 		// freeing the record). Capture the reactivate verdict first, then
@@ -547,6 +546,7 @@ void runtime::on_apply_completed(fiber_id id, std::exception_ptr ep) {
 		if (reactivate_stale)
 			if (auto* current = find(id))
 				evaluate(*current);
+		transition_finished();
 		return;
 	}
 
@@ -601,9 +601,12 @@ void runtime::publish(fiber_record& f) {
 		if (it != fibers_.end())
 			it->second->consumers.insert(f.id);
 	}
-	transition_finished();
+	// Notify before releasing the transition: a dependent reactivated here
+	// starts loading synchronously, and wait_idle() must not observe the
+	// gap between "this fiber published" and "its dependents started".
 	for (auto const& key : f.provide)
 		notify(key, *f.spec.parent, f.spec.parent->realm_for(key));
+	transition_finished();
 }
 
 void runtime::begin_unload(fiber_record& f, bool reactivate) {
@@ -703,7 +706,6 @@ void runtime::finish_unload(fiber_record& f) {
 		}
 	}
 	ARAYA_ASSERT(f.consumers.empty());
-	transition_finished();
 	f.done->open();
 	for (auto const& key : f.provide)
 		notify(key, *f.spec.parent, f.spec.parent->realm_for(key));
@@ -711,6 +713,10 @@ void runtime::finish_unload(fiber_record& f) {
 		f.reactivate = 0;
 		evaluate(f);
 	}
+	// Keep this fiber's transition open through the notify/evaluate fan-out;
+	// see publish(). wait_idle() must see the whole cascade, not an
+	// intermediate zero.
+	transition_finished();
 }
 
 namespace {
